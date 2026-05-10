@@ -1,0 +1,2320 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Touch Bot v60 — Mobile</title>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;700&family=Syne:wght@400;600;700;800&display=swap" rel="stylesheet">
+<style>
+:root {
+  --bg:     #030507;
+  --s1:     #070b10;
+  --s2:     #0b1018;
+  --b1:     #141e2a;
+  --b2:     #1c2a3a;
+  --green:  #00e896;
+  --red:    #ff3d5a;
+  --amber:  #f5b700;
+  --blue:   #3d9eff;
+  --violet: #8b5cf6;
+  --teal:   #06b6d4;
+  --muted:  #253545;
+  --text:   #8fafc8;
+  --dim:    #3d5a72;
+  --r: 10px; --rs: 7px;
+  --tab-h: 56px;
+  --safe-bottom: env(safe-area-inset-bottom, 0px);
+}
+*,*::before,*::after{margin:0;padding:0;box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+html,body{height:100%;overflow:hidden}
+body{background:var(--bg);color:var(--text);font-family:'JetBrains Mono',monospace;font-size:12px;line-height:1.5;
+  -webkit-font-smoothing:antialiased}
+
+/* ── Ambient glow ── */
+body::before{content:'';position:fixed;inset:0;pointer-events:none;z-index:0;
+  background:
+    radial-gradient(ellipse 80% 40% at 15% 0%,rgba(0,232,150,.04),transparent),
+    radial-gradient(ellipse 50% 60% at 85% 100%,rgba(61,158,255,.03),transparent);}
+
+/* ── Layout Shell ── */
+.app{position:fixed;inset:0;display:flex;flex-direction:column;z-index:1}
+.topbar{flex-shrink:0;display:flex;align-items:center;justify-content:space-between;
+  padding:10px 14px;border-bottom:1px solid var(--b1);background:var(--s1)}
+.brand-row{display:flex;align-items:center;gap:9px}
+.logo{width:32px;height:32px;border-radius:8px;background:linear-gradient(135deg,#00e896,#00a060);
+  display:flex;align-items:center;justify-content:center;font-size:15px;
+  box-shadow:0 0 20px rgba(0,232,150,.18);flex-shrink:0}
+.brand-name{font-family:'Syne',sans-serif;font-size:15px;font-weight:800;color:#fff;line-height:1}
+.brand-ver{font-size:9px;color:var(--dim);letter-spacing:1.5px;text-transform:uppercase}
+.conn-badge{display:flex;align-items:center;gap:6px;font-size:10px;color:var(--dim);
+  padding:5px 10px;border-radius:20px;border:1px solid var(--b1);background:var(--s2)}
+.cdot{width:6px;height:6px;border-radius:50%;background:var(--muted);flex-shrink:0;transition:all .3s}
+.cdot.live{background:var(--green);box-shadow:0 0 8px var(--green);animation:pulse 2s infinite}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.3}}
+
+/* ── Scrollable content area ── */
+.content{flex:1;overflow-y:auto;overflow-x:hidden;-webkit-overflow-scrolling:touch;
+  padding:12px 12px calc(var(--tab-h) + var(--safe-bottom) + 12px)}
+
+/* Tab sections */
+.tab-section{display:none}
+.tab-section.active{display:block}
+
+/* ── Bottom Tab Bar ── */
+.tabbar{flex-shrink:0;display:flex;align-items:stretch;border-top:1px solid var(--b1);
+  background:var(--s1);height:calc(var(--tab-h) + var(--safe-bottom));padding-bottom:var(--safe-bottom)}
+.tab{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:3px;
+  cursor:pointer;color:var(--dim);transition:color .2s;border:none;background:none;
+  font-family:'JetBrains Mono',monospace;padding:6px 4px;position:relative}
+.tab.active{color:var(--green)}
+.tab.active::after{content:'';position:absolute;top:0;left:25%;right:25%;height:2px;
+  background:var(--green);border-radius:0 0 2px 2px}
+.tab-icon{font-size:18px;line-height:1}
+.tab-lbl{font-size:8px;letter-spacing:.5px;text-transform:uppercase;font-weight:600}
+
+/* ── Cards ── */
+.card{background:var(--s1);border:1px solid var(--b1);border-radius:var(--r);padding:13px;margin-bottom:10px}
+.card-title{font-family:'Syne',sans-serif;font-size:10px;font-weight:700;color:#fff;
+  letter-spacing:1.2px;text-transform:uppercase;margin-bottom:10px}
+
+/* ── Price Hero ── */
+.price-hero{background:var(--s1);border:1px solid var(--b1);border-radius:var(--r);
+  padding:14px;margin-bottom:10px;position:relative;overflow:hidden}
+.price-hero::before{content:'';position:absolute;inset:0;pointer-events:none;
+  background:radial-gradient(ellipse 60% 60% at 50% 0%,rgba(0,232,150,.03),transparent)}
+.ph-top{display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:10px}
+.ph-sym{font-family:'Syne',sans-serif;font-size:11px;font-weight:700;color:#fff;text-transform:uppercase}
+.ph-name{font-size:9px;color:var(--dim);margin-top:1px}
+.ph-price{font-family:'Syne',sans-serif;font-size:28px;font-weight:800;color:#fff;
+  line-height:1;transition:color .12s;text-align:right}
+.ph-price.up{color:var(--green)}.ph-price.dn{color:var(--red)}
+.ph-dir{font-size:9px;color:var(--dim);text-align:right;margin-top:2px}
+.ph-pill-row{display:flex;align-items:center;justify-content:space-between}
+
+/* State pill */
+.pill{display:inline-flex;align-items:center;gap:5px;font-size:10px;padding:4px 10px;
+  border-radius:16px;border:1px solid var(--b1);color:var(--dim);transition:all .2s}
+.pill .dot{width:4px;height:4px;border-radius:50%;background:currentColor}
+.pill.watch{color:var(--dim);border-color:var(--muted)}
+.pill.signal{color:var(--amber);border-color:var(--amber);background:rgba(245,183,0,.06)}
+.pill.prop{color:var(--blue);border-color:var(--blue);background:rgba(61,158,255,.06)}
+.pill.trade{color:var(--green);border-color:var(--green);background:rgba(0,232,150,.06)}
+.pill.cool{color:var(--red);border-color:var(--red);background:rgba(255,61,90,.06)}
+
+/* ── Score meter ── */
+.score-row{display:flex;align-items:center;gap:10px}
+.score-num{font-family:'Syne',sans-serif;font-size:22px;font-weight:800;color:var(--violet);
+  min-width:58px;line-height:1}
+.score-bar-w{flex:1;height:6px;background:var(--b1);border-radius:3px;overflow:hidden}
+.score-bar-f{height:100%;border-radius:3px;transition:width .35s,background .35s}
+.score-lbl{font-size:9px;color:var(--dim);margin-bottom:5px}
+
+/* ── Component scores ── */
+.comp-grid{display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-top:8px}
+.comp{padding:8px 10px;border-radius:var(--rs);border:1px solid var(--b1);background:#040608}
+.comp-lbl{font-size:8px;color:var(--dim);text-transform:uppercase;letter-spacing:.8px;margin-bottom:3px}
+.comp-val{font-family:'Syne',sans-serif;font-size:17px;font-weight:700;color:#fff;line-height:1}
+.comp-bar{height:3px;background:var(--b1);border-radius:2px;overflow:hidden;margin-top:5px}
+.comp-bf{height:100%;border-radius:2px;transition:width .3s}
+
+/* ── Signal bar ── */
+.signal-bar{display:flex;align-items:center;gap:10px;padding:10px 12px;border-radius:var(--rs);
+  border:1px solid var(--b1);background:#040608;transition:border-color .2s}
+.sig-icon{font-size:18px;flex-shrink:0}
+.sig-text{flex:1;min-width:0}
+.sig-title{font-weight:600;color:#fff;margin-bottom:2px;font-family:'Syne',sans-serif;font-size:12px}
+.sig-reason{font-size:9px;color:var(--dim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.sig-badge{font-size:10px;padding:4px 10px;border-radius:var(--rs);border:1px solid;flex-shrink:0}
+.sig-badge.none{border-color:var(--b2);color:var(--muted)}
+.sig-badge.buy{border-color:var(--green);color:var(--green);background:rgba(0,232,150,.07)}
+
+/* ── Zone status ── */
+.zone-row{display:flex;align-items:center;gap:8px;padding:8px 11px;border-radius:var(--rs);
+  border:1px solid var(--b1);background:#040608;font-size:10px;margin-top:6px}
+.zone-icon{font-size:14px;flex-shrink:0}
+.zone-txt{font-weight:600;color:var(--text)}
+.zone-detail{font-size:9px;color:var(--dim);margin-top:1px}
+
+/* ── Indicators grid 2×3 ── */
+.ind-grid{display:grid;grid-template-columns:1fr 1fr;gap:7px}
+.gc{background:#040608;border:1px solid var(--b1);border-radius:var(--rs);padding:11px 12px}
+.gc.hl{border-color:rgba(0,232,150,.18);background:rgba(0,232,150,.012)}
+.gc-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:8px}
+.gc-name{font-size:9px;font-weight:600;color:var(--text)}
+.gc-val{font-family:'Syne',sans-serif;font-size:18px;font-weight:800;color:#fff}
+.gc-val.os{color:var(--green)}.gc-val.ob{color:var(--red)}.gc-val.mid{color:var(--dim)}.gc-val.str{color:var(--violet)}
+.gtrack{height:6px;background:var(--b1);border-radius:3px;position:relative;overflow:visible}
+.gzone{position:absolute;height:100%;border-radius:3px;opacity:.22}
+.gneedle{position:absolute;top:-4px;width:2px;height:14px;border-radius:2px;background:#fff;transform:translateX(-50%);transition:left .3s}
+.gc-sub{font-size:8px;color:var(--dim);margin-top:5px}
+.gc-sub .ok{color:var(--green);font-weight:600}
+.gc-sub .no{color:var(--red);font-weight:600}
+.macd-wrap{height:28px;background:#040608;border-radius:3px;position:relative;overflow:hidden;margin:5px 0}
+.macd-zero{position:absolute;left:0;right:0;top:50%;height:1px;background:var(--b1)}
+.adx-wrap{height:6px;background:var(--b1);border-radius:3px;overflow:hidden;margin:5px 0}
+.adx-fill{height:100%;border-radius:3px;transition:width .3s,background .3s}
+
+/* ── Stats 2×4 ── */
+.stats-grid{display:grid;grid-template-columns:1fr 1fr;gap:7px}
+.sc{background:var(--s1);border:1px solid var(--b1);border-radius:var(--r);padding:11px 12px}
+.sc-lbl{font-size:8px;color:var(--dim);letter-spacing:1.2px;text-transform:uppercase;margin-bottom:4px}
+.sc-val{font-family:'Syne',sans-serif;font-size:20px;font-weight:800;color:#fff;line-height:1}
+.sc-val.pos{color:var(--green)}.sc-val.neg{color:var(--red)}.sc-val.warn{color:var(--amber)}
+.sc-sub{font-size:9px;color:var(--dim);margin-top:3px}
+
+/* ── Bot state steps ── */
+.sring{display:flex;align-items:center;justify-content:center;flex-direction:column;
+  width:64px;height:64px;border-radius:50%;border:2px solid var(--muted);
+  margin:0 auto 14px;transition:border-color .3s}
+.sring.w{border-color:var(--muted)}.sring.t{border-color:var(--green)}.sring.c{border-color:var(--red)}
+.rn{font-family:'Syne',sans-serif;font-size:18px;font-weight:800;color:#fff}
+.rl{font-size:7px;color:var(--dim);letter-spacing:1px;text-transform:uppercase}
+.prow{display:flex;justify-content:space-between;font-size:9px;color:var(--dim);margin-bottom:3px}
+.pbar{height:4px;background:var(--b1);border-radius:2px;overflow:hidden;margin-bottom:12px}
+.pfill{height:100%;background:var(--green);border-radius:2px;transition:width .3s}
+.pfill.w{background:var(--amber)}.pfill.d{background:var(--red)}
+.steps{display:flex;flex-direction:column;gap:4px}
+.step{display:flex;align-items:flex-start;gap:8px;padding:8px 10px;border-radius:var(--rs);
+  border:1px solid transparent;color:var(--dim);font-size:10px;transition:all .2s}
+.step.active{border-color:var(--green);background:rgba(0,232,150,.04);color:var(--green)}
+.step.done{border-color:var(--b1);color:var(--muted)}
+.step.warn{border-color:var(--amber);background:rgba(245,183,0,.04);color:var(--amber)}
+.step.err{border-color:var(--red);background:rgba(255,61,90,.04);color:var(--red)}
+.sn{font-weight:600;flex-shrink:0}.sd{font-size:8px;opacity:.7;margin-top:1px}
+
+/* ── Config form ── */
+.cfg-section{margin-bottom:14px}
+.cfg-label{font-size:8px;color:var(--dim);letter-spacing:2px;text-transform:uppercase;
+  margin:14px 0 8px;padding-bottom:5px;border-bottom:1px solid var(--b1)}
+.cfg-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.cfg-grid.single{grid-template-columns:1fr}
+.field{display:flex;flex-direction:column;gap:5px}
+.field label{font-size:9px;color:var(--dim);letter-spacing:.8px;text-transform:uppercase}
+.field input,.field select{background:#040608;border:1px solid var(--b1);color:var(--text);
+  font-family:'JetBrains Mono',monospace;font-size:13px;padding:10px 12px;border-radius:var(--rs);
+  outline:none;width:100%;transition:border-color .2s;-webkit-appearance:none;appearance:none;min-height:44px}
+.field input:focus,.field select:focus{border-color:var(--green)}
+select{background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M0 0l5 6 5-6z' fill='%233d5a72'/%3E%3C/svg%3E");
+  background-repeat:no-repeat;background-position:right 12px center;padding-right:30px}
+
+.infobox{font-size:11px;padding:10px 13px;border-radius:var(--rs);display:none;margin-bottom:10px}
+.infobox.show{display:block}
+.infobox.ok{background:rgba(0,232,150,.05);border:1px solid rgba(0,232,150,.2);color:var(--green)}
+.infobox.warn{background:rgba(245,183,0,.05);border:1px solid rgba(245,183,0,.2);color:var(--amber)}
+.infobox.err{background:rgba(255,61,90,.05);border:1px solid rgba(255,61,90,.2);color:var(--red)}
+
+/* ── Buttons ── */
+.btn{font-family:'JetBrains Mono',monospace;font-size:12px;padding:13px 20px;border-radius:var(--rs);
+  border:none;cursor:pointer;transition:all .18s;min-height:48px;font-weight:600}
+.btn:disabled{opacity:.3;cursor:not-allowed}
+.btn:active:not(:disabled){transform:scale(.97)}
+.btn-p{background:var(--green);color:#000;width:100%;margin-bottom:8px;font-size:13px}
+.btn-d{background:transparent;color:var(--red);border:1px solid var(--red);width:100%;margin-bottom:8px}
+.btn-ghost{border:1px solid var(--b1);color:var(--dim);flex:1}
+.btn-row{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px}
+
+/* ── Log ── */
+.log-scroll{height:260px;overflow-y:auto;display:flex;flex-direction:column;gap:2px;
+  -webkit-overflow-scrolling:touch}
+.log-scroll::-webkit-scrollbar{width:3px}
+.log-scroll::-webkit-scrollbar-thumb{background:var(--b1);border-radius:2px}
+.lr{display:flex;gap:7px;font-size:10px;padding:3px 0;border-bottom:1px solid rgba(255,255,255,.02)}
+.lt{color:var(--dim);flex-shrink:0;min-width:60px;font-size:9px}
+.lm{color:var(--text);word-break:break-word;font-size:10px}
+.lr.info .lm{color:var(--green)}.lr.action .lm{color:var(--blue)}.lr.signal .lm{color:var(--amber)}
+.lr.err .lm{color:var(--red)}.lr.profit .lm{color:var(--green);font-weight:600}
+.lr.skip .lm{color:#2a3a4a}.lr.beat .lm{color:#2a3a4a;font-size:9px}
+.lr.cond .lm{color:var(--dim)}.lr.block .lm{color:var(--amber);font-weight:500}
+
+/* ── Trade table ── */
+.trade-scroll{overflow-x:auto;-webkit-overflow-scrolling:touch;max-height:220px;overflow-y:auto}
+.trade-table{width:100%;border-collapse:collapse;font-size:10px;min-width:380px}
+.trade-table th{color:var(--dim);font-weight:400;text-align:left;padding:4px 6px;
+  border-bottom:1px solid var(--b1);font-size:8px;letter-spacing:1px;text-transform:uppercase;
+  position:sticky;top:0;background:var(--s1)}
+.trade-table td{padding:5px 6px;border-bottom:1px solid rgba(255,255,255,.02)}
+.badge{display:inline-block;padding:2px 7px;border-radius:3px;font-size:9px;font-weight:600}
+.badge.w{background:rgba(0,232,150,.12);color:var(--green)}.badge.l{background:rgba(255,61,90,.12);color:var(--red)}
+
+/* ── Regime box ── */
+.regime-box{display:flex;align-items:center;gap:8px;padding:7px 11px;border-radius:var(--rs);
+  border:1px solid var(--b1);background:#040608;margin-top:6px;font-size:10px}
+.rdot{width:7px;height:7px;border-radius:50%;background:var(--dim);flex-shrink:0}
+.rdot.low{background:var(--amber)}.rdot.med{background:var(--green)}.rdot.high{background:var(--red)}
+
+/* ── Chart ── */
+canvas#chart{width:100%;display:block}
+canvas#macdChart{width:100%;display:block;margin-top:6px}
+.macd-panel-head{display:flex;align-items:center;justify-content:space-between;
+  margin-top:8px;margin-bottom:3px}
+.macd-panel-title{font-size:9px;font-weight:600;color:var(--dim);letter-spacing:1px;text-transform:uppercase}
+.macd-panel-val{font-size:9px;color:var(--dim)}
+.macd-legend{display:flex;gap:10px;font-size:8px;color:var(--dim);margin-top:4px;flex-wrap:wrap}
+.macd-legend span{display:flex;align-items:center;gap:4px}
+.macd-legend i{width:16px;height:2px;border-radius:1px;display:inline-block}
+
+/* ── Toast ── */
+.toast{position:fixed;top:70px;left:12px;right:12px;z-index:9999;background:var(--s1);
+  border:1px solid var(--b1);border-radius:var(--r);padding:10px 14px;font-size:11px;
+  transform:translateY(-120%);transition:transform .25s}
+.toast.show{transform:translateY(0)}.toast.ok{border-color:var(--green)}.toast.err{border-color:var(--red)}
+
+/* ── Helpers ── */
+.sep{height:1px;background:var(--b1);margin:8px 0}
+.row{display:flex;align-items:center;gap:8px}
+.row-sb{display:flex;align-items:center;justify-content:space-between}
+</style>
+</head>
+<body>
+<div class="app">
+
+<!-- ── Top Bar ── -->
+<header class="topbar">
+  <div class="brand-row">
+    <div class="logo">📊</div>
+    <div>
+      <div class="brand-name">Touch Bot</div>
+      <div class="brand-ver" id="brandSub">v60 · Acceleration-First</div>
+    </div>
+  </div>
+  <div class="conn-badge">
+    <div class="cdot" id="cdot"></div>
+    <span id="clabel">Offline</span>
+  </div>
+</header>
+
+<!-- ── Content ── -->
+<div class="content" id="mainContent">
+
+  <!-- ════ TAB: LIVE ════ -->
+  <div class="tab-section active" id="tab-live">
+
+    <!-- Price Hero -->
+    <div class="price-hero">
+      <div class="ph-top">
+        <div>
+          <div class="ph-sym" id="tkSym">—</div>
+          <div class="ph-name" id="tkName">—</div>
+        </div>
+        <div>
+          <div class="ph-price" id="tkPrice">—.——</div>
+          <div class="ph-dir" id="tkDir">—</div>
+        </div>
+      </div>
+      <div class="ph-pill-row">
+        <div class="pill watch" id="pill"><div class="dot"></div>IDLE</div>
+        <span style="font-size:9px;color:var(--dim)" id="tkTicks">Ticks: 0</span>
+      </div>
+    </div>
+
+    <!-- Confidence Score -->
+    <div class="card">
+      <div class="score-lbl">CONFIDENCE SCORE</div>
+      <div class="score-row">
+        <div class="score-num" id="scoreVal">—</div>
+        <div class="score-bar-w"><div class="score-bar-f" id="scoreBar" style="width:0%"></div></div>
+      </div>
+      <div style="font-size:9px;color:var(--dim);margin-top:5px" id="scoreDesc">Awaiting indicators…</div>
+
+      <!-- Component breakdown 2×2 -->
+      <div class="comp-grid" style="margin-top:10px">
+        <div class="comp">
+          <div class="comp-lbl">BB Depth</div>
+          <div class="comp-val" id="cBB">—</div>
+          <div class="comp-bar"><div class="comp-bf" id="cBBb" style="width:0%;background:var(--green)"></div></div>
+        </div>
+        <div class="comp">
+          <div class="comp-lbl">RSI Slope</div>
+          <div class="comp-val" id="cRSI">—</div>
+          <div class="comp-bar"><div class="comp-bf" id="cRSIb" style="width:0%;background:var(--blue)"></div></div>
+        </div>
+        <div class="comp">
+          <div class="comp-lbl">Velocity</div>
+          <div class="comp-val" id="cMACD">—</div>
+          <div class="comp-bar"><div class="comp-bf" id="cMACDb" style="width:0%;background:var(--amber)"></div></div>
+        </div>
+        <div class="comp">
+          <div class="comp-lbl">Stoch RSI</div>
+          <div class="comp-val" id="cADX">—</div>
+          <div class="comp-bar"><div class="comp-bf" id="cADXb" style="width:0%;background:var(--violet)"></div></div>
+        </div>
+      </div>
+      <!-- MACD bonus inline -->
+      <div style="display:flex;align-items:center;justify-content:space-between;
+        margin-top:7px;padding:6px 10px;border-radius:var(--rs);border:1px solid var(--b1);background:#040608">
+        <span style="font-size:9px;color:var(--dim);text-transform:uppercase;letter-spacing:.8px">MACD Bonus</span>
+        <span id="cZone" style="font-family:'Syne',sans-serif;font-size:14px;font-weight:700;color:#fff">—</span>
+        <div style="flex:1;max-width:80px;margin-left:10px;height:3px;background:var(--b1);border-radius:2px;overflow:hidden">
+          <div id="cZoneb" style="height:100%;border-radius:2px;background:var(--teal);width:0%;transition:width .3s"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Signal + Zone -->
+    <div class="signal-bar" id="sigBar">
+      <div class="sig-icon" id="sigIcon">👁</div>
+      <div class="sig-text">
+        <div class="sig-title" id="sigTitle">Watching…</div>
+        <div class="sig-reason" id="sigReason">Oversold → reclaim → velocity → ONETOUCH UP</div>
+      </div>
+      <div class="sig-badge none" id="sigBadge">NO SIG</div>
+    </div>
+
+    <div class="zone-row" id="zoneBox">
+      <div class="zone-icon" id="zoneIcon">👁</div>
+      <div>
+        <div class="zone-txt" id="zoneTxt">Watching for oversold setup</div>
+        <div class="zone-detail" id="zoneDetail">—</div>
+      </div>
+    </div>
+
+    <!-- Stats 2×4 -->
+    <div class="stats-grid" style="margin-top:10px">
+      <div class="sc">
+        <div class="sc-lbl">P&amp;L</div>
+        <div class="sc-val" id="sPnl">$0.00</div>
+        <div class="sc-sub" id="sWL">W:0 L:0</div>
+      </div>
+      <div class="sc">
+        <div class="sc-lbl">Win Rate</div>
+        <div class="sc-val" id="sWRbig">—%</div>
+        <div class="sc-sub" id="sTrades">0 trades</div>
+      </div>
+      <div class="sc">
+        <div class="sc-lbl">Loss Streak</div>
+        <div class="sc-val" id="sStreak">0</div>
+        <div class="sc-sub" id="sStreakS">cooldown at 3</div>
+      </div>
+      <div class="sc">
+        <div class="sc-lbl">Avg Score</div>
+        <div class="sc-val warn" id="sAvgScore">—</div>
+        <div class="sc-sub">at entry</div>
+      </div>
+      <div class="sc">
+        <div class="sc-lbl">Signals</div>
+        <div class="sc-val" id="sSigs">0</div>
+        <div class="sc-sub">fired</div>
+      </div>
+      <div class="sc">
+        <div class="sc-lbl">Expectancy</div>
+        <div class="sc-val" id="sExp">—</div>
+        <div class="sc-sub">per trade</div>
+      </div>
+      <div class="sc">
+        <div class="sc-lbl">Eff. Stake</div>
+        <div class="sc-val" id="sStake">$1.00</div>
+        <div class="sc-sub" id="sStakeSub">base</div>
+      </div>
+      <div class="sc">
+        <div class="sc-lbl">Ticks</div>
+        <div class="sc-val" id="sTicks">0</div>
+        <div class="sc-sub">live feed</div>
+      </div>
+    </div>
+
+  </div><!-- /tab-live -->
+
+  <!-- ════ TAB: CHART ════ -->
+  <div class="tab-section" id="tab-chart">
+    <div class="card">
+      <div class="row-sb" style="margin-bottom:8px">
+        <div style="font-family:'Syne',sans-serif;font-size:12px;color:#fff" id="chartTitle">— · Bollinger Bands</div>
+        <span style="font-size:9px;color:var(--green)">● LIVE</span>
+      </div>
+      <canvas id="chart" style="height:200px"></canvas>
+      <div class="macd-panel-head">
+        <span class="macd-panel-title">MACD (5/13/4) — Bonus</span>
+        <span class="macd-panel-val">
+          <span id="macdLineVal">—</span> /
+          <span id="macdSigVal">—</span> /
+          <span id="macdHistVal">—</span>
+        </span>
+      </div>
+      <div class="macd-legend">
+        <span><i style="background:var(--blue)"></i>MACD</span>
+        <span><i style="background:var(--red)"></i>Signal</span>
+        <span><i style="background:var(--green);height:8px;border-radius:2px"></i>Hist+</span>
+        <span><i style="background:var(--red);height:8px;border-radius:2px;opacity:.7"></i>Hist−</span>
+      </div>
+      <canvas id="macdChart" style="height:80px;margin-top:6px"></canvas>
+    </div>
+
+    <!-- Indicators 2-col grid -->
+    <div class="card">
+      <div class="card-title">Indicators</div>
+      <div class="ind-grid">
+        <div class="gc">
+          <div class="gc-head"><span class="gc-name">BB %B</span><span class="gc-val mid" id="gPctB">—</span></div>
+          <div class="gtrack">
+            <div class="gzone" style="left:0;width:5%;background:var(--green)"></div>
+            <div class="gzone" style="left:80%;width:20%;background:var(--red)"></div>
+            <div class="gneedle" id="gBBNeedle" style="left:50%"></div>
+          </div>
+          <div class="gc-sub">OS ≤<span id="gBBOS">0.05</span> &nbsp;<span id="gBBStatus" class="ok">—</span></div>
+        </div>
+        <div class="gc">
+          <div class="gc-head"><span class="gc-name">RSI (7)</span><span class="gc-val mid" id="gRsi">—</span></div>
+          <div class="gtrack">
+            <div class="gzone" style="left:0;width:25%;background:var(--green)"></div>
+            <div class="gzone" style="left:60%;width:40%;background:var(--red)"></div>
+            <div class="gneedle" id="gRsiNeedle" style="left:50%"></div>
+          </div>
+          <div class="gc-sub">OS &lt;<span id="gRsiOS">25</span> &nbsp;<span id="gRsiStatus" class="ok">—</span></div>
+        </div>
+        <div class="gc">
+          <div class="gc-head"><span class="gc-name">MACD Hist</span><span class="gc-val mid" id="gMacd">—</span></div>
+          <div class="macd-wrap">
+            <div class="macd-zero"></div>
+            <div id="gMacdBar" style="position:absolute;left:0;right:0;background:var(--green);height:0%;bottom:50%;transition:all .2s"></div>
+          </div>
+          <div class="gc-sub">Bonus only &nbsp;<span id="gMacdStatus" class="ok">—</span></div>
+        </div>
+        <div class="gc hl">
+          <div class="gc-head"><span class="gc-name">ADX (14)</span><span class="gc-val mid" id="gAdx">—</span></div>
+          <div class="adx-wrap"><div class="adx-fill" id="gAdxBar" style="width:0%"></div></div>
+          <div class="gc-sub">Info only &nbsp;<span id="gAdxStatus" class="ok">—</span>
+            <span id="gAdxMin" style="display:none"></span></div>
+        </div>
+        <div class="gc hl">
+          <div class="gc-head"><span class="gc-name">BB Squeeze</span><span class="gc-val mid" id="gSqueeze">—</span></div>
+          <div class="gtrack">
+            <div class="gzone" style="left:0;width:15%;background:var(--violet)"></div>
+            <div class="gneedle" id="gSqNeedle" style="left:50%"></div>
+          </div>
+          <div class="gc-sub">Squeeze→avoid &nbsp;<span id="gSqStatus" class="ok">—</span></div>
+        </div>
+        <!-- Stoch RSI -->
+        <div class="gc">
+          <div class="gc-head"><span class="gc-name">Stoch RSI</span><span class="gc-val mid" id="gStoch">—</span></div>
+          <div class="gtrack">
+            <div class="gzone" style="left:0;width:20%;background:var(--green)"></div>
+            <div class="gzone" style="left:80%;width:20%;background:var(--red)"></div>
+            <div class="gneedle" id="gStochNeedle" style="left:50%"></div>
+          </div>
+          <div class="gc-sub" id="gStochSub">K>D = bullish</div>
+        </div>
+      </div>
+
+      <!-- Regime -->
+      <div class="regime-box">
+        <div class="rdot" id="regimeDot"></div>
+        <div>
+          <span style="color:var(--text);font-weight:600" id="regimeTxt">Regime: —</span>
+          <span style="color:var(--dim);font-size:9px;margin-left:6px" id="regimeDetail">—</span>
+        </div>
+      </div>
+
+      <!-- ATR/Barrier row -->
+      <div style="display:flex;gap:8px;margin-top:7px">
+        <div style="flex:1;padding:8px 10px;border-radius:var(--rs);border:1px solid var(--b1);background:#040608">
+          <div style="font-size:8px;color:var(--dim);text-transform:uppercase;letter-spacing:.8px;margin-bottom:3px">ATR</div>
+          <div style="font-family:'Syne',sans-serif;font-size:15px;font-weight:700;color:#fff" id="tkAtr">—</div>
+          <div style="font-size:9px;color:var(--dim)" id="tkAtrSub">—</div>
+        </div>
+        <div style="flex:1;padding:8px 10px;border-radius:var(--rs);border:1px solid var(--b1);background:#040608">
+          <div style="font-size:8px;color:var(--dim);text-transform:uppercase;letter-spacing:.8px;margin-bottom:3px">Velocity</div>
+          <div style="font-family:'Syne',sans-serif;font-size:15px;font-weight:700;color:#fff" id="tkVel">—</div>
+          <div style="font-size:9px;color:var(--dim)" id="tkVelSub">—</div>
+        </div>
+      </div>
+    </div>
+  </div><!-- /tab-chart -->
+
+  <!-- ════ TAB: STATE ════ -->
+  <div class="tab-section" id="tab-state">
+    <div class="card">
+      <div class="card-title">Bot Pipeline</div>
+      <div class="sring w" id="sring"><div class="rn" id="sringN">—</div><div class="rl" id="sringL">idle</div></div>
+      <div class="prow"><span id="pLabel">Idle</span><span id="pPct">0%</span></div>
+      <div class="pbar"><div class="pfill" id="pfill" style="width:0%"></div></div>
+      <div class="steps">
+        <div class="step" id="s1"><span class="sn">1</span><div><div>Auth</div><div class="sd" id="s1d">token validation</div></div></div>
+        <div class="step" id="s2"><span class="sn">2</span><div><div>Symbol</div><div class="sd" id="s2d">contracts check</div></div></div>
+        <div class="step" id="s3"><span class="sn">3</span><div><div>Seed</div><div class="sd" id="s3d">indicator warm-up</div></div></div>
+        <div class="step" id="s4"><span class="sn">4</span><div><div>Signal Gate</div><div class="sd" id="s4d">RSI slope↑ + Stoch K>D + velocity + score</div></div></div>
+        <div class="step" id="s5"><span class="sn">5</span><div><div>Proposal</div><div class="sd" id="s5d">barrier · return check</div></div></div>
+        <div class="step" id="s6"><span class="sn">6</span><div><div>Trade</div><div class="sd" id="s6d">touch = WIN · expire = LOSE</div></div></div>
+        <div class="step" id="s7"><span class="sn">7</span><div><div>Settle</div><div class="sd" id="s7d">WIN or LOSS</div></div></div>
+      </div>
+    </div>
+
+    <!-- Trade History -->
+    <div class="card">
+      <div class="row-sb" style="margin-bottom:8px">
+        <div class="card-title" style="margin-bottom:0">Trade History</div>
+        <button class="btn btn-ghost" style="font-size:10px;padding:5px 12px;min-height:0" onclick="Bot.exportTrades()">↓ CSV</button>
+      </div>
+      <div class="trade-scroll">
+        <table class="trade-table">
+          <thead><tr><th>Time</th><th>Barrier</th><th>Dur</th><th>Score</th><th>Ret%</th><th>P&amp;L</th><th>Result</th></tr></thead>
+          <tbody id="tradeBody"><tr><td colspan="7" style="color:var(--dim);text-align:center;padding:16px;font-size:10px">No trades yet</td></tr></tbody>
+        </table>
+      </div>
+    </div>
+  </div><!-- /tab-state -->
+
+  <!-- ════ TAB: LOG ════ -->
+  <div class="tab-section" id="tab-log">
+    <div class="card">
+      <div class="row-sb" style="margin-bottom:8px">
+        <div class="card-title" style="margin-bottom:0">Activity Log</div>
+        <button class="btn btn-ghost" style="font-size:10px;padding:5px 12px;min-height:0" onclick="Bot.exportLog()">↓ CSV</button>
+      </div>
+      <div class="log-scroll" id="logEl"></div>
+    </div>
+  </div><!-- /tab-log -->
+
+  <!-- ════ TAB: CONFIG ════ -->
+  <div class="tab-section" id="tab-config">
+    <div class="card">
+      <div class="card-title">Configuration</div>
+
+      <div class="cfg-label">Connection</div>
+      <div class="cfg-grid single" style="margin-bottom:8px">
+        <div class="field"><label>API Token</label><input type="password" id="cfgToken" placeholder="Deriv API token (read + trade)" autocomplete="off"></div>
+      </div>
+      <div class="cfg-grid" style="margin-bottom:0">
+        <div class="field"><label>App ID</label><input type="text" id="cfgAppId" value="1089"></div>
+        <div class="field"><label>Currency</label>
+          <select id="cfgCurrency"><option value="USD" selected>USD</option><option value="EUR">EUR</option></select></div>
+      </div>
+
+      <div class="cfg-label">Market</div>
+      <div class="cfg-grid">
+        <div class="field"><label>Symbol</label>
+          <select id="cfgSymbol">
+            <option value="R_100" selected>Vol 100</option>
+            <option value="R_75">Vol 75</option>
+            <option value="R_50">Vol 50</option>
+            <option value="R_25">Vol 25</option>
+            <option value="R_10">Vol 10</option>
+            <option value="1HZ100V">Vol 100 (1s)</option>
+            <option value="1HZ75V">Vol 75 (1s)</option>
+          </select></div>
+        <div class="field"><label>Base Stake (USD)</label><input type="number" id="cfgStake" value="1" min="0.35" step="0.5" inputmode="decimal"></div>
+      </div>
+
+      <div class="cfg-label">Bollinger Bands</div>
+      <div class="cfg-grid">
+        <div class="field"><label>Period</label><input type="number" id="cfgBBPeriod" value="20" min="10" max="50" inputmode="numeric"></div>
+        <div class="field"><label>Std Dev</label><input type="number" id="cfgBBStd" value="2" min="1" max="3" step="0.5" inputmode="decimal"></div>
+        <div class="field"><label>OS ≤ (panic)</label><input type="number" id="cfgBBOSThr" value="0.05" min="0.01" max="0.20" step="0.01" inputmode="decimal"></div>
+        <div class="field"><label>Reclaim > (arm)</label><input type="number" id="cfgBBReclaim" value="0.25" min="0.15" max="0.45" step="0.01" inputmode="decimal"></div>
+      </div>
+
+      <div class="cfg-label">RSI</div>
+      <div class="cfg-grid">
+        <div class="field"><label>Period</label><input type="number" id="cfgRSIPeriod" value="7" min="3" max="50" inputmode="numeric"></div>
+        <div class="field"><label>OS &lt;</label><input type="number" id="cfgRSIOS" value="25" min="10" max="45" inputmode="numeric"></div>
+        <div class="field"><label>Reclaim ></label><input type="number" id="cfgRSIReclaim" value="30" min="20" max="45" inputmode="numeric"></div>
+        <div class="field"><label>Drop min (pts)</label><input type="number" id="cfgRsiDropMin" value="10" min="5" max="30" step="1" inputmode="numeric"></div>
+        <div class="field"><label>Strong OS &lt;</label><input type="number" id="cfgRSIStrong" value="20" min="5" max="30" inputmode="numeric"></div>
+        <div class="field"><label>Depth max (compat)</label><input type="number" id="cfgRsiDepthMax" value="37" min="10" max="50" inputmode="numeric"></div>
+      </div>
+
+      <div class="cfg-label">MACD (bonus only)</div>
+      <div class="cfg-grid">
+        <div class="field"><label>Fast EMA</label><input type="number" id="cfgMACDFast" value="5" min="3" max="20" inputmode="numeric"></div>
+        <div class="field"><label>Slow EMA</label><input type="number" id="cfgMACDSlow" value="13" min="6" max="40" inputmode="numeric"></div>
+        <div class="field"><label>Signal EMA</label><input type="number" id="cfgMACDSig" value="4" min="2" max="10" inputmode="numeric"></div>
+        <div class="field"><label>Slope window</label><input type="number" id="cfgMACDSlopeWin" value="2" min="1" max="5" inputmode="numeric"></div>
+        <div class="field"><label>Min magnitude</label><input type="number" id="cfgMACDMinMag" value="0.0001" min="0" max="0.001" step="0.0001" inputmode="decimal"></div>
+        <div class="field"><label>Hist gate (0=off)</label><input type="number" id="cfgMACDHistMin" value="0.0" min="0" max="0.10" step="0.001" inputmode="decimal"></div>
+      </div>
+
+      <div class="cfg-label">Velocity</div>
+      <div class="cfg-grid">
+        <div class="field"><label>Lookback (ticks)</label><input type="number" id="cfgVelLookback" value="3" min="1" max="10" inputmode="numeric"></div>
+        <div class="field"><label>Min vel (× ATR)</label><input type="number" id="cfgVelMinATR" value="0.08" min="0.02" max="0.30" step="0.01" inputmode="decimal"></div>
+      </div>
+
+      <div class="cfg-label">Regime Filter</div>
+      <div class="cfg-grid">
+        <div class="field"><label>Min BB width (%)</label><input type="number" id="cfgRegimeBBW" value="0.10" min="0.05" max="1.00" step="0.05" inputmode="decimal"></div>
+        <div class="field"><label>Min ADX (0=off)</label><input type="number" id="cfgRegimeADX" value="0" min="0" max="35" step="1" inputmode="numeric"></div>
+      </div>
+
+      <div class="cfg-label">ADX + Score</div>
+      <div class="cfg-grid">
+        <div class="field"><label>ADX Period</label><input type="number" id="cfgADXPeriod" value="14" min="5" max="30" inputmode="numeric"></div>
+        <div class="field"><label>ADX Min (0=off)</label><input type="number" id="cfgADXMin" value="0" min="0" max="50" step="5" inputmode="numeric"></div>
+        <div class="field"><label>Min Score</label><input type="number" id="cfgMinScore" value="60" min="25" max="85" step="5" inputmode="numeric"></div>
+      </div>
+
+      <div class="cfg-label">Barrier (ATR)</div>
+      <div class="cfg-grid">
+        <div class="field"><label>ATR Period</label><input type="number" id="cfgAtrPeriod" value="14" min="5" max="50" inputmode="numeric"></div>
+        <div class="field"><label>ATR Multiplier</label><input type="number" id="cfgAtrMult" value="0.40" min="0.1" max="3" step="0.05" inputmode="decimal"></div>
+        <div class="field"><label>Barrier Min</label><input type="number" id="cfgBarrierMin" value="0.08" min="0.05" max="1" step="0.01" inputmode="decimal"></div>
+        <div class="field"><label>Barrier Max</label><input type="number" id="cfgBarrierMax" value="0.50" min="0.10" max="5" step="0.05" inputmode="decimal"></div>
+      </div>
+
+      <div class="cfg-label">Execution</div>
+      <div class="cfg-grid">
+        <div class="field"><label>Duration Min (t)</label><input type="number" id="cfgDurMin" value="8" min="2" max="20" inputmode="numeric"></div>
+        <div class="field"><label>Duration Max (t)</label><input type="number" id="cfgDurMax" value="12" min="6" max="20" inputmode="numeric"></div>
+        <div class="field"><label>Min Return (%)</label><input type="number" id="cfgRetT" value="37" min="5" max="300" step="5" inputmode="numeric"></div>
+        <div class="field"><label>Signal Cool (t)</label><input type="number" id="cfgSigCool" value="8" min="0" max="100" step="2" inputmode="numeric"></div>
+        <div class="field"><label>Adaptive Stake</label>
+          <select id="cfgAdaptiveStake"><option value="0">Disabled</option><option value="1" selected>Enabled</option></select></div>
+      </div>
+
+      <div class="cfg-label">Risk Management</div>
+      <div class="cfg-grid">
+        <div class="field"><label>Stop Loss ($)</label><input type="number" id="cfgSL" value="20" min="1" step="1" inputmode="numeric"></div>
+        <div class="field"><label>Max Trades/Hr</label><input type="number" id="cfgHCap" value="12" min="1" max="60" inputmode="numeric"></div>
+        <div class="field"><label>Consec Loss Limit</label><input type="number" id="cfgConsec" value="3" min="1" max="10" inputmode="numeric"></div>
+        <div class="field"><label>Base Cooldown (min)</label><input type="number" id="cfgCool" value="10" min="1" max="60" inputmode="numeric"></div>
+        <div class="field"><label>Max Cooldown (min)</label><input type="number" id="cfgCoolMax" value="60" min="10" max="240" step="10" inputmode="numeric"></div>
+        <div class="field"><label>Post-Trade (s)</label><input type="number" id="cfgPostTMs" value="15" min="0" max="120" step="5" inputmode="numeric"></div>
+        <div class="field"><label>Post-Loss (s)</label><input type="number" id="cfgPostLMs" value="20" min="0" max="120" step="5" inputmode="numeric"></div>
+      </div>
+
+      <div id="infoBox" class="infobox" style="margin-top:10px"></div>
+
+      <div style="margin-top:14px">
+        <button class="btn btn-p" id="btnCon" onclick="Bot.connect()">Connect &amp; Start</button>
+        <button class="btn btn-d" id="btnStop" onclick="Bot.stop()" disabled>Stop Bot</button>
+        <div class="btn-row">
+          <button class="btn btn-ghost" onclick="Bot.exportLog()">↓ Log CSV</button>
+          <button class="btn btn-ghost" onclick="Bot.exportTrades()">↓ Trades CSV</button>
+        </div>
+      </div>
+    </div>
+  </div><!-- /tab-config -->
+
+</div><!-- /content -->
+
+<!-- ── Bottom Tab Bar ── -->
+<nav class="tabbar">
+  <button class="tab active" id="tbLive" onclick="showTab('live',this)">
+    <span class="tab-icon">📡</span>
+    <span class="tab-lbl">Live</span>
+  </button>
+  <button class="tab" id="tbChart" onclick="showTab('chart',this)">
+    <span class="tab-icon">📈</span>
+    <span class="tab-lbl">Chart</span>
+  </button>
+  <button class="tab" id="tbState" onclick="showTab('state',this)">
+    <span class="tab-icon">⚙️</span>
+    <span class="tab-lbl">State</span>
+  </button>
+  <button class="tab" id="tbLog" onclick="showTab('log',this)">
+    <span class="tab-icon">📋</span>
+    <span class="tab-lbl">Log</span>
+  </button>
+  <button class="tab" id="tbConfig" onclick="showTab('config',this)">
+    <span class="tab-icon">🔧</span>
+    <span class="tab-lbl">Config</span>
+  </button>
+</nav>
+
+</div><!-- /app -->
+<div class="toast" id="toast"></div>
+
+<!-- Tab switcher -->
+<script>
+function showTab(name, btn) {
+  document.querySelectorAll('.tab-section').forEach(s => s.classList.remove('active'));
+  document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+  document.getElementById('tab-' + name).classList.add('active');
+  btn.classList.add('active');
+  // Redraw charts when switching to chart tab
+  if (name === 'chart' && typeof drawChart === 'function') {
+    setTimeout(() => { drawChart(); drawMacdChart(); }, 50);
+  }
+}
+// Expose chart functions globally for tab switch (set by Bot after init)
+let drawChart = () => {}, drawMacdChart = () => {};
+</script>
+
+<!-- Hidden compatibility stubs — referenced by trading engine JS but not shown in mobile UI -->
+<div style="display:none" aria-hidden="true">
+  <span id="tkRsiPeriod"></span>
+  <span id="tkPctB"></span><span id="tkPctBSub"></span>
+  <span id="tkRsi"></span><span id="tkRsiSub"></span>
+  <span id="tkMacd"></span><span id="tkMacdSub"></span>
+  <span id="tkAdx"></span><span id="tkAdxSub"></span>
+  <span id="sWR"></span>
+  <span id="sigScore"></span>
+  <span id="cmMeta"></span>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════════════════════ -->
+<!--  TRADING ENGINE — v60 (IDENTICAL TO DESKTOP, ZERO LOGIC CHANGES)          -->
+<!-- ═══════════════════════════════════════════════════════════════════════════ -->
+<script>
+'use strict';
+const Bot = (() => {
+
+  // ─── CONFIG ─────────────────────────────────────────────────────────────────
+  const C = {
+    WS_URL   : 'wss://ws.derivws.com/websockets/v3',
+    APP_ID   : '1089',
+    TOKEN    : '',
+    SYMBOL   : 'R_100',
+    CURRENCY : 'USD',
+    STAKE    : 1,
+
+    BB_PERIOD  : 20, BB_STD  : 2,
+    BB_OS_THR  : 0.05,   // %B ≤ this to mark panic exhaustion (Phase 1) — tightened from 0.20
+    BB_RECLAIM : 0.25,   // %B must cross ABOVE this to confirm reclaim
+
+    RSI_PERIOD : 7,      // v60: faster RSI — catches reversals earlier (was 14)
+    RSI_OS     : 25,     // v60: panic oversold threshold (was 40)
+    RSI_RECLAIM: 30,     // v60: RSI must cross ABOVE this to confirm slope turning (was 45)
+    RSI_STRONG_OS : 20,  // extra bonus pts when RSI below this
+    RSI_DEPTH_MAX : 30,  // kept for config UI compat
+    RSI_DROP_MIN  : 10,  // v60: RSI must have fallen ≥ this many points from recent high
+
+    // ── MACD — used as momentum bonus only, NOT entry gate ──
+    MACD_FAST      : 5,  // v60: faster MACD 5/13/4 (was 12/26/9)
+    MACD_SLOW      : 13,
+    MACD_SIG       : 4,
+    MACD_SLOPE_WIN : 2,  // ticks back to measure histogram slope
+    MACD_MIN_MAG   : 0.0001,
+    MACD_HIST_MIN  : 0.0, // v60: MACD hist > 0 NOT required — histogram increasing is the only check
+
+    // ── Velocity filter — lowered threshold for earlier entry ──
+    VEL_LOOKBACK : 3,    // v60: tighter 3-tick window (was 5)
+    VEL_MIN_ATR  : 0.08, // v60: 8% of ATR (was 15%) — captures expansion earlier
+
+    // ── Regime filter — BB width only; ADX gate removed ──
+    REGIME_BB_MIN_WIDTH : 0.001,  // BB %BW must be > this (avoids dead-flat markets)
+    REGIME_ADX_MIN      : 0,      // v60: ADX regime floor removed
+
+    ADX_PERIOD : 14, ADX_MIN : 0, // v60: ADX gate completely removed (set to 0)
+    MIN_SCORE  : 60,               // v60: lowered from 70 → 60
+
+    ATR_PERIOD : 14, ATR_MULT    : 0.40, // v60: slightly smaller barrier
+    BARRIER_MIN: 0.08,   BARRIER_MAX : 0.50, // v60: slightly smaller barrier range
+    TICK_STALE_MS: 3_000,
+
+    DUR_MIN_T : 8, DUR_MAX_T : 12,   // v60: tightened 8-12 (was 10-15)
+    MIN_RET_T : 37,                   // v59: lowered from 38 — captures payout regime shifts
+    SIG_COOL  : 8,
+    ADAPTIVE_STAKE: true,
+
+    STOP_LOSS       : 20,
+    HOURLY_CAP      : 12,
+    CONSEC_LIMIT    : 3,
+    BASE_COOL       : 3 * 60_000,   // 3 min base cooldown after consec losses
+    MAX_COOL        : 15 * 60_000,  // 15 min max
+    COOLDOWN_MS     : 10 * 60_000,
+    POST_TRADE_MS   : 15_000,   // 15s pause after any trade
+    POST_LOSS_MS    : 20_000,   // 20s pause after a loss
+
+    PROP_TO      : 12_000,
+    BUY_TO       : 20_000,
+    SETTLE_GUARD : 45_000,
+    HB_INTERVAL  : 30_000,
+    MAX_LOG      : 400,
+    MAX_CHART    : 200,
+  };
+
+  // ─── STATE ──────────────────────────────────────────────────────────────────
+  const S = {
+    ws: null, running: false, reconnectAttempt: 0, manualStop: false, reqId: 1,
+    ticks: [], chartPx: [], tickCount: 0, lastPrice: 0, lastTickTime: 0,
+
+    bb: null, bbUp: [], bbMid: [], bbLow: [], chartMacdLine: [], chartMacdSig: [], chartMacdHist: [],
+    prevPctB: null,
+    rsiVal: null, prevRSI: null, rsiHistory: [],
+    stochRsiK: null, stochRsiD: null, prevStochRsiK: null, prevStochRsiD: null, // v60: Stochastic RSI
+    wilderAvgGain: null, wilderAvgLoss: null,
+    emaFast: null, emaSlow: null,
+    macdLineHistory: [], macdLine: null, macdSig: null, macdHist: null, prevMacdHist: null,
+    adxVal: null, plusDI: null, minusDI: null, wilderDX: null,
+    atr: null, wilderAtr: null,
+
+    // ── Two-phase entry system ──
+    // Phase A (SETUP): price oversold — BB %B ≤ OS_THR and RSI < OS.  Bot watches, does NOT enter.
+    // Phase B (ARMED): price reclaims — BB %B crosses above BB_RECLAIM AND RSI crosses above RSI_RECLAIM.
+    //                  Bot is now armed. Next tick with velocity + MACD confirmation fires entry.
+    // Zone resets if price collapses back below OS thresholds before reclaim completes.
+    setupSeen    : false,  // Phase A: oversold condition was detected
+    setupTick    : null,   // tick when Phase A began
+    setupPctB    : null,   // pctB at setup detection (for UI display)
+    setupRSI     : null,   // RSI at setup detection
+    armed        : false,  // Phase B: reclaim confirmed — ready to fire on next valid tick
+    armedTick    : null,   // tick when armed
+    armedPeakScore: 0,     // highest score seen during current armed window (v55)
+    collapseCooldownUntil: 0, // tick index until which setup detection is suppressed after collapse (v55)
+    bbReclaimSeen: false,  // BB side of reclaim crossed
+    rsiReclaimSeen: false, // RSI side of reclaim crossed
+
+    // ── Velocity ──
+    velocity     : null,   // currentPrice - price VEL_LOOKBACK ticks ago
+
+    // Score components (exposed for UI)
+    scoreBB: 0, scoreRSI: 0, scoreMacd: 0, scoreAdx: 0, scoreVel: 0,
+
+    lastScore: 0,
+    noSigReasons: [],
+    lastNoSigLogTick: -999,
+    lastZoneLogTick: -999,
+
+    botState: 'IDLE',
+    cfPipSize: null, cfMinBarrier: null, cfMaxBarrier: null,
+
+    contractId: null, buyPrice: 0,
+    barrier: '', duration: '', retPct: 0,
+    settled: false, buyPending: false, pendingRid: 0, pocSubId: null,
+    entryTick: 0, entryPrice: 0,
+    barrierAbs: null,
+    settlePollSent: false,
+    tradeScore: 0,
+
+    pnl: 0, wins: 0, losses: 0,
+    consecLosses: 0, tradesHr: 0, hrReset: Date.now(),
+    sigCount: 0, coolUntil: null,
+    lastTradeTime: 0, lastLossTime: 0, lastSigTick: 0,
+    totalScoreAtEntry: 0,
+    recentResults: [],
+    tradeLog: [], rawLog: [],
+    lastCooldownLogTick: -999,
+  };
+
+  // ─── UTILS ──────────────────────────────────────────────────────────────────
+  const $     = id  => document.getElementById(id);
+  const ts    = ()  => new Date().toISOString().slice(11, 23);
+  const pp    = n   => (n >= 0 ? '+' : '') + n.toFixed(2);
+  const nid   = ()  => S.reqId++;
+  const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
+  const send  = obj => { if (S.ws?.readyState === WebSocket.OPEN) S.ws.send(JSON.stringify(obj)); };
+
+  let hbTimer = null;
+  const timers = {};
+  const setT   = (k, ms, fn) => { clearT(k); timers[k] = setTimeout(() => { delete timers[k]; fn(); }, ms); };
+  const clearT = k  => { if (timers[k]) { clearTimeout(timers[k]); delete timers[k]; } };
+  const clearAllTimers = () => Object.keys(timers).forEach(clearT);
+
+  function log(msg, type = '') {
+    const t = ts();
+    S.rawLog.push({ t, msg, type });
+    if (S.rawLog.length > C.MAX_LOG) S.rawLog.shift();
+    const el = document.createElement('div');
+    el.className = `lr ${type}`;
+    el.innerHTML = `<span class="lt">${t}</span><span class="lm">${msg}</span>`;
+    const box = $('logEl');
+    box.appendChild(el);
+    while (box.children.length > C.MAX_LOG) box.removeChild(box.firstChild);
+    box.scrollTop = box.scrollHeight;
+  }
+
+  function toast(msg, cls) {
+    const el = $('toast');
+    el.textContent = msg;
+    el.className = `toast show ${cls}`;
+    setTimeout(() => el.classList.remove('show'), 3500);
+  }
+
+  function infoBox(msg, cls) {
+    const el = $('infoBox');
+    if (!msg) { el.className = 'infobox'; return; }
+    el.textContent = msg;
+    el.className = `infobox show ${cls}`;
+  }
+
+  // ─── INDICATORS ─────────────────────────────────────────────────────────────
+
+  function calcBB(prices) {
+    const n = C.BB_PERIOD;
+    if (prices.length < n) return null;
+    const slice = prices.slice(-n);
+    const mean  = slice.reduce((a, b) => a + b) / n;
+    const std   = Math.sqrt(slice.reduce((s, v) => s + (v - mean) ** 2, 0) / n);
+    const bw    = C.BB_STD * std;
+    const upper = mean + bw, lower = mean - bw;
+    const cur   = prices[prices.length - 1];
+    return {
+      upper, middle: mean, lower,
+      pctB : bw > 0 ? (cur - lower) / (upper - lower) : 0.5,
+      pctBW: bw * 2 / mean,
+    };
+  }
+
+  function calcATR(prices) {
+    const n = C.ATR_PERIOD;
+    if (prices.length < n + 1) return null;
+    if (S.wilderAtr === null) {
+      const sl = prices.slice(-(n + 1));
+      let sum = 0;
+      for (let i = 1; i <= n; i++) sum += Math.abs(sl[i] - sl[i - 1]);
+      S.wilderAtr = sum / n;
+    } else {
+      const last = prices[prices.length - 1];
+      const prev = prices[prices.length - 2];
+      S.wilderAtr = (S.wilderAtr * (n - 1) + Math.abs(last - prev)) / n;
+    }
+    return S.wilderAtr;
+  }
+
+  function calcRSI(prices) {
+    const n = C.RSI_PERIOD;
+    if (prices.length < n + 1) return null;
+    if (S.wilderAvgGain === null) {
+      const sl = prices.slice(-(n + 1));
+      let g = 0, l = 0;
+      for (let i = 1; i < sl.length; i++) {
+        const d = sl[i] - sl[i - 1];
+        if (d > 0) g += d; else l += Math.abs(d);
+      }
+      S.wilderAvgGain = g / n;
+      S.wilderAvgLoss = l / n;
+    } else {
+      const d = prices[prices.length - 1] - prices[prices.length - 2];
+      S.wilderAvgGain = (S.wilderAvgGain * (n - 1) + (d > 0 ? d : 0)) / n;
+      S.wilderAvgLoss = (S.wilderAvgLoss * (n - 1) + (d < 0 ? Math.abs(d) : 0)) / n;
+    }
+    if (S.wilderAvgLoss === 0) return S.wilderAvgGain === 0 ? 50 : 100;
+    return 100 - 100 / (1 + S.wilderAvgGain / S.wilderAvgLoss);
+  }
+
+  // ─── STOCHASTIC RSI (3/3 smoothing) ─────────────────────────────────────────
+  // Uses the last 14 RSI values. K = EMA(raw stoch, 3), D = EMA(K, 3)
+  function calcStochRSI(rsiHistory) {
+    const period = 14;
+    if (rsiHistory.length < period) return null;
+    const slice = rsiHistory.slice(-period);
+    const lo = Math.min(...slice);
+    const hi = Math.max(...slice);
+    if (hi === lo) return { k: 50, d: 50 };
+    const rawK = ((rsiHistory[rsiHistory.length - 1] - lo) / (hi - lo)) * 100;
+    // Smooth K with EMA-3
+    const kSmooth = S.stochRsiK !== null ? rawK * (2/4) + S.stochRsiK * (2/4) : rawK;
+    // D = EMA-3 of K
+    const dSmooth = S.stochRsiD !== null ? kSmooth * (2/4) + S.stochRsiD * (2/4) : kSmooth;
+    return { k: kSmooth, d: dSmooth };
+  }
+
+  function updateEMA(prev, val, period) {
+    if (prev === null) return val;
+    return val * (2 / (period + 1)) + prev * (1 - 2 / (period + 1));
+  }
+
+  function calcEMA(arr, period) {
+    if (arr.length < period) return null;
+    const k = 2 / (period + 1);
+    let ema = arr.slice(0, period).reduce((a, b) => a + b) / period;
+    for (let i = period; i < arr.length; i++) ema = arr[i] * k + ema * (1 - k);
+    return ema;
+  }
+
+  function calcMACDLine(prices) {
+    if (prices.length < C.MACD_SLOW) return null;
+    const cur = prices[prices.length - 1];
+    if (S.emaFast === null || S.emaSlow === null) {
+      if (prices.length < C.MACD_SLOW + 1) return null;
+      S.emaFast = prices.slice(0, C.MACD_FAST).reduce((a, b) => a + b) / C.MACD_FAST;
+      S.emaSlow = prices.slice(0, C.MACD_SLOW).reduce((a, b) => a + b) / C.MACD_SLOW;
+      for (let i = C.MACD_SLOW; i < prices.length - 1; i++) {
+        S.emaFast = updateEMA(S.emaFast, prices[i], C.MACD_FAST);
+        S.emaSlow = updateEMA(S.emaSlow, prices[i], C.MACD_SLOW);
+      }
+    }
+    S.emaFast = updateEMA(S.emaFast, cur, C.MACD_FAST);
+    S.emaSlow = updateEMA(S.emaSlow, cur, C.MACD_SLOW);
+    return S.emaFast - S.emaSlow;
+  }
+
+  function calcADX(prices) {
+    const n = C.ADX_PERIOD;
+    if (prices.length < n * 2 + 1) return null;
+    const sl = prices.slice(-(n * 2 + 2));
+    let pDM = 0, mDM = 0, tr = 0;
+    for (let i = 1; i <= n; i++) {
+      const up = Math.max(0, sl[i] - sl[i - 1]);
+      const dn = Math.max(0, sl[i - 1] - sl[i]);
+      pDM += up > dn ? up : 0;
+      mDM += dn > up ? dn : 0;
+      tr  += Math.abs(sl[i] - sl[i - 1]);
+    }
+    if (tr === 0) return null;
+    const pDI = (pDM / tr) * 100;
+    const mDI = (mDM / tr) * 100;
+    S.plusDI = pDI; S.minusDI = mDI;
+    const dx = (pDI + mDI) > 0 ? Math.abs(pDI - mDI) / (pDI + mDI) * 100 : 0;
+    S.wilderDX = S.wilderDX === null ? dx : (S.wilderDX * (n - 1) + dx) / n;
+    return S.wilderDX;
+  }
+
+  // ─── VELOCITY ────────────────────────────────────────────────────────────────
+  // Measures how fast price is moving over the last N ticks.
+  // Expressed as a fraction of ATR so it scales with market volatility.
+  // Returns null if insufficient data.
+  function calcVelocity(prices) {
+    if (prices.length < C.VEL_LOOKBACK + 1) return null;
+    return prices[prices.length - 1] - prices[prices.length - 1 - C.VEL_LOOKBACK];
+  }
+
+  // ─── REGIME FILTER ───────────────────────────────────────────────────────────
+  // Returns a string reason if market is in a no-trade regime, null if tradeable.
+  // Checks: BB width (squeeze), ADX (trend presence).
+  // ── v55: Structured per-armed-tick block logger ──────────────────────────────
+  // Emits a 'block' log entry when a gate fires while armed, showing exactly which
+  // gate blocked and the live values. Use this to diagnose over-filtering.
+  function blockLog(gate, detail) {
+    const armedAge = S.armedTick !== null ? S.tickCount - S.armedTick : '?';
+    log(`🔒 BLOCK [${gate}] armed+${armedAge}t | ${detail} | score:${S.lastScore ?? 0} peak:${S.armedPeakScore}`, 'block');
+  }
+
+  function regimeBlock() {
+    const bb = S.bb;
+    if (!bb) return null; // not yet seeded — handled upstream
+    // Dead-flat market: Bollinger Bands too narrow → ONETOUCH barriers won't be reached
+    if (bb.pctBW < C.REGIME_BB_MIN_WIDTH) {
+      const msg = `Regime: BB squeeze (width ${(bb.pctBW * 100).toFixed(3)}% < min ${(C.REGIME_BB_MIN_WIDTH * 100).toFixed(3)}%) — no volatility`;
+      if (S.armed) blockLog('REGIME_BB', `bbW:${(bb.pctBW*100).toFixed(3)}% min:${(C.REGIME_BB_MIN_WIDTH*100).toFixed(3)}%`); // v55
+      return msg;
+    }
+    // No trend: ADX is now informational only in v60 — removed as hard gate
+    // (regime check kept for BB squeeze only)
+    return null;
+  }
+
+
+
+  // ─── CONFIDENCE SCORE (0–100) ────────────────────────────────────────────────
+  // v60 scoring breakdown (acceleration-first):
+  //   BB rejection depth   0–30 pts  (how deep the panic oversold was)
+  //   RSI recovery slope   0–25 pts  (RSI turning upward after panic)
+  //   Velocity expansion   0–30 pts  (price accelerating — the core ONETOUCH signal)
+  //   Stoch RSI cross      0–15 pts  (K crossing above D = buyers returning)
+  //   MACD hist increasing  0–5 pts  (optional quality bonus only)
+  function calcScore() {
+    const { bb, rsiVal } = S;
+    if (!bb || rsiVal === null) return { total: 0, bb: 0, rsi: 0, macd: 0, adx: 0, vel: 0 };
+
+    let bbPts = 0, rsiPts = 0, velPts = 0, stochPts = 0, macdBonus = 0;
+
+    // BB rejection depth: how far below 0.05 was %B at setup peak panic
+    const refPctB = S.setupPctB ?? bb.pctB;
+    bbPts = Math.round(clamp((C.BB_OS_THR - refPctB) / (C.BB_OS_THR + 0.01), 0, 1) * 30);
+
+    // RSI recovery slope: is RSI turning upward after panic?
+    // Give points for RSI being below OS threshold + rising
+    const refRSI = S.setupRSI ?? rsiVal;
+    const rsiDepth = Math.max(0, C.RSI_OS - refRSI);
+    const rsiSlopeUp = S.rsiHistory.length >= 3
+      ? rsiVal > S.rsiHistory[S.rsiHistory.length - 3]
+      : false;
+    rsiPts = Math.round(clamp(rsiDepth / (C.RSI_OS + 5), 0, 1) * 20);
+    if (rsiSlopeUp) rsiPts = Math.min(25, rsiPts + 5);
+
+    // Velocity expansion: price moving fast upward
+    if (S.velocity !== null && S.atr !== null && S.atr > 0) {
+      const velRatio = S.velocity / S.atr;
+      velPts = clamp(Math.round(velRatio / C.VEL_MIN_ATR * 15), 0, 30);
+    }
+
+    // Stoch RSI bullish cross: K crossed above D recently
+    if (S.stochRsiK !== null && S.stochRsiD !== null &&
+        S.prevStochRsiK !== null && S.prevStochRsiD !== null) {
+      const crossedUp = S.prevStochRsiK <= S.prevStochRsiD && S.stochRsiK > S.stochRsiD;
+      const kAboveD   = S.stochRsiK > S.stochRsiD;
+      if (crossedUp) stochPts = 15;
+      else if (kAboveD) stochPts = 8;
+    }
+
+    // MACD histogram increasing → optional +5 bonus
+    if (S.macdHist !== null && S.prevMacdHist !== null && S.macdHist > S.prevMacdHist) {
+      macdBonus = 5;
+    }
+
+    const rawTotal = clamp(bbPts + rsiPts + velPts + stochPts + macdBonus, 0, 100);
+
+    // Staleness penalty: armed > 30 ticks
+    let stalePenalty = 0;
+    if (S.armed && S.armedTick !== null) {
+      const armedAge = S.tickCount - S.armedTick;
+      if (armedAge > 30) stalePenalty = Math.min(armedAge - 30, 10);
+    }
+    const total = clamp(rawTotal - stalePenalty, 0, 100);
+
+    if (S.armed && total > S.armedPeakScore) S.armedPeakScore = total;
+
+    // Map to legacy slots: bb→bbPts, rsi→rsiPts, macd→velPts (velocity), adx→stochPts, vel→macdBonus
+    return { total, bb: bbPts, rsi: rsiPts, macd: velPts, adx: stochPts, vel: macdBonus };
+  }
+
+  // ─── TWO-PHASE ENTRY SYSTEM ──────────────────────────────────────────────────
+  //
+  // PHASE A — SETUP: wait for genuine oversold (both BB %B AND RSI below thresholds).
+  //   Bot does NOT enter here. Records the depth values for scoring.
+  //
+  // PHASE B — RECLAIM: wait for BOTH BB %B to cross back above BB_RECLAIM AND RSI
+  //   to cross above RSI_RECLAIM. Only then is the bot "armed" for entry.
+  //   This confirms the selling pressure has actually stopped, not just paused.
+  //
+  // ENTRY: on the first armed tick where velocity, MACD, and score all pass.
+  //
+  // RESET: if price collapses back below OS thresholds during Phase B, the whole
+  //   cycle resets — we were not seeing a reversal, just a pause.
+
+  function updatePhases() {
+    const { bb, rsiVal } = S;
+    if (!bb || rsiVal === null) return;
+
+    const bbOS  = bb.pctB <= C.BB_OS_THR;
+    const rsiOS = rsiVal < C.RSI_OS;
+
+    // ── Phase A: detect setup ──
+    if (bbOS && rsiOS && !S.setupSeen && !S.armed) {
+      S.setupSeen      = true;
+      S.setupTick      = S.tickCount;
+      S.setupPctB      = bb.pctB;
+      S.setupRSI       = rsiVal;
+      S.bbReclaimSeen  = false;
+      S.rsiReclaimSeen = false;
+      log(`📍 Setup detected — BB ${bb.pctB.toFixed(3)} · RSI ${rsiVal.toFixed(1)} · watching for reclaim`, 'signal');
+    }
+
+    // ── Collapse reset: if we're in setup or armed and price dives again ──
+    if ((S.setupSeen || S.armed) && (bb.pctB < C.BB_OS_THR - 0.10 && rsiVal < C.RSI_OS - 10)) {
+      if (S.armed || (S.setupSeen && !S.bbReclaimSeen && !S.rsiReclaimSeen)) {
+        // Price collapsed back down before reclaim completed — reset
+        log(`🔴 Setup reset — price collapsed back (BB ${bb.pctB.toFixed(3)} · RSI ${rsiVal.toFixed(1)})`, 'skip');
+        S.setupSeen = false; S.setupTick = null; S.setupPctB = null; S.setupRSI = null;
+        S.armed = false; S.armedTick = null; S.armedPeakScore = 0; S.tradePlacedThisCycle = false;
+        S.bbReclaimSeen = false; S.rsiReclaimSeen = false;
+        S.collapseCooldownUntil = S.tickCount + 4; // v55: 4-tick post-collapse lockout
+      }
+      return;
+    }
+
+    // ── Post-collapse cooldown: skip setup detection for 4 ticks after a storm ──
+    if (S.collapseCooldownUntil && S.tickCount < S.collapseCooldownUntil) return;
+
+    // ── Phase B: track reclaim crosses ──
+    if (S.setupSeen && !S.armed) {
+      if (!S.bbReclaimSeen  && bb.pctB  > C.BB_RECLAIM)  { S.bbReclaimSeen  = true; log(`↗ BB reclaimed ${bb.pctB.toFixed(3)} > ${C.BB_RECLAIM}`, 'cond'); }
+      if (!S.rsiReclaimSeen && rsiVal   > C.RSI_RECLAIM) { S.rsiReclaimSeen = true; log(`↗ RSI reclaimed ${rsiVal.toFixed(1)} > ${C.RSI_RECLAIM}`, 'cond'); }
+
+      if (S.bbReclaimSeen && S.rsiReclaimSeen) {
+        // v59: Relative RSI drop gate — require RSI fell ≥ RSI_DROP_MIN pts from recent high
+        // Look back through rsiHistory for the peak in the window before setup
+        const recentPeak = S.rsiHistory.length > 0 ? Math.max(...S.rsiHistory) : null;
+        const rsiDrop = recentPeak !== null && S.setupRSI !== null ? recentPeak - S.setupRSI : null;
+        if (rsiDrop !== null && rsiDrop < C.RSI_DROP_MIN) {
+          log(`⬜ Arm rejected — RSI drop ${rsiDrop.toFixed(1)}pts (peak ${recentPeak.toFixed(1)} → setup ${S.setupRSI.toFixed(1)}) < min ${C.RSI_DROP_MIN}pts (shallow bounce)`, 'skip');
+          S.setupSeen = false; S.setupTick = null; S.setupPctB = null; S.setupRSI = null;
+          S.bbReclaimSeen = false; S.rsiReclaimSeen = false;
+        } else {
+          S.armed    = true;
+          S.armedTick = S.tickCount;
+          S.armedPeakScore = 0;
+          const setupAge = S.tickCount - (S.setupTick ?? S.tickCount);
+          log(`🟢 ARMED — reclaim confirmed after ${setupAge}t · BB ${bb.pctB.toFixed(3)} · RSI ${rsiVal.toFixed(1)} · depth was BB:${S.setupPctB?.toFixed(3)} RSI:${S.setupRSI?.toFixed(1)}`, 'signal');
+        }
+      }
+    }
+
+    // ── Auto-expire armed state after 50 ticks without entry (extended from 30t in v55) ──
+    if (S.armed && S.armedTick !== null && S.tickCount - S.armedTick > 50) {
+      log(`⬜ Armed state expired (50t without valid entry)`, 'skip');
+      S.armed = false; S.armedTick = null; S.armedPeakScore = 0; S.tradePlacedThisCycle = false;
+      S.setupSeen = false; S.setupTick = null; S.setupPctB = null; S.setupRSI = null;
+      S.bbReclaimSeen = false; S.rsiReclaimSeen = false;
+    }
+
+    // ── v58: Armed state stale-zone kill — price has moved past the bounce zone, setup is invalid ──
+    if (S.armed && S.bb !== null && S.rsiVal !== null) {
+      const bbDrift  = S.bb.pctB > 0.65;
+      const rsiDrift = S.rsiVal > 50;
+      if (bbDrift || rsiDrift) {
+        log(`⬜ Armed stale-zone kill — price drifted: BB%B ${S.bb.pctB.toFixed(3)}${bbDrift ? ' >0.65' : ''} · RSI ${S.rsiVal.toFixed(1)}${rsiDrift ? ' >50' : ''}`, 'skip');
+        S.armed = false; S.armedTick = null; S.armedPeakScore = 0; S.tradePlacedThisCycle = false;
+        S.setupSeen = false; S.setupTick = null; S.setupPctB = null; S.setupRSI = null;
+        S.bbReclaimSeen = false; S.rsiReclaimSeen = false;
+      }
+    }
+
+    // ── v56 Fix B: Stale-context kill — if score fell >25pts from peak, setup context is degraded ──
+    if (S.armed && S.armedPeakScore > 0) {
+      const scoreNow = calcScore()?.total ?? 0;
+      if (S.armedPeakScore - scoreNow > 25 && S.tickCount - S.armedTick > 10) {
+        log(`⬜ Stale context kill — score dropped ${S.armedPeakScore - scoreNow}pts from peak ${S.armedPeakScore} to ${scoreNow}`, 'skip');
+        S.armed = false; S.armedTick = null; S.armedPeakScore = 0; S.tradePlacedThisCycle = false;
+        S.setupSeen = false; S.setupTick = null; S.setupPctB = null; S.setupRSI = null;
+        S.bbReclaimSeen = false; S.rsiReclaimSeen = false;
+      }
+    }
+  }
+
+  // ─── SIGNAL EVALUATION ───────────────────────────────────────────────────────
+  function getSignal() {
+    const { bb, rsiVal } = S;
+
+    if (!bb || rsiVal === null || S.macdHist === null) {
+      S.noSigReasons = ['indicators seeding'];
+      return null;
+    }
+
+    // ── Regime filter: block dead markets before anything else ──
+    const regime = regimeBlock();
+    if (regime) {
+      S.noSigReasons = [regime];
+      return null;
+    }
+
+    // ── Phase gate: must be ARMED (panic oversold + reclaim confirmed) ──
+    if (!S.armed) {
+      if (!S.setupSeen) {
+        S.noSigReasons = [`Waiting for panic oversold — BB ${bb.pctB.toFixed(3)} · RSI ${rsiVal.toFixed(1)}`];
+      } else {
+        const parts = [];
+        if (!S.bbReclaimSeen)  parts.push(`BB reclaim (need %B > ${C.BB_RECLAIM}, now ${bb.pctB.toFixed(3)})`);
+        if (!S.rsiReclaimSeen) parts.push(`RSI reclaim (need RSI > ${C.RSI_RECLAIM}, now ${rsiVal.toFixed(1)})`);
+        S.noSigReasons = [`Setup seen, waiting for: ${parts.join(' + ')}`];
+      }
+      return null;
+    }
+
+    // ── RSI slope must be turning upward (v60: replaces ADX gate) ──
+    const rsiSlopeUp = S.rsiHistory.length >= 3
+      ? rsiVal > S.rsiHistory[S.rsiHistory.length - 3]
+      : false;
+    if (!rsiSlopeUp) {
+      S.noSigReasons = [`RSI slope flat/down — RSI ${rsiVal.toFixed(1)} not rising over last 3 ticks`];
+      if (S.armed) blockLog('RSI_SLOPE', `rsi:${rsiVal.toFixed(1)}`);
+      return null;
+    }
+
+    // ── Stoch RSI: K must be above D (bullish cross confirmation) ──
+    if (S.stochRsiK === null || S.stochRsiD === null || S.stochRsiK <= S.stochRsiD) {
+      const kStr = S.stochRsiK !== null ? S.stochRsiK.toFixed(1) : '—';
+      const dStr = S.stochRsiD !== null ? S.stochRsiD.toFixed(1) : '—';
+      S.noSigReasons = [`Stoch RSI K(${kStr}) not above D(${dStr}) — no bullish cross`];
+      if (S.armed) blockLog('STOCH_RSI', `K:${kStr} D:${dStr}`);
+      return null;
+    }
+
+    // ── Hard gate: velocity — price must be accelerating upward ──
+    if (S.velocity === null || S.atr === null || S.atr <= 0) {
+      S.noSigReasons = ['Velocity not available yet'];
+      return null;
+    }
+    const velThreshold = S.atr * C.VEL_MIN_ATR;
+    if (S.velocity < velThreshold) {
+      S.noSigReasons = [`Velocity ${S.velocity.toFixed(4)} < ${velThreshold.toFixed(4)} (${(C.VEL_MIN_ATR * 100).toFixed(0)}% ATR) — price not accelerating`];
+      if (S.armed) blockLog('VEL', `vel:${S.velocity.toFixed(4)} need:${velThreshold.toFixed(4)}`);
+      return null;
+    }
+
+    // ── Score gate (lowered to 60) ──
+    const scoreObj = calcScore();
+    S.lastScore  = scoreObj.total;
+    S.scoreBB    = scoreObj.bb;
+    S.scoreRSI   = scoreObj.rsi;
+    S.scoreMacd  = scoreObj.macd;
+    S.scoreAdx   = scoreObj.adx;
+    S.scoreVel   = scoreObj.vel;
+
+    if (scoreObj.total < C.MIN_SCORE) {
+      S.noSigReasons = [`Armed · score ${scoreObj.total}/100 < min ${C.MIN_SCORE} (BB:${scoreObj.bb} RSI:${scoreObj.rsi} Vel:${scoreObj.macd} Stoch:${scoreObj.adx})`];
+      if (S.armed) blockLog('SCORE', `score:${scoreObj.total} min:${C.MIN_SCORE}`);
+      return null;
+    }
+
+    // ── MACD histogram increasing? (bonus check, not hard gate) ──
+    const macdIncreasing = S.macdHist !== null && S.prevMacdHist !== null && S.macdHist > S.prevMacdHist;
+
+    const armedAge = S.armedTick !== null ? S.tickCount - S.armedTick : 0;
+    const setupAge = S.setupTick !== null ? S.tickCount - S.setupTick : 0;
+    const reason   = `Acceleration entry · setup:${setupAge}t armed:${armedAge}t · BB ${bb.pctB.toFixed(3)} · RSI ${rsiVal.toFixed(1)}↑ · StochK ${S.stochRsiK.toFixed(1)}>D ${S.stochRsiD.toFixed(1)} · vel:${S.velocity.toFixed(4)} · MACD ${macdIncreasing ? '↑bonus' : 'flat'} · score:${scoreObj.total}`;
+
+    // Reset armed state — one entry per reclaim cycle
+    S.armed = false; S.armedTick = null; S.armedPeakScore = 0; S.tradePlacedThisCycle = false;
+    S.setupSeen = false; S.setupTick = null; S.setupPctB = null; S.setupRSI = null;
+    S.bbReclaimSeen = false; S.rsiReclaimSeen = false;
+
+    S.noSigReasons = [];
+    return { reason, score: scoreObj.total, scoreObj };
+  }
+
+  // ─── BARRIER & DURATION ───────────────────────────────────────────────────────
+  function calcBarrierOffset() {
+    const raw = S.atr > 0 ? S.atr * C.ATR_MULT : 0.20;
+    return clamp(raw, C.BARRIER_MIN, C.BARRIER_MAX);
+  }
+  function calcBarrier() {
+    return '+' + calcBarrierOffset().toFixed(2);
+  }
+  function calcDuration() {
+    if (!S.atr || S.atr <= 0) return C.DUR_MAX_T;
+    return clamp(Math.round(C.BARRIER_MIN / S.atr * 10), C.DUR_MIN_T, C.DUR_MAX_T);
+  }
+
+  // ─── ADAPTIVE STAKE ──────────────────────────────────────────────────────────
+  function effectiveStake() {
+    if (!C.ADAPTIVE_STAKE) return C.STAKE;
+    const win = S.recentResults.slice(-20);
+    const n   = win.length;
+    if (n < 5) return C.STAKE;
+    const wr  = win.filter(Boolean).length / n;
+    if (wr >= 0.65) return +(C.STAKE * 1.25).toFixed(2);
+    if (wr >= 0.55) return C.STAKE;
+    if (wr >= 0.40) return +(C.STAKE * 0.75).toFixed(2);
+    return +(C.STAKE * 0.50).toFixed(2);
+  }
+
+  // ─── RISK GATE ───────────────────────────────────────────────────────────────
+  function barrierPreCheck(offset) {
+    const age = S.lastTickTime > 0 ? Date.now() - S.lastTickTime : Infinity;
+    if (age > C.TICK_STALE_MS) return `stale tick ${(age / 1000).toFixed(1)}s`;
+    return null;
+  }
+
+  function canTrade() {
+    if (S.botState !== 'WATCHING')   return `not WATCHING (${S.botState})`;
+    if (S.contractId)                return 'contract already open';
+    if (S.coolUntil && Date.now() < S.coolUntil)
+      return `cooldown — ${Math.ceil((S.coolUntil - Date.now()) / 1000)}s remaining`;
+    if (S.pnl <= -Math.abs(C.STOP_LOSS))
+      return `stop-loss hit ($${S.pnl.toFixed(2)} ≤ -$${C.STOP_LOSS})`;
+    if (Date.now() - S.hrReset > 3_600_000) { S.tradesHr = 0; S.hrReset = Date.now(); }
+    if (S.tradesHr >= C.HOURLY_CAP)          return `hourly cap (${S.tradesHr}/${C.HOURLY_CAP})`;
+    if (S.consecLosses >= C.CONSEC_LIMIT)    return `${C.CONSEC_LIMIT} consecutive losses`;
+    if (S.lastTradeTime > 0 && Date.now() - S.lastTradeTime < C.POST_TRADE_MS)
+      return `post-trade pause ${Math.ceil((C.POST_TRADE_MS - (Date.now() - S.lastTradeTime)) / 1000)}s`;
+    if (S.lastLossTime > 0 && Date.now() - S.lastLossTime < C.POST_LOSS_MS)
+      return `post-loss pause ${Math.ceil((C.POST_LOSS_MS - (Date.now() - S.lastLossTime)) / 1000)}s`;
+    if (S.lastSigTick > 0 && S.tickCount - S.lastSigTick < C.SIG_COOL)
+      return `signal cooldown ${C.SIG_COOL - (S.tickCount - S.lastSigTick)}t`;
+    return null;
+  }
+
+  function applyConsecCooldown() {
+    if (S.consecLosses < C.CONSEC_LIMIT) return null;
+    const factor  = Math.pow(1.5, Math.floor(S.consecLosses / C.CONSEC_LIMIT));
+    C.COOLDOWN_MS = Math.min(C.BASE_COOL * factor, C.MAX_COOL);
+    S.coolUntil   = Date.now() + C.COOLDOWN_MS;
+    S.consecLosses = 0;
+    return `${C.CONSEC_LIMIT} consecutive losses — cooldown ${(C.COOLDOWN_MS / 60_000).toFixed(1)} min`;
+  }
+
+  function logBlock(block) {
+    const isCool    = block.startsWith('cooldown');
+    const isRoutine = ['post-trade', 'post-loss', 'signal cooldown'].some(s => block.startsWith(s));
+    if (isCool) {
+      if (S.tickCount - S.lastCooldownLogTick >= 30) { S.lastCooldownLogTick = S.tickCount; log(`⏸ ${block}`, 'block'); }
+    } else if (isRoutine) {
+      log(`⏸ ${block}`, 'block');
+    } else {
+      log(`⛔ ${block}`, 'err');
+    }
+    UI.step('s4', 'warn', `Blocked: ${block}`);
+  }
+
+  // ─── TRADE EXECUTION ─────────────────────────────────────────────────────────
+  function sendProposal(sig) {
+    const offset = calcBarrierOffset();
+    const fail   = barrierPreCheck(offset);
+    if (fail) { log(`⛔ Pre-check: ${fail}`, 'skip'); UI.step('s5', 'warn', fail); return; }
+
+    S.botState   = 'PROPOSAL_SENT';
+    S.tradePlacedThisCycle = true;  // v59: lock out duplicate placement this armed cycle
+    S.barrier    = calcBarrier();
+    S.duration   = calcDuration() + 't';
+    S.pendingRid = nid();
+    S.tradeScore = sig.score;
+    const stake  = effectiveStake();
+
+    log(`Proposal → ONETOUCH ▲ TOUCH UP | score:${sig.score}/100 | barrier:${S.barrier} | stake:$${stake} | ${S.duration} | ${sig.reason}`, 'action');
+    UI.step('s5', 'active', `ONETOUCH ▲ TOUCH UP · barrier ${S.barrier} · score ${sig.score}/100`);
+    UI.pill('prop', 'PROPOSAL');
+
+    send({
+      proposal: 1, req_id: S.pendingRid,
+      amount: stake, basis: 'stake',
+      contract_type: 'ONETOUCH', currency: C.CURRENCY,
+      duration: parseInt(S.duration), duration_unit: 't',
+      symbol: C.SYMBOL, barrier: S.barrier,
+    });
+    setT('prop', C.PROP_TO, () => { if (S.botState === 'PROPOSAL_SENT') { log('Proposal timeout', 'err'); resetWatch(); } });
+  }
+
+  function onProposal(prop, rid) {
+    if (S.botState !== 'PROPOSAL_SENT' || rid !== S.pendingRid) return;
+    clearT('prop');
+    const ask = parseFloat(prop?.ask_price || 0);
+    const pay = parseFloat(prop?.payout    || 0);
+    const pid = prop?.id;
+    if (!pid || ask <= 0) { log('Invalid proposal response', 'err'); resetWatch(); return; }
+
+    const ret = ((pay - ask) / ask) * 100;
+    S.retPct  = ret;
+    log(`Proposal | ask:$${ask.toFixed(2)} | pay:$${pay.toFixed(2)} | ret:${ret.toFixed(1)}% (min:${C.MIN_RET_T}%)`, 'action');
+
+    if (ret < C.MIN_RET_T - 0.01) {
+      log(`Rejected — return ${ret.toFixed(1)}% < min ${C.MIN_RET_T}%`, 'skip');
+      UI.step('s5', 'warn', `Return ${ret.toFixed(1)}% < min`);
+      resetWatch(); return;
+    }
+
+    S.buyPending = true;
+    UI.step('s6', 'active', 'Placing buy…');
+    send({ buy: pid, price: ask, subscribe: 1 });
+    setT('buy', C.BUY_TO, () => { if (S.buyPending) { S.buyPending = false; log('Buy timeout', 'err'); resetWatch(); } });
+  }
+
+  function onBuy(buy, sub) {
+    clearT('buy'); clearT('prop');
+    S.buyPending = false;
+    const cid = buy?.contract_id;
+    if (!cid) { log('No contract_id in buy response', 'err'); resetWatch(); return; }
+
+    S.contractId    = cid;
+    S.settled       = false;
+    S.botState      = 'IN_TRADE';
+    S.entryTick     = S.tickCount;
+    S.lastTradeTime = Date.now();
+    S.buyPrice      = parseFloat(buy.buy_price || C.STAKE);
+    S.tradesHr++;
+    S.entryPrice    = S.lastPrice;
+    S.barrierAbs    = S.lastPrice + parseFloat(S.barrier);
+    S.totalScoreAtEntry += S.tradeScore;
+
+    log(`Trade #${cid} open | ▲ TOUCH UP | barrier:${S.barrier} | ${S.duration} | score:${S.tradeScore}/100 | ret:${S.retPct.toFixed(1)}%`, 'info');
+    UI.pill('trade', 'IN TRADE');
+    UI.step('s6', 'done', `#${cid} open`);
+    UI.step('s7', 'active', `Must TOUCH ${S.barrierAbs.toFixed(2)}`);
+    UI.ring(cid % 10000, 't', '▲ TOUCH UP');
+    UI.progress(15, `ONETOUCH ▲ TOUCH UP live`);
+
+    if (sub?.id) S.pocSubId = sub.id;
+    setT('poc', 500, () => {
+      if (S.contractId === cid && !S.settled) {
+        // Forget any stale subscription first to avoid "already subscribed" error
+        if (S.pocSubId) { send({ forget: S.pocSubId }); S.pocSubId = null; }
+        send({ proposal_open_contract: 1, contract_id: cid, subscribe: 1 });
+      }
+    });
+    const durSecs = (parseInt(S.duration) || 10) + 5;
+    setT('settle_poll', durSecs * 1000, () => {
+      if (S.contractId === cid && !S.settled)
+        send({ proposal_open_contract: 1, contract_id: cid });
+    });
+    setT('guard', C.SETTLE_GUARD, () => {
+      if (S.contractId === cid && !S.settled) {
+        log(`Settlement guard — querying #${cid}`, 'err');
+        send({ proposal_open_contract: 1, contract_id: cid });
+        setT('hard', 10_000, () => { if (S.contractId === cid && !S.settled) { S.settled = true; resetWatch(); } });
+      }
+    });
+  }
+
+  function onPOC(poc) {
+    if (!poc) return;
+    if (S.contractId && poc.contract_id && String(poc.contract_id) !== String(S.contractId)) return;
+    if (S.settled) return;  // guard duplicate settlement messages
+    const status    = String(poc.status || '').toLowerCase();
+    const isSold    = poc.is_sold === 1 || poc.is_sold === true;
+    const isOpen    = status === 'open' || status === '';
+    const isSettled = !isOpen || isSold;
+
+    if (!isSettled) {
+      if (poc.entry_spot && !S.barrierAbs) {
+        const derivBarrier = poc.barrier ? parseFloat(poc.barrier) : null;
+        if (derivBarrier) S.barrierAbs = derivBarrier;
+        S.entryPrice = parseFloat(poc.entry_spot);
+      }
+      const bid  = parseFloat(poc.bid_price || poc.buy_price || S.buyPrice);
+      const diff = bid - S.buyPrice;
+      const t    = S.tickCount - S.entryTick;
+      UI.progress(Math.min(90, 15 + t * 10), `Tick ${t} · bid $${bid.toFixed(2)} (${pp(diff)})`, diff < 0 ? 'w' : '');
+      $('s7d').textContent = `tick ${t} · bid $${bid.toFixed(2)} (${pp(diff)})`;
+      return;
+    }
+
+    S.settled = true;
+    const sell   = parseFloat(poc.sell_price ?? 0);
+    const profit = Number.isFinite(parseFloat(poc.profit)) ? parseFloat(poc.profit) : sell - S.buyPrice;
+    const won    = status === 'won' || (isSold && status !== 'lost' && profit > 0 && status !== 'open');
+    log(`Settled | ${status} | sell:$${sell.toFixed(2)} | profit:${pp(profit)}`, won ? 'profit' : 'err');
+    recordTrade(profit, won);
+    resetWatch();
+  }
+
+  function recordTrade(profit, won) {
+    S.pnl += profit;
+    S.recentResults.push(won);
+    if (S.recentResults.length > 20) S.recentResults.shift();
+
+    if (won) {
+      S.wins++; S.consecLosses = 0; C.COOLDOWN_MS = C.BASE_COOL;
+      log(`WIN ✓ | ${pp(profit)} | session: ${pp(S.pnl)}`, 'profit');
+    } else {
+      S.losses++; S.consecLosses++; S.lastLossTime = Date.now();
+      log(`LOSS ✗ | ${pp(profit)} | session: ${pp(S.pnl)} | streak: ${S.consecLosses}`, 'err');
+    }
+
+    UI.step('s7', won ? 'done' : 'err', `${won ? 'WIN' : 'LOSS'} ${pp(profit)} | session: ${pp(S.pnl)}`);
+    toast(`${won ? '✓ WIN' : '✗ LOSS'} [ONETOUCH]: ${pp(profit)} | Session: ${pp(S.pnl)}`, won ? 'ok' : 'err');
+
+    const tb = $('tradeBody');
+    if (tb.querySelector('td[colspan]')) tb.innerHTML = '';
+    const tr = document.createElement('tr');
+    tr.innerHTML = `
+      <td>${ts().slice(0, 8)}</td>
+      <td style="color:var(--green);font-size:9px">▲ UP</td>
+      <td style="font-size:9px">${S.barrier}</td>
+      <td>${S.duration}</td>
+      <td style="color:var(--violet)">${S.tradeScore}</td>
+      <td style="color:var(--dim)">${S.retPct.toFixed(1)}%</td>
+      <td style="color:${profit >= 0 ? 'var(--green)' : 'var(--red)'}">${pp(profit)}</td>
+      <td><span class="badge ${won ? 'w' : 'l'}">${won ? 'WIN' : 'LOSS'}</span></td>`;
+    tb.insertBefore(tr, tb.firstChild);
+    while (tb.children.length > 50) tb.removeChild(tb.lastChild);
+    S.tradeLog.push({ time: ts(), dir: 'BUY', barrier: S.barrier, dur: S.duration, score: S.tradeScore, ret: S.retPct, profit, result: won ? 'WIN' : 'LOSS' });
+    UI.stats();
+  }
+
+  function resetWatch() {
+    clearAllTimers();
+    if (S.pocSubId) { send({ forget: S.pocSubId }); S.pocSubId = null; }
+    Object.assign(S, {
+      botState: 'WATCHING', contractId: null,
+      settled: false, buyPending: false, pendingRid: 0,
+      barrierAbs: null, entryPrice: 0,
+      settlePollSent: false,
+      lastTradeTime: S.lastTradeTime,
+      // Phase state intentionally NOT reset here — a reclaim in progress
+      // should survive a trade cycle (e.g. if canTrade blocks for post-trade pause)
+    });
+    UI.pill('watch', 'WATCHING');
+    ['s5', 's6', 's7'].forEach(id => {
+      $(id).className = 'step';
+      if (id === 's5') $('s5d').textContent = 'barrier · return check';
+      if (id === 's6') $('s6d').textContent = 'touch = WIN · expire = LOSE';
+      if (id === 's7') $('s7d').textContent = 'WIN or LOSS';
+    });
+    UI.ring(S.tickCount, 'w', 'watch');
+    UI.progress(0, 'Watching for zone entry…');
+    UI.sigNone();
+  }
+
+  // ─── TICK PROCESSOR ──────────────────────────────────────────────────────────
+  function processTick(tick) {
+    const price = parseFloat(tick.quote);
+    if (!Number.isFinite(price)) return;
+
+    S.ticks.push(price);
+    const maxBuf = Math.max(C.BB_PERIOD, C.RSI_PERIOD + 2, C.MACD_SLOW + C.MACD_SIG, C.ATR_PERIOD + 2, C.ADX_PERIOD * 2 + 5) * 6;
+    if (S.ticks.length > maxBuf) S.ticks = S.ticks.slice(-maxBuf);
+
+    S.tickCount++;
+    S.lastTickTime = Date.now();
+    S.lastPrice    = price;
+
+    // ── Compute indicators ──
+    if (S.bb) S.prevPctB = S.bb.pctB;  // store last tick's value before recalculating
+    S.bb  = calcBB(S.ticks);
+    S.atr = calcATR(S.ticks);
+
+    const rsiNow = calcRSI(S.ticks);
+    if (rsiNow !== null) {
+      S.prevRSI = S.rsiVal;          // store last tick's value before recalculating
+      S.rsiHistory.push(rsiNow);
+      if (S.rsiHistory.length > 30) S.rsiHistory.shift();
+      S.rsiVal = rsiNow;
+
+      // v60: Stochastic RSI update
+      const stoch = calcStochRSI(S.rsiHistory);
+      if (stoch !== null) {
+        S.prevStochRsiK = S.stochRsiK;
+        S.prevStochRsiD = S.stochRsiD;
+        S.stochRsiK = stoch.k;
+        S.stochRsiD = stoch.d;
+      }
+    }
+
+    const macdLine = calcMACDLine(S.ticks);
+    if (macdLine !== null) {
+      S.macdLineHistory.push(macdLine);
+      const macdBuf = Math.max(C.MACD_SIG * 6, 150);
+      if (S.macdLineHistory.length > macdBuf) S.macdLineHistory.shift();
+      const sigLine = calcEMA(S.macdLineHistory, C.MACD_SIG);
+      if (sigLine !== null) {
+        const prevHist  = S.macdHist;
+        S.macdLine      = macdLine;
+        S.macdSig       = sigLine;
+        S.prevMacdHist  = prevHist;
+        S.macdHist      = macdLine - sigLine;
+      }
+    }
+
+    const adxNow = calcADX(S.ticks);
+    if (adxNow !== null) S.adxVal = adxNow;
+
+    // Velocity: price movement over last N ticks (scaled to ATR in signal check)
+    S.velocity = calcVelocity(S.ticks);
+
+    // Update two-phase entry state machine
+    updatePhases();
+
+    if (S.bb) {
+      // Push chart arrays together — keeps price and BB bands at identical indices
+      S.chartPx.push(price);
+      S.bbUp.push(S.bb.upper); S.bbMid.push(S.bb.middle); S.bbLow.push(S.bb.lower);
+      // MACD chart history — pushed in sync with chartPx
+      S.chartMacdLine.push(S.macdLine !== null ? S.macdLine : null);
+      S.chartMacdSig.push(S.macdSig  !== null ? S.macdSig  : null);
+      S.chartMacdHist.push(S.macdHist !== null ? S.macdHist : null);
+      if (S.chartPx.length > C.MAX_CHART) {
+        S.chartPx = S.chartPx.slice(-C.MAX_CHART);
+        S.bbUp.shift(); S.bbMid.shift(); S.bbLow.shift();
+        S.chartMacdLine.shift(); S.chartMacdSig.shift(); S.chartMacdHist.shift();
+      }
+    }
+
+    UI.ticker(price);
+    UI.indicators();
+    if (S.tickCount % 5 === 0) UI.stats();
+    drawChart();
+    drawMacdChart();
+
+    // ── Seeding ──
+    const minTicks = Math.max(C.BB_PERIOD, C.RSI_PERIOD + 2, C.MACD_SLOW + C.MACD_SIG, C.ATR_PERIOD + 2, C.ADX_PERIOD * 2 + 5);
+    if (S.ticks.length < minTicks) {
+      const pct = Math.round(S.ticks.length / minTicks * 100);
+      UI.progress(S.ticks.length / minTicks * 40, `Seeding ${S.ticks.length}/${minTicks} (${pct}%)`);
+      UI.step('s3', 'active', `${S.ticks.length}/${minTicks} · ${pct}%`);
+      return;
+    }
+    UI.step('s3', 'done', `${C.SYMBOL} · ${S.tickCount} ticks`);
+
+    // ── IN_TRADE monitoring ──
+    if (S.botState === 'IN_TRADE') {
+      const t = S.tickCount - S.entryTick;
+      UI.progress(Math.min(90, 15 + t * 8), `ONETOUCH tick ${t}…`);
+      const durTicks = parseInt(S.duration) || 10;
+      if (!S.settled && !S.settlePollSent && t > durTicks + 5) {
+        S.settlePollSent = true;
+        send({ proposal_open_contract: 1, contract_id: S.contractId });
+      }
+      return;
+    }
+
+    if (S.botState !== 'WATCHING') return;
+
+    // v59: one trade per armed cycle — prevent double-placement on same signal tick
+    if (S.tradePlacedThisCycle) return;
+
+    const consecBlock = applyConsecCooldown();
+    if (consecBlock) { log(consecBlock, 'err'); logBlock(consecBlock); return; }
+
+    const sig = getSignal();
+    UI.signal(sig);
+
+    if (!sig) {
+      const reasons = Array.isArray(S.noSigReasons) ? S.noSigReasons : S.noSigReasons?.list ?? [];
+      if (reasons.length > 0 && S.tickCount - S.lastNoSigLogTick >= 20) {
+        S.lastNoSigLogTick = S.tickCount;
+        log(reasons.join(' · '), 'cond');
+      }
+      return;
+    }
+
+    const block = canTrade();
+    if (block) { logBlock(block); return; }
+
+    S.sigCount++;
+    S.lastSigTick = S.tickCount;
+    UI.step('s4', 'done', `BUY signal #${S.sigCount} score:${sig.score}/100`);
+    UI.step('s5', 'active', 'Sending proposal…');
+    sendProposal(sig);
+  }
+
+  // ─── CHART ────────────────────────────────────────────────────────────────────
+  function drawChart() {
+    if (S.ticks.length < C.BB_PERIOD) return;
+    const canvas = $('chart');
+    const ctx    = canvas.getContext('2d');
+    const W = canvas.parentElement.clientWidth - 28;
+    const H = 200;
+    canvas.width = W; canvas.height = H;
+
+    const px  = S.chartPx.slice(-C.MAX_CHART);
+    if (px.length < 2) return;
+    const bbU = S.bbUp.slice(-px.length);
+    const bbM = S.bbMid.slice(-px.length);
+    const bbL = S.bbLow.slice(-px.length);
+    const all = bbU.length ? [...px, ...bbU, ...bbL] : [...px];
+    const lo  = Math.min(...all), hi = Math.max(...all);
+    const range = hi - lo || 1;
+    const toY = v => H - ((v - lo) / range * (H - 18) + 9);
+    const toX = i => i / (px.length - 1) * W;
+
+    const drawLine = (arr, color, lw = 1, dash = []) => {
+      if (!arr.length) return;
+      ctx.beginPath(); ctx.strokeStyle = color; ctx.lineWidth = lw; ctx.setLineDash(dash);
+      arr.forEach((v, i) => i === 0 ? ctx.moveTo(toX(i), toY(v)) : ctx.lineTo(toX(i), toY(v)));
+      ctx.stroke(); ctx.setLineDash([]);
+    };
+
+    ctx.clearRect(0, 0, W, H);
+
+    if (bbU.length >= 2) {
+      ctx.beginPath();
+      bbU.forEach((v, i) => ctx.lineTo(toX(i), toY(v)));
+      for (let i = bbL.length - 1; i >= 0; i--) ctx.lineTo(toX(i), toY(bbL[i]));
+      ctx.closePath();
+      ctx.fillStyle = 'rgba(0,232,150,.035)'; ctx.fill();
+      drawLine(bbU, 'rgba(255,61,90,.45)');
+      drawLine(bbM, 'rgba(90,110,140,.3)', 1, [3, 3]);
+      drawLine(bbL, 'rgba(0,232,150,.45)');
+    }
+
+    if (S.barrierAbs !== null) {
+      const barY = toY(S.barrierAbs);
+      ctx.beginPath();
+      ctx.strokeStyle = 'rgba(0,232,150,.75)';
+      ctx.lineWidth = 1.5; ctx.setLineDash([4, 4]);
+      ctx.moveTo(0, barY); ctx.lineTo(W, barY);
+      ctx.stroke(); ctx.setLineDash([]);
+      ctx.fillStyle = 'var(--green)';
+      ctx.font = '9px JetBrains Mono,monospace';
+      ctx.fillText(`⬤ barrier ${S.barrierAbs.toFixed(2)}`, 4, barY - 4);
+    }
+
+    drawLine(px, 'rgba(160,200,240,.8)', 1.5);
+    const lx = toX(px.length - 1), ly = toY(px[px.length - 1]);
+    ctx.beginPath(); ctx.arc(lx, ly, 3, 0, Math.PI * 2);
+    ctx.fillStyle = 'var(--green)'; ctx.fill();
+  }
+
+  // ─── MACD PANEL ───────────────────────────────────────────────────────────────
+  function drawMacdChart() {
+    const canvas = $('macdChart');
+    if (!canvas) return;
+    const n = S.chartMacdHist.length;
+    if (n < 2) return;
+
+    const W = canvas.parentElement.clientWidth - 28;
+    const H = 90;
+    canvas.width = W; canvas.height = H;
+    const ctx = canvas.getContext('2d');
+    ctx.clearRect(0, 0, W, H);
+
+    const hist    = S.chartMacdHist;
+    const mLine   = S.chartMacdLine;
+    const sLine   = S.chartMacdSig;
+
+    // scale: find min/max across all three series, ignore nulls
+    const allVals = [...hist, ...mLine, ...sLine].filter(v => v !== null);
+    if (!allVals.length) return;
+    const lo = Math.min(...allVals), hi = Math.max(...allVals);
+    const range = (hi - lo) || 0.0001;
+    const toY = v => H - ((v - lo) / range * (H - 6) + 3);
+    const toX = i => i / (n - 1) * W;
+
+    // zero line
+    const zeroY = toY(0);
+    ctx.beginPath();
+    ctx.strokeStyle = 'rgba(90,110,140,.4)';
+    ctx.lineWidth = 1;
+    ctx.setLineDash([3, 3]);
+    ctx.moveTo(0, zeroY); ctx.lineTo(W, zeroY);
+    ctx.stroke(); ctx.setLineDash([]);
+
+    // histogram bars
+    const barW = Math.max(1, W / n - 0.5);
+    hist.forEach((v, i) => {
+      if (v === null) return;
+      const x = toX(i) - barW / 2;
+      const y0 = zeroY;
+      const y1 = toY(v);
+      ctx.fillStyle = v >= 0 ? 'rgba(0,232,150,.65)' : 'rgba(255,61,90,.55)';
+      ctx.fillRect(x, Math.min(y0, y1), barW, Math.abs(y0 - y1) || 1);
+    });
+
+    // MACD line
+    const drawL = (arr, color, lw) => {
+      ctx.beginPath(); ctx.strokeStyle = color; ctx.lineWidth = lw;
+      let started = false;
+      arr.forEach((v, i) => {
+        if (v === null) { started = false; return; }
+        if (!started) { ctx.moveTo(toX(i), toY(v)); started = true; }
+        else ctx.lineTo(toX(i), toY(v));
+      });
+      ctx.stroke();
+    };
+    drawL(mLine, 'rgba(61,158,255,.9)', 1.5);
+    drawL(sLine, 'rgba(255,61,90,.85)', 1.2);
+
+    // live dot on MACD line
+    const lastM = mLine[n-1];
+    if (lastM !== null) {
+      ctx.beginPath();
+      ctx.arc(toX(n-1), toY(lastM), 2.5, 0, Math.PI * 2);
+      ctx.fillStyle = '#3d9eff'; ctx.fill();
+    }
+
+    // update readout labels
+    const fmt = v => v === null ? '—' : (v >= 0 ? '+' : '') + v.toFixed(5);
+    const el = id => { const e = $(id); if (e) e.textContent = fmt(S.macdHist !== null && id === 'macdHistVal' ? S.macdHist : id === 'macdLineVal' ? S.macdLine : S.macdSig); };
+    const fmtV = v => v === null ? '—' : (v >= 0 ? '+' : '') + v.toFixed(5);
+    const mh = $('macdHistVal'), ml = $('macdLineVal'), ms = $('macdSigVal');
+    if (ml) ml.textContent = fmtV(S.macdLine);
+    if (ms) ms.textContent = fmtV(S.macdSig);
+    if (mh) {
+      mh.textContent = fmtV(S.macdHist);
+      mh.style.color = S.macdHist === null ? '' : S.macdHist >= 0 ? 'var(--green)' : 'var(--red)';
+    }
+  }
+
+  // ─── UI HELPERS ───────────────────────────────────────────────────────────────
+  const UI = {
+    pill(cls, txt) {
+      const el = $('pill');
+      el.className = `pill ${cls}`;
+      el.childNodes[el.childNodes.length - 1].textContent = txt;
+    },
+    ring(n, cls, lbl) {
+      $('sring').className = `sring ${cls}`;
+      $('sringN').textContent = n;
+      $('sringL').textContent = lbl;
+    },
+    progress(pct, lbl, cls = '') {
+      $('pfill').style.width = pct + '%';
+      $('pfill').className = `pfill ${cls}`;
+      $('pLabel').textContent = lbl;
+      $('pPct').textContent = Math.round(pct) + '%';
+    },
+    step(id, cls, detail) {
+      const el = $(id); if (!el) return;
+      el.className = `step ${cls}`;
+      const sd = $(`${id}d`);
+      if (sd && detail) sd.textContent = detail;
+    },
+
+    ticker(price) {
+      const prev = S.chartPx[S.chartPx.length - 2];
+      const dir  = prev !== undefined ? (price > prev ? '▲' : price < prev ? '▼' : '—') : '—';
+      const cls  = price > prev ? 'big up' : price < prev ? 'big dn' : 'big';
+      const dp   = S.cfPipSize ? Math.max(2, -Math.log10(S.cfPipSize) | 0) : 4;
+      $('tkPrice').textContent = price.toFixed(dp);
+      $('tkPrice').className   = cls;
+      $('tkDir').textContent   = `${dir} ${S.tickCount} ticks`;
+      $('tkTicks').textContent = `Ticks: ${S.tickCount}`;
+    },
+
+    indicators() {
+      const { bb, rsiVal, macdHist, adxVal } = S;
+
+      if (bb) {
+        const { pctB, pctBW } = bb;
+        const isOS = pctB <= C.BB_OS_THR;
+        $('tkPctB').textContent   = pctB.toFixed(3);
+        $('tkPctB').className     = `big ${isOS ? 'up' : ''}`;
+        $('tkPctBSub').textContent = isOS ? '▼ LOWER ZONE ✓' : `neutral ${pctB.toFixed(3)}`;
+        $('gBBNeedle').style.left = clamp(pctB * 100, 0, 100) + '%';
+        $('gPctB').textContent    = pctB.toFixed(3);
+        $('gPctB').className      = `gc-val ${isOS ? 'os' : 'mid'}`;
+        $('gBBStatus').textContent = isOS ? '▼ BUY zone' : '—';
+        $('gBBOS').textContent = C.BB_OS_THR;
+
+        const sqPct = clamp(pctBW * 1000, 0, 100);
+        $('gSqNeedle').style.left  = sqPct + '%';
+        $('gSqueeze').textContent  = (pctBW * 100).toFixed(2) + '%';
+        $('gSqueeze').className    = `gc-val mid`;
+        $('gSqStatus').textContent = pctBW < 0.005 ? 'narrow' : pctBW > 0.02 ? 'wide' : '✓ OK';
+        $('gSqStatus').className   = 'ok';
+
+        let rTxt, rDetail, rDot;
+        if (pctBW < 0.005)      { rTxt = 'Low Volatility';    rDetail = `BW ${(pctBW*100).toFixed(2)}%`; rDot = 'low'; }
+        else if (pctBW < 0.015) { rTxt = 'Normal Volatility'; rDetail = `BW ${(pctBW*100).toFixed(2)}% — Good conditions`; rDot = 'med'; }
+        else                    { rTxt = 'High Volatility';   rDetail = `BW ${(pctBW*100).toFixed(2)}% — Wider barriers`; rDot = 'high'; }
+        $('regimeDot').className      = `rdot ${rDot}`;
+        $('regimeTxt').textContent    = rTxt;
+        $('regimeDetail').textContent = rDetail;
+      }
+
+      if (rsiVal !== null) {
+        const isOS = rsiVal < C.RSI_OS;
+        $('tkRsi').textContent    = rsiVal.toFixed(1);
+        $('tkRsi').className      = `big ${isOS ? 'up' : ''}`;
+        $('tkRsiSub').textContent  = isOS ? '▼ OS zone ✓' : rsiVal.toFixed(1);
+        $('gRsiNeedle').style.left = clamp(rsiVal, 0, 100) + '%';
+        $('gRsi').textContent      = rsiVal.toFixed(1);
+        $('gRsi').className        = `gc-val ${isOS ? 'os' : 'mid'}`;
+        $('gRsiStatus').textContent = isOS ? `▼ OS` : '—';
+        $('gRsiStatus').className   = isOS ? 'ok' : '';
+        $('gRsiOS').textContent = C.RSI_OS;
+      }
+
+      if (macdHist !== null) {
+        const histMag = Math.abs(macdHist);
+        $('tkMacd').textContent    = macdHist.toFixed(5);
+        $('tkMacd').className      = `big ${macdHist > 0 ? 'up' : 'dn'}`;
+        $('tkMacdSub').textContent = `mom ${macdHist > 0 ? '▲' : '▼'} mag:${histMag.toFixed(5)}`;
+        $('gMacd').textContent     = `${macdHist > 0 ? '+' : ''}${macdHist.toFixed(5)}`;
+        $('gMacd').className       = `gc-val ${macdHist > C.MACD_MIN_MAG ? 'os' : macdHist < -C.MACD_MIN_MAG ? 'ob' : 'mid'}`;
+        $('gMacdStatus').textContent = macdHist > C.MACD_MIN_MAG ? '▲ Bull mom' : macdHist < -C.MACD_MIN_MAG ? '▼ Bear mom' : '—';
+        $('gMacdStatus').className   = macdHist > C.MACD_MIN_MAG ? 'ok' : macdHist < -C.MACD_MIN_MAG ? 'no' : '';
+        const bar = $('gMacdBar');
+        const pct = Math.min(46, histMag * 2000);
+        bar.style.height = pct + '%';
+        bar.style.background = macdHist >= 0 ? 'var(--green)' : 'var(--red)';
+        if (macdHist >= 0) { bar.style.bottom = '50%'; bar.style.top = 'auto'; }
+        else               { bar.style.top = '50%'; bar.style.bottom = 'auto'; }
+      }
+
+      if (adxVal !== null) {
+        // v60: ADX still displayed but no longer a gate — purely informational
+        const strong = adxVal > 35, ok = adxVal >= 15;
+        $('tkAdx').textContent    = adxVal.toFixed(1);
+        $('tkAdx').className      = `big mid`;
+        $('tkAdxSub').textContent = `ADX (info) ${strong ? 'strong' : ok ? 'ok' : 'weak'}`;
+        $('gAdx').textContent     = adxVal.toFixed(1);
+        $('gAdx').className       = `gc-val mid`;
+        $('gAdxBar').style.width  = clamp(adxVal, 0, 100) + '%';
+        $('gAdxBar').style.background = strong ? 'var(--blue)' : ok ? 'var(--dim)' : 'var(--muted)';
+        $('gAdxStatus').textContent = 'ℹ info only';
+        $('gAdxStatus').className   = '';
+        $('gAdxMin').textContent    = 'no gate';
+      }
+
+      // v60: Stoch RSI readout (replaces ADX as active gate in UI)
+      if (S.stochRsiK !== null && S.stochRsiD !== null) {
+        const crossedUp = S.prevStochRsiK !== null && S.prevStochRsiD !== null &&
+          S.prevStochRsiK <= S.prevStochRsiD && S.stochRsiK > S.stochRsiD;
+        const kAboveD = S.stochRsiK > S.stochRsiD;
+        const stEl = $('tkMacd'); // reuse MACD ticker cell for Stoch RSI K
+        if (stEl) {
+          stEl.textContent = `K${S.stochRsiK.toFixed(1)}/D${S.stochRsiD.toFixed(1)}`;
+          stEl.className   = `big ${kAboveD ? 'up' : 'dn'}`;
+          const sub = $('tkMacdSub');
+          if (sub) sub.textContent = crossedUp ? '✦ K×D cross ✓' : kAboveD ? 'K above D ✓' : 'K below D ✗';
+        }
+      }
+
+      if (S.atr) {
+        const b = clamp(S.atr * C.ATR_MULT, C.BARRIER_MIN, C.BARRIER_MAX);
+        $('tkAtr').textContent    = S.atr.toFixed(4);
+        $('tkAtr').className      = 'big up';
+        $('tkAtrSub').textContent = `±${b.toFixed(3)} (×${C.ATR_MULT}) · ${calcDuration()}t`;
+      }
+
+      // Score display
+      // Compute live preview score
+      let sc = S.lastScore;
+      let liveBB = 0, liveRSI = 0, liveMACD = 0, liveADX = 0, liveZone = 0;
+      if (S.bb && S.rsiVal !== null && S.botState === 'WATCHING') {
+        const so = calcScore();
+        sc = so.total; liveBB = so.bb; liveRSI = so.rsi; liveMACD = so.macd; liveADX = so.adx; liveZone = so.vel ?? 0;
+        S.lastScore = sc;
+      }
+      $('scoreVal').textContent = sc > 0 ? sc + '/100' : '—';
+      const scBar = $('scoreBar');
+      scBar.style.width = sc + '%';
+      scBar.style.background = sc >= C.MIN_SCORE ? 'var(--green)' : sc >= C.MIN_SCORE * 0.75 ? 'var(--amber)' : 'var(--violet)';
+      $('scoreDesc').textContent = sc >= C.MIN_SCORE
+        ? `✓ Signal threshold met (≥${C.MIN_SCORE})`
+        : sc > 0 ? `Need ${Math.max(0, C.MIN_SCORE - sc)} more pts (min ${C.MIN_SCORE})`
+        : 'Awaiting indicators…';
+
+      // Component breakdown (v60: BB/30, RSI/25, Vel/30, Stoch/15, MACD bonus/5)
+      $('cBB').textContent  = liveBB;  $('cBBb').style.width  = (liveBB  / 30 * 100) + '%';
+      $('cRSI').textContent = liveRSI; $('cRSIb').style.width = (liveRSI / 25 * 100) + '%';
+      $('cMACD').textContent= liveMACD;$('cMACDb').style.width= (liveMACD/ 30 * 100) + '%';
+      $('cADX').textContent = liveADX; $('cADXb').style.width = (liveADX / 15 * 100) + '%';
+      $('cZone').textContent= liveZone;$('cZoneb').style.width= (liveZone/  5 * 100) + '%';
+
+      // Phase state indicator
+      const zt = $('zoneTxt'), zd = $('zoneDetail'), zi = $('zoneIcon');
+      if (S.armed) {
+        zi.textContent = '🟢';
+        zt.textContent = 'ARMED — reclaim confirmed';
+        zt.style.color = 'var(--green)';
+        zd.textContent = `armed ${S.armedTick !== null ? S.tickCount - S.armedTick : 0}t ago · setup depth BB:${S.setupPctB?.toFixed(3) ?? '—'} RSI:${S.setupRSI?.toFixed(1) ?? '—'} · waiting for RSI slope↑ + Stoch K>D + velocity`;
+      } else if (S.setupSeen) {
+        zi.textContent = '🟡';
+        zt.textContent = 'Setup seen — waiting for reclaim';
+        zt.style.color = 'var(--amber)';
+        const parts = [];
+        if (!S.bbReclaimSeen)  parts.push(`BB>${C.BB_RECLAIM}`);
+        if (!S.rsiReclaimSeen) parts.push(`RSI>${C.RSI_RECLAIM}`);
+        zd.textContent = `Need: ${parts.join(' + ')} · depth BB:${S.setupPctB?.toFixed(3) ?? '—'} RSI:${S.setupRSI?.toFixed(1) ?? '—'}`;
+      } else {
+        zi.textContent = '👁';
+        zt.textContent = 'Watching for oversold setup';
+        zt.style.color = 'var(--text)';
+        zd.textContent = `Need BB≤${C.BB_OS_THR} + RSI<${C.RSI_OS} · now BB ${S.bb?.pctB.toFixed(3) ?? '—'} · RSI ${S.rsiVal?.toFixed(1) ?? '—'}`;
+      }
+    },
+
+    signal(sig) {
+      if (!sig) { UI.sigNone(); return; }
+      $('sigIcon').textContent    = '▲';
+      $('sigTitle').textContent   = '▲ BUY — ONETOUCH UP';
+      $('sigReason').textContent  = sig.reason;
+      $('sigBadge').textContent   = 'BUY TOUCH';
+      $('sigBadge').className     = 'sig-badge buy';
+      $('sigScore').style.display = '';
+      $('sigScore').textContent   = `Score: ${sig.score}/100`;
+      $('sigBar').style.borderColor = 'rgba(0,232,150,.25)';
+    },
+    sigNone() {
+      $('sigIcon').textContent    = '👁';
+      $('sigTitle').textContent   = 'Watching for zone entry…';
+      $('sigReason').textContent  = `Panic oversold → BB reclaim → RSI slope↑ → Stoch RSI K>D → velocity spike → ONETOUCH UP`;
+      $('sigBadge').textContent   = 'NO SIGNAL';
+      $('sigBadge').className     = 'sig-badge none';
+      $('sigScore').style.display = 'none';
+      $('sigBar').style.borderColor = '';
+    },
+
+    stats() {
+      const trades = S.wins + S.losses;
+      const wr     = trades > 0 ? (S.wins / trades * 100).toFixed(1) : '—';
+      const exp    = trades > 0 ? (S.pnl / trades).toFixed(2) : '—';
+      const avgSc  = trades > 0 ? Math.round(S.totalScoreAtEntry / trades) : '—';
+      const stake  = effectiveStake();
+      // Support both desktop (sTrades as count+label) and mobile (sTrades = count, sWRbig = wr)
+      if ($('sWRbig')) {
+        $('sWRbig').textContent = wr !== '—' ? wr + '%' : '—%';
+        $('sTrades').textContent = trades + ' trade' + (trades === 1 ? '' : 's');
+      } else {
+        $('sTrades').textContent = trades;
+        if ($('sWR')) $('sWR').textContent = `win rate: ${wr}%`;
+      }
+      const pnlEl = $('sPnl');
+      pnlEl.textContent = pp(S.pnl);
+      pnlEl.className   = `sc-val ${S.pnl > 0 ? 'pos' : S.pnl < 0 ? 'neg' : ''}`;
+      $('sWL').textContent     = `W:${S.wins} L:${S.losses}`;
+      const stEl = $('sStreak');
+      stEl.textContent  = S.consecLosses;
+      stEl.className    = `sc-val ${S.consecLosses >= C.CONSEC_LIMIT - 1 ? 'warn' : ''}`;
+      $('sTicks').textContent    = S.tickCount;
+      $('sSigs').textContent     = S.sigCount;
+      $('sExp').textContent      = exp !== '—' ? pp(+exp) : '—';
+      $('sAvgScore').textContent = avgSc !== '—' ? avgSc + '/100' : '—';
+      $('sStake').textContent    = `$${stake.toFixed(2)}`;
+      $('sStakeSub').textContent = stake > C.STAKE ? '↑ boosted (WR≥65%)' : stake < C.STAKE ? '↓ reduced (WR low)' : 'base';
+      // Mobile velocity readout
+      if ($('tkVel') && S.velocity !== null && S.atr !== null && S.atr > 0) {
+        $('tkVel').textContent = S.velocity.toFixed(4);
+        const vRatio = (S.velocity / S.atr * 100).toFixed(1);
+        $('tkVelSub').textContent = `${vRatio}% ATR · need ${(C.VEL_MIN_ATR*100).toFixed(0)}%`;
+      }
+      // Mobile Stoch RSI gauge
+      if ($('gStoch') && S.stochRsiK !== null) {
+        const kAboveD = S.stochRsiK > S.stochRsiD;
+        $('gStoch').textContent = `K${S.stochRsiK.toFixed(1)}`;
+        $('gStoch').className = `gc-val ${kAboveD ? 'os' : 'mid'}`;
+        if ($('gStochNeedle')) $('gStochNeedle').style.left = clamp(S.stochRsiK, 0, 100) + '%';
+        if ($('gStochSub')) $('gStochSub').textContent = kAboveD ? `K>D ✓ (D:${S.stochRsiD.toFixed(1)})` : `K≤D ✗ (D:${S.stochRsiD.toFixed(1)})`;
+      }
+    },
+  };
+
+  // ─── WEBSOCKET ───────────────────────────────────────────────────────────────
+  function connectWS() {
+    const ws = new WebSocket(`${C.WS_URL}?app_id=${C.APP_ID}`);
+    S.ws = ws;
+
+    ws.onopen = () => {
+      $('cdot').className = 'cdot live';
+      $('clabel').textContent = 'Connected';
+      S.reconnectAttempt = 0;
+      log('WS connected', 'info');
+      UI.step('s1', 'active', 'Authorising…');
+      send({ authorize: C.TOKEN });
+    };
+
+    ws.onclose = e => {
+      $('cdot').className = 'cdot';
+      $('clabel').textContent = 'Disconnected';
+      if (!S.running || S.manualStop) return;
+      const delay = Math.min(30_000, 3_000 * Math.pow(1.5, S.reconnectAttempt++));
+      log(`WS closed (${e.code}) — reconnect in ${(delay / 1000).toFixed(1)}s`, 'err');
+      setTimeout(connectWS, delay);
+    };
+
+    ws.onerror = () => log('WS error', 'err');
+
+    ws.onmessage = e => {
+      let msg;
+      try { msg = JSON.parse(e.data); } catch { return; }
+      const t = msg.msg_type;
+
+      if (t === 'authorize') {
+        if (msg.error) { log(`Auth error: ${msg.error.message}`, 'err'); UI.step('s1', 'err', msg.error.message); return; }
+        UI.step('s1', 'done', `Auth OK — ${msg.authorize?.loginid}`);
+        log(`Auth OK | ${msg.authorize?.loginid}`, 'info');
+        UI.step('s2', 'active', 'Checking symbol…');
+        send({ contracts_for: C.SYMBOL, currency: C.CURRENCY, landing_company: 'svg', product_type: 'basic' });
+      }
+      else if (t === 'contracts_for') {
+        if (msg.error) { log(`contracts_for: ${msg.error.message}`, 'err'); UI.step('s2', 'err', msg.error.message); return; }
+        const touch = (msg.contracts_for?.available || []).find(c => c.contract_type === 'ONETOUCH');
+        if (!touch) { log('ONETOUCH not available on this symbol', 'err'); UI.step('s2', 'err', 'ONETOUCH not available'); return; }
+        S.cfPipSize = parseFloat(touch.pip_size || 0.01);
+        const isRelBarrier = b => typeof b === 'string' && (b.startsWith('+') || b.startsWith('-'));
+        S.cfMinBarrier = touch.min_barrier != null && !isRelBarrier(touch.min_barrier) ? parseFloat(touch.min_barrier) : null;
+        S.cfMaxBarrier = touch.max_barrier != null && !isRelBarrier(touch.max_barrier) ? parseFloat(touch.max_barrier) : null;
+        log(`✓ ${C.SYMBOL} supports ONETOUCH | pip:${S.cfPipSize}`, 'info');
+        UI.step('s2', 'done', `${C.SYMBOL} validated`);
+        startBot();
+      }
+      else if (t === 'tick') {
+        if (S.running && msg.tick) processTick(msg.tick);
+      }
+      else if (t === 'proposal') {
+        if (msg.error) { log(`Proposal error: ${msg.error.message}`, 'err'); resetWatch(); return; }
+        onProposal(msg.proposal, msg.req_id);
+      }
+      else if (t === 'buy') {
+        if (msg.error) { log(`Buy error: ${msg.error.message}`, 'err'); resetWatch(); return; }
+        onBuy(msg.buy, msg.subscription);
+      }
+      else if (t === 'proposal_open_contract') {
+        if (msg.error) { log(`POC error: ${msg.error.message}`, 'err'); return; }
+        onPOC(msg.proposal_open_contract);
+      }
+    };
+  }
+
+  function startBot() {
+    S.running  = true;
+    S.botState = 'WATCHING';
+    const labels = { R_100:'Volatility 100', R_75:'Volatility 75', R_50:'Volatility 50', R_25:'Volatility 25', R_10:'Volatility 10', '1HZ100V':'Vol 100 (1s)', '1HZ75V':'Vol 75 (1s)' };
+    $('tkSym').textContent       = C.SYMBOL;
+    $('tkName').textContent      = labels[C.SYMBOL] || C.SYMBOL;
+    $('tkRsiPeriod').textContent = C.RSI_PERIOD;
+    $('chartTitle').textContent  = `${labels[C.SYMBOL] || C.SYMBOL} + Bollinger Bands`;
+    $('brandSub').textContent    = `BB(${C.BB_PERIOD}) · RSI(${C.RSI_PERIOD}) OS<${C.RSI_OS} · MACD(${C.MACD_FAST}/${C.MACD_SLOW}/${C.MACD_SIG}) bonus · StochRSI cross · Vel≥${C.VEL_MIN_ATR}×ATR · Score≥${C.MIN_SCORE} · BUY-only`;
+    $('sStreakS').textContent    = `cooldown at ${C.CONSEC_LIMIT}`;
+    UI.pill('watch', 'WATCHING');
+    UI.ring(0, 'w', 'seed');
+    UI.step('s3', 'active', 'Subscribing to ticks…');
+    log(`Bot v60 started | BB(${C.BB_PERIOD},${C.BB_STD}) PanicOS≤${C.BB_OS_THR} reclaim>${C.BB_RECLAIM} · RSI(${C.RSI_PERIOD}) OS<${C.RSI_OS} reclaim>${C.RSI_RECLAIM} · MACD(${C.MACD_FAST}/${C.MACD_SLOW}/${C.MACD_SIG}) bonus-only · StochRSI K>D gate · Vel≥${C.VEL_MIN_ATR}×ATR · Dur ${C.DUR_MIN_T}-${C.DUR_MAX_T}t · Score≥${C.MIN_SCORE} · ADX:OFF · MACDHardGate:OFF`, 'info');
+    send({ ticks: C.SYMBOL, subscribe: 1 });
+
+    hbTimer = setInterval(() => {
+      send({ ping: 1 });
+      const phase = S.armed ? 'ARMED' : S.setupSeen ? 'setup-seen' : 'watching';
+      log(`HB | ticks:${S.tickCount} | pnl:${pp(S.pnl)} | rsi:${S.rsiVal?.toFixed(1) ?? '—'} | bb%B:${S.bb?.pctB.toFixed(3) ?? '—'} | vel:${S.velocity?.toFixed(4) ?? '—'} | adx:${S.adxVal?.toFixed(1) ?? '—'} | score:${S.lastScore} | phase:${phase} | state:${S.botState}`, 'beat');
+      const silenceMs = S.lastTickTime > 0 ? Date.now() - S.lastTickTime : 0;
+      if (silenceMs > 20_000) {
+        log('⚠ Tick stream silent >20s — resubscribing…', 'err');
+        S.lastTickTime = Date.now();
+        send({ ticks: C.SYMBOL, subscribe: 1 });
+      }
+    }, C.HB_INTERVAL);
+  }
+
+  // ─── PUBLIC API ───────────────────────────────────────────────────────────────
+  function connect() {
+    const cfgI = (id, fb) => { const el = $(id); return el ? (parseInt(el.value) || fb) : fb; };
+    const cfgF = (id, fb) => { const el = $(id); if (!el) return fb; const v = parseFloat(el.value); return Number.isFinite(v) ? v : fb; };
+
+    C.TOKEN    = $('cfgToken').value.trim();
+    C.APP_ID   = $('cfgAppId').value.trim() || '1089';
+    C.SYMBOL   = $('cfgSymbol').value;
+    C.CURRENCY = $('cfgCurrency').value;
+    C.STAKE    = cfgF('cfgStake', 1);
+
+    C.BB_PERIOD  = cfgI('cfgBBPeriod', 20);  C.BB_STD    = cfgF('cfgBBStd', 2);
+    C.BB_OS_THR  = cfgF('cfgBBOSThr', 0.05); C.BB_RECLAIM = cfgF('cfgBBReclaim', 0.25);
+    C.RSI_PERIOD = cfgI('cfgRSIPeriod', 7);  C.RSI_OS    = cfgF('cfgRSIOS', 25);
+    C.RSI_STRONG_OS = cfgF('cfgRSIStrong', 20); C.RSI_RECLAIM = cfgF('cfgRSIReclaim', 30);
+    C.MACD_FAST  = cfgI('cfgMACDFast', 5);   C.MACD_SLOW = cfgI('cfgMACDSlow', 13);
+    C.MACD_SIG   = cfgI('cfgMACDSig', 4);    C.MACD_SLOPE_WIN = cfgI('cfgMACDSlopeWin', 2);
+    C.MACD_MIN_MAG = cfgF('cfgMACDMinMag', 0.0001);
+    C.MACD_HIST_MIN = cfgF('cfgMACDHistMin', 0.0);
+    C.VEL_LOOKBACK = cfgI('cfgVelLookback', 3);
+    C.VEL_MIN_ATR  = cfgF('cfgVelMinATR', 0.08);
+    C.REGIME_BB_MIN_WIDTH = cfgF('cfgRegimeBBW', 0.10) / 100;
+    C.REGIME_ADX_MIN      = cfgF('cfgRegimeADX', 0);
+    C.RSI_DEPTH_MAX       = cfgF('cfgRsiDepthMax', 37); // kept for compat
+    C.RSI_DROP_MIN        = cfgF('cfgRsiDropMin', 15);  // v59: relative drop gate
+    C.ADX_PERIOD = cfgI('cfgADXPeriod', 14); C.ADX_MIN   = cfgF('cfgADXMin', 0);
+    C.MIN_SCORE  = cfgI('cfgMinScore', 60);
+    C.ATR_PERIOD = cfgI('cfgAtrPeriod', 14); C.ATR_MULT  = cfgF('cfgAtrMult', 0.4);
+    C.BARRIER_MIN = cfgF('cfgBarrierMin', 0.10); C.BARRIER_MAX = cfgF('cfgBarrierMax', 0.50);
+    C.DUR_MIN_T = cfgI('cfgDurMin', 8); C.DUR_MAX_T = Math.min(cfgI('cfgDurMax', 12), 12);
+    C.MIN_RET_T = cfgF('cfgRetT', 37); C.SIG_COOL  = cfgI('cfgSigCool', 8);
+    C.ADAPTIVE_STAKE = $('cfgAdaptiveStake').value === '1';
+    C.STOP_LOSS = cfgF('cfgSL', 20);
+    C.HOURLY_CAP = cfgI('cfgHCap', 12); C.CONSEC_LIMIT = cfgI('cfgConsec', 3);
+    C.BASE_COOL  = cfgF('cfgCool', 10) * 60_000; C.COOLDOWN_MS = C.BASE_COOL;
+    C.MAX_COOL   = cfgF('cfgCoolMax', 60) * 60_000;
+    C.POST_TRADE_MS = (cfgF('cfgPostTMs', 15)) * 1000;
+    C.POST_LOSS_MS  = (cfgF('cfgPostLMs', 20)) * 1000;
+
+    if (C.BB_PERIOD  < 10)           { infoBox('BB Period must be ≥ 10.', 'err'); return; }
+    if (C.MACD_FAST >= C.MACD_SLOW) { infoBox('MACD Fast must be less than Slow.', 'err'); return; }
+    if (!C.TOKEN)                    { infoBox('Enter your Deriv API token first.', 'err'); return; }
+
+    Object.assign(S, {
+      wilderAvgGain: null, wilderAvgLoss: null, wilderDX: null, wilderAtr: null,
+      emaFast: null, emaSlow: null,
+      stochRsiK: null, stochRsiD: null, prevStochRsiK: null, prevStochRsiD: null,
+      ticks: [], chartPx: [], macdLineHistory: [], rsiHistory: [],
+      bbUp: [], bbMid: [], bbLow: [], chartMacdLine: [], chartMacdSig: [], chartMacdHist: [],
+      macdHist: null, macdLine: null, macdSig: null, prevMacdHist: null,
+      adxVal: null, plusDI: null, minusDI: null,
+      bb: null, atr: null, rsiVal: null, prevRSI: null, prevPctB: null, velocity: null,
+      setupSeen: false, setupTick: null, setupPctB: null, setupRSI: null,
+      armed: false, armedTick: null, bbReclaimSeen: false, rsiReclaimSeen: false,
+      tradePlacedThisCycle: false,  // v59: prevents double-placement on same armed state
+      lastScore: 0, scoreBB: 0, scoreRSI: 0, scoreMacd: 0, scoreAdx: 0, scoreVel: 0,
+      tickCount: 0, recentResults: [],
+      manualStop: false, reconnectAttempt: 0, running: true,
+    });
+
+    infoBox('Connecting…', 'ok');
+    $('btnCon').disabled = true;
+    $('btnStop').disabled = false;
+    if (S.ws) try { S.ws.close(); } catch (_) {}
+    connectWS();
+  }
+
+  function stop() {
+    S.running = false; S.botState = 'IDLE'; S.manualStop = true;
+    clearAllTimers();
+    if (hbTimer) { clearInterval(hbTimer); hbTimer = null; }
+    if (S.ws) try { S.ws.close(); } catch (_) {}
+    $('cdot').className = 'cdot';
+    $('clabel').textContent = 'Disconnected';
+    $('btnCon').disabled = false;
+    $('btnStop').disabled = true;
+    UI.pill('cool', 'STOPPED');
+    UI.ring('■', 'c', 'stopped');
+    log('Bot stopped', 'err');
+    infoBox('Stopped — click Connect to restart.', 'warn');
+  }
+
+  function dl(content, filename) {
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(new Blob([content], { type: 'text/csv' }));
+    a.download = filename; a.click();
+    URL.revokeObjectURL(a.href);
+  }
+
+  function exportLog() {
+    const csv = 'Time,Type,Message\n' +
+      S.rawLog.map(r => `${r.t},${r.type},"${r.msg.replace(/<[^>]+>/g, '').replace(/"/g, '""')}"`).join('\n');
+    dl(csv, 'touch-bot-v50-log.csv');
+  }
+
+  function exportTrades() {
+    if (!S.tradeLog.length) { toast('No trades yet', 'err'); return; }
+    const csv = 'Time,Direction,Barrier,Duration,Score,Return%,PnL,Result\n' +
+      S.tradeLog.map(t => `${t.time},${t.dir},${t.barrier},${t.dur},${t.score},${t.ret.toFixed(1)},${t.profit.toFixed(2)},${t.result}`).join('\n');
+    dl(csv, 'touch-bot-v50-trades.csv');
+  }
+
+  // Expose chart draw functions to global scope for tab-switch redraw
+  window.drawChart    = drawChart;
+  window.drawMacdChart = drawMacdChart;
+
+  return { connect, stop, exportLog, exportTrades };
+})();
+</script>
+</body>
+</html>
