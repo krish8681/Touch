@@ -23,7 +23,7 @@ public final class FeatureEngine {
     private FeatureEngine() {}
 
     public static final String TECH = "Technical", TREND = "Trend", SECTOR = "Sector & banks", VOL = "Volatility", GLOBAL = "Global markets",
-            FX = "Currencies", BONDS = "Bonds & rates", COMMOD = "Commodities", CAL = "Calendar";
+            FX = "Currencies", BONDS = "Bonds & rates", COMMOD = "Commodities", CAL = "Calendar", CHAINS = "Cross-market chains";
 
     static final String[] EXTRA_NAMES = {
             // 29.. technical (5-minute bars, yesterday's bars used as warm-up)
@@ -44,7 +44,10 @@ public final class FeatureEngine {
             // 63.. commodities
             "WTI crude last session", "Gold last session", "Silver last session", "Copper last session", "Brent 5-day change", "Crude shock score",
             // 69.. calendar
-            "Day of the week"};
+            "Day of the week",
+            // 70.. cross-market chains (learnt betas, see CrossMarket)
+            "Oil shock chain (Brent → rupee → Nifty)", "Rates & dollar chain (US 10Y → DXY → rupee → Nifty)",
+            "US rates → tech chain (US 10Y → Nasdaq → Nifty)", "Consensus implied move from 8 drivers"};
 
     static final String[] EXTRA_HIGH = {
             "RSI is high (overbought side)", "MACD is turning up", "price is near the upper Bollinger band", "price is near the top of its recent range",
@@ -56,7 +59,8 @@ public final class FeatureEngine {
             "the euro rose", "the yen weakened", "the yuan weakened", "the rupee weakened over 5 days",
             "US short rates rose", "US 5-year yield rose", "US 30-year yield rose", "the US curve is steep", "the US curve steepened", "US 10-year yield rose over 5 days",
             "WTI rose", "gold rose", "silver rose", "copper rose", "Brent rose over 5 days", "a crude shock is building",
-            "later in the week"};
+            "later in the week",
+            "the oil chain points up", "the rates & dollar chain points up", "the US rates → tech chain points up", "world drivers imply a rise"};
 
     public static final String[] NAMES, HIGH;
     public static final int N;
@@ -67,7 +71,7 @@ public final class FeatureEngine {
     }
 
     /** Feature groups (indices into the full vector). One model per group per horizon. */
-    public static final String[] GROUP_NAMES = {TECH, TREND, SECTOR, VOL, GLOBAL, FX, BONDS, COMMOD, CAL};
+    public static final String[] GROUP_NAMES = {TECH, TREND, SECTOR, VOL, GLOBAL, FX, BONDS, COMMOD, CAL, CHAINS};
     public static final int[][] GROUPS = {
             {0, 1, 2, 3, 4, 5, 29, 30, 31, 32, 33, 34, 35},
             {8, 9, 10, 11, 12, 36, 37, 38},
@@ -77,7 +81,8 @@ public final class FeatureEngine {
             {23, 25, 53, 54, 55, 56},
             {24, 57, 58, 59, 60, 61, 62},
             {22, 63, 64, 65, 66, 67, 68},
-            {7, 26, 69}};
+            {7, 26, 69},
+            {70, 71, 72, 73}};
 
     public static int groupOf(int feature) {
         for (int g = 0; g < GROUPS.length; g++) for (int j : GROUPS[g]) if (j == feature) return g;
@@ -178,6 +183,10 @@ public final class FeatureEngine {
             int dow = java.time.LocalDate.parse(date).getDayOfWeek().getValue();   // 1 = Monday
             f[69] = (Math.min(5, dow) - 1) / 4.0 - 0.5;
         } catch (Exception ignored) { }
+
+        // ---- cross-market chains: implied Nifty % from learnt betas, in units of Nifty's daily volatility
+        double[] xm = CrossMarket.implied(h, date);
+        for (int i = 0; i < 4; i++) f[70 + i] = Double.isNaN(xm[i]) ? Double.NaN : clip(xm[i] / (sig * 100), 4);
         return f;
     }
 

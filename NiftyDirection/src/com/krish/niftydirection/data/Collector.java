@@ -159,13 +159,19 @@ public class Collector {
 
     // ================================================================== news
 
+    static Map<String, Double> approxWeights() {
+        Map<String, Double> m = new HashMap<>();
+        for (Map.Entry<String, double[]> e : Weights.approxWeights().entrySet()) m.put(e.getKey(), e.getValue()[0]);
+        return m;
+    }
+
     private void news(Config cfg, Snapshot s, Progress pr) {
         Store st = new Store(dir);
         Gemini.pinFile = new File(dir, "gemini_pin.txt");
         long now = System.currentTimeMillis();
         if (now - newsAt > 10 * 60_000L || newsCache.isEmpty()) {
             step(pr, "News…");
-            List<NewsItem> fresh = News.fetch(24);
+            List<NewsItem> fresh = News.fetch(24, s.weights.isEmpty() ? approxWeights() : s.weights);
             if (!fresh.isEmpty()) {
                 Map<String, NewsItem> known = st.newsCache();
                 List<NewsItem> merged = new ArrayList<>(), toRate = new ArrayList<>();

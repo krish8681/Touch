@@ -111,12 +111,14 @@ public final class Trainer {
         List<Integer> yL = new ArrayList<>();
         List<String> tdL = new ArrayList<>();
         List<Double> mvL = new ArrayList<>();
+        List<double[]> exL = new ArrayList<>();
         for (int i = 0; i < s.size(); i++) {
             Object[] t = target(h, sidx, sessions, pos, s, i, hz);
             if (t == null) continue;
             double tp = (Double) t[0], p = s.price.get(i);
             if (tp == p) continue;
             rowsL.add(i); yL.add(tp > p ? 1 : 0); tdL.add((String) t[1]); mvL.add(Math.log(tp / p));
+            exL.add(excursion(h, sidx, sessions, pos, s, i, hz));
         }
         int n = rowsL.size();
         HorizonModel m = new HorizonModel();
@@ -148,6 +150,27 @@ public final class Trainer {
         List<Double> all = new ArrayList<>();
         for (List<Double> l : zb) all.addAll(l);
         for (int b = 0; b < 3; b++) in.range[b] = quantiles(zb.get(b).size() >= 200 ? zb.get(b) : all);
+        // three-way outlook and excursions, per volatility bucket (all buckets pooled when one is thin)
+        double[][] acc = new double[4][3];   // bucket 0..2, 3 = all: {count, flat count, sum of |z|}
+        List<List<Double>> eu = new ArrayList<>(), ed = new ArrayList<>();
+        for (int b = 0; b < 4; b++) { eu.add(new ArrayList<>()); ed.add(new ArrayList<>()); }
+        for (int r = 0; r < n; r++) {
+            double sh = s.sigma.get(src[r]) * Math.sqrt(hz.minutes / 375.0);
+            if (sh <= 0) continue;
+            double z = Math.abs(mvL.get(r)) / sh;
+            for (int b : new int[]{reg[r].volBucket(), 3}) {
+                acc[b][0]++; if (z < HorizonModel.FLAT_Z) acc[b][1]++; acc[b][2] += z;
+                double[] ex = exL.get(r);
+                if (ex != null) { eu.get(b).add(ex[0] / sh); ed.get(b).add(ex[1] / sh); }
+            }
+        }
+        for (int b = 0; b < 3; b++) {
+            int u = acc[b][0] >= 200 ? b : 3;
+            in.flat[b] = acc[u][1] / acc[u][0];
+            in.meanAbs[b] = acc[u][2] / acc[u][0];
+            List<Double> a1 = eu.get(eu.get(b).size() >= 200 ? b : 3), a2 = ed.get(ed.get(b).size() >= 200 ? b : 3);
+            in.excUp[b] = median(a1); in.excDn[b] = median(a2);
+        }
 
         // ---- group design matrices
         double[][][] Xg = new double[HorizonModel.G][n][];
@@ -304,6 +327,38 @@ public final class Trainer {
         }
         Arrays.sort(sk);
         return new double[]{sk[(int) (0.05 * BOOT)], sk[(int) (0.95 * BOOT) - 1]};
+    }
+
+    /** {log(highest high / price), log(price / lowest low)} between the forecast and its target, or null. */
+    static double[] excursion(History h, int[] sidx, List<String> sessions, Map<String, Integer> pos, Dataset s, int i, Horizon hz) {
+        int d = s.d.get(i), k = s.k.get(i);
+        double p = s.price.get(i), hi = p, lo = p;
+        History.Day day = h.days.get(d);
+        if (hz.swing()) {
+            for (int b = k; b < History.BARS; b++) if (!Float.isNaN(day.c[b])) { hi = Math.max(hi, day.h[b]); lo = Math.min(lo, day.l[b]); }
+            Integer ps = pos.get(day.date);
+            int[] spec = targetSpec(k, hz);
+            if (ps == null || ps + spec[0] >= sessions.size()) return null;
+            for (int j = ps + 1; j <= ps + spec[0]; j++) { double[] v = h.niftyDaily.get(sessions.get(j)); hi = Math.max(hi, v[1]); lo = Math.min(lo, v[2]); }
+        } else {
+            int[] spec = targetSpec(k, hz);
+            int dd = d + spec[0];
+            if (dd >= h.days.size() || sidx[dd] - sidx[d] != dd - d) return null;
+            for (int x = d; x <= dd; x++) {
+                History.Day t = h.days.get(x);
+                int from = x == d ? k : 0, to = x == dd ? spec[1] : History.BARS - 1;
+                for (int b = from; b <= to && b < History.BARS; b++) if (!Float.isNaN(t.c[b])) { hi = Math.max(hi, t.h[b]); lo = Math.min(lo, t.l[b]); }
+            }
+        }
+        return p > 0 && lo > 0 ? new double[]{Math.log(hi / p), Math.log(p / lo)} : null;
+    }
+
+    static double median(List<Double> v) {
+        if (v.isEmpty()) return Double.NaN;
+        double[] a = new double[v.size()];
+        for (int i = 0; i < a.length; i++) a[i] = v.get(i);
+        Arrays.sort(a);
+        return a[a.length / 2];
     }
 
     static double[] quantiles(List<Double> v) {

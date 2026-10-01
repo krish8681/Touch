@@ -49,7 +49,7 @@ final class IntelPage {
             if (!fc.note.isEmpty()) top.addView(Ui.text(c, fc.note, 12, Ui.AMBER, false), Ui.top(c, 4));
         } else if (models.isEmpty()) {
             top.addView(Ui.text(c, "No models yet. Tap “Train models”: it downloads about 3 years of 5-minute Nifty, Bank Nifty, VIX and sector history "
-                    + "from Kite plus 29 world markets, bonds, currencies and commodities, then learns 9 group models + a meta model for each of 7 horizons, "
+                    + "from Kite plus 29 world markets, bonds, currencies and commodities, then learns 10 group models + a meta model for each of 7 horizons, "
                     + "each tested on sessions it never saw.", 13, Ui.DIM, false), Ui.top(c, 6));
         } else top.addView(Ui.text(c, "Tap “Update forecast”.", 13, Ui.DIM, false), Ui.top(c, 6));
         if (working != null) top.addView(Ui.text(c, working, 12, Ui.CYAN, false), Ui.top(c, 6));
@@ -72,6 +72,7 @@ final class IntelPage {
             col.addView(horizons(c, fc), Ui.cardLp(c));
             col.addView(factors(c, fc), Ui.cardLp(c));
             col.addView(events(c, fc), Ui.cardLp(c));
+            if (!fc.chains.isEmpty()) col.addView(chains(c, fc), Ui.cardLp(c));
             if (!fc.changed.isEmpty() || anyChanged(fc)) col.addView(changed(c, fc), Ui.cardLp(c));
             if (!fc.memory.isEmpty()) col.addView(list(c, "Event memory — today's sequence", fc.memory, Ui.TEXT), Ui.cardLp(c));
             if (!fc.movers.isEmpty()) col.addView(movers(c, fc), Ui.cardLp(c));
@@ -105,6 +106,9 @@ final class IntelPage {
         k.addView(Ui.kv(c, "Probability", String.format(Locale.US, "%.0f%% %s", p.sideProb() * 100, "BEARISH".equals(p.direction) ? "down" : "up"), col));
         k.addView(Ui.kv(c, "Confidence", p.confLabel + " (" + p.confidence + "/100)", confColor(p.confLabel)));
         if (!Double.isNaN(p.range68)) k.addView(Ui.kv(c, "Expected range (68%)", String.format(Locale.US, "±%.2f%%  (±%.0f pts)", p.range68 * 100, p.range68 * fc.price), Ui.TEXT));
+        if (!Double.isNaN(p.pFlat)) k.addView(Ui.kv(c, "Up / flat / down", threeWay(p), Ui.TEXT));
+        if (!Double.isNaN(p.expReturn)) k.addView(Ui.kv(c, "Expected return", String.format(Locale.US, "%+.2f%%  (%+.0f pts)", p.expReturn * 100, p.expReturn * fc.price), Ui.signColor(p.expReturn)));
+        k.addView(Ui.kv(c, "Signal quality", p.signalQuality, "HIGH".equals(p.signalQuality) ? Ui.GREEN : "MEDIUM".equals(p.signalQuality) ? Ui.AMBER : Ui.GREY));
         k.addView(Ui.divider(c));
         if (p.tradeable) k.addView(Ui.text(c, "Forecast is strong enough to act on (signal only — the app never trades).", 12, Ui.GREEN, true));
         else {
@@ -156,6 +160,11 @@ final class IntelPage {
         if (!Double.isNaN(p.range68))
             d.addView(Ui.text(c, String.format(Locale.US, "Expected move: half the time within ±%.0f pts, 68%% within ±%.0f, 90%% within ±%.0f.",
                     p.range50 * fc.price, p.range68 * fc.price, p.range90 * fc.price), 11, Ui.DIM, false), Ui.top(c, 8));
+        if (!Double.isNaN(p.pFlat))
+            d.addView(Ui.text(c, "Up / flat / down: " + threeWay(p) + (Double.isNaN(p.expReturn) ? "" : String.format(Locale.US,
+                    " · expected return %+.2f%% · typical high %,.0f / low %,.0f", p.expReturn * 100, fc.price * (1 + p.expHigh), fc.price * (1 + p.expLow))), 11, Ui.DIM, false), Ui.top(c, 4));
+        d.addView(Ui.text(c, "Signal quality: " + p.signalQuality + (p.signalReason.isEmpty() ? "" : " — " + p.signalReason), 11,
+                "HIGH".equals(p.signalQuality) ? Ui.GREEN : "MEDIUM".equals(p.signalQuality) ? Ui.AMBER : Ui.DIM, false), Ui.top(c, 4));
         d.addView(Ui.text(c, (p.tradeable ? "Trade gate: passed." : "Trade gate: NO TRADE — " + String.join("; ", p.gate) + "."), 11,
                 p.tradeable ? Ui.GREEN : Ui.AMBER, false), Ui.top(c, 4));
         if (p.info != null) d.addView(Ui.text(c, "Tested: " + IntelRunner.testLine(p.info), 11, p.info.proven ? Ui.DIM : Ui.AMBER, false), Ui.top(c, 4));
@@ -188,8 +197,9 @@ final class IntelPage {
             for (int i = 0; i < Math.min(6, fc.events.size()); i++) {
                 EventImpact.Event e = fc.events.get(i);
                 String t = String.format(Locale.US, "%+.2f  T%d · %d src · %s", e.impact[2], e.tier, e.sources, e.title);
-                if (!e.constituents.isEmpty()) t += " [" + String.join(", ", e.constituents) + "]";
                 k.addView(Ui.text(c, t, 12, Ui.signColor(e.impact[2]), false), Ui.top(c, 2));
+                String sub = e.persistence.toLowerCase(Locale.US) + " news" + (e.chain.isEmpty() ? "" : " · " + e.chain);
+                k.addView(Ui.text(c, "   " + sub, 11, Ui.DIM, false));
             }
         }
         return k;
@@ -226,8 +236,31 @@ final class IntelPage {
         k.addView(Ui.kv(c, "Score", String.format(Locale.US, "%.0f%%", q * 100), q >= 0.8 ? Ui.GREEN : q >= 0.6 ? Ui.AMBER : Ui.RED));
         for (Map.Entry<String, Double> e : fc.quality.groups.entrySet())
             k.addView(Ui.kv(c, e.getKey(), String.format(Locale.US, "%.0f%% of inputs", e.getValue() * 100), e.getValue() >= 0.8 ? Ui.DIM : Ui.AMBER));
+        if (!fc.quality.sources.isEmpty()) {
+            k.addView(Ui.text(c, "LIVE SOURCES (freshness)", 11, Ui.DIM, true), Ui.top(c, 8));
+            for (Map.Entry<String, Double> e : fc.quality.sources.entrySet())
+                k.addView(Ui.kv(c, e.getKey(), String.format(Locale.US, "%.0f%%", e.getValue() * 100), e.getValue() >= 0.8 ? Ui.DIM : e.getValue() >= 0.5 ? Ui.AMBER : Ui.RED));
+        }
+        if (!fc.quality.conflicts.isEmpty()) {
+            k.addView(Ui.text(c, "SOURCES DISAGREE (each lowers intraday confidence)", 11, Ui.RED, true), Ui.top(c, 8));
+            for (String s : fc.quality.conflicts) k.addView(Ui.text(c, "• " + s, 12, Ui.TEXT, false), Ui.top(c, 2));
+        }
         for (String s : fc.quality.issues) k.addView(Ui.text(c, "• " + s, 12, Ui.AMBER, false), Ui.top(c, 2));
         return k;
+    }
+
+    static View chains(Context c, IntelEngine.Forecast fc) {
+        LinearLayout k = Ui.card(c);
+        k.addView(Ui.header(c, "Cross-market chains — how today's shocks travel to Nifty"));
+        for (com.krish.niftydirection.intel.CrossMarket.Path p : fc.chains)
+            k.addView(Ui.text(c, p.describe(), 12, Double.isNaN(p.implied) ? Ui.DIM : Ui.signColor(p.implied), false), Ui.top(c, 3));
+        k.addView(Ui.text(c, "Each link's beta is learnt from the last 250 sessions; \"weak\" = not statistically significant. The chains are also model inputs.",
+                11, Ui.DIM, false), Ui.top(c, 6));
+        return k;
+    }
+
+    static String threeWay(IntelEngine.HPred p) {
+        return String.format(Locale.US, "%.0f%% / %.0f%% / %.0f%%", p.pUp3 * 100, p.pFlat * 100, p.pDown3 * 100);
     }
 
     static View record(Context c, IntelEngine.Forecast fc, File dir) {
@@ -296,12 +329,14 @@ final class IntelPage {
         LinearLayout info = Ui.card(c);
         info.addView(Ui.header(c, "How to read this"));
         info.addView(Ui.text(c, "• Probabilities, not certainties: UP 62% means that when inputs looked like this, Nifty was higher at the target time about 62 times in 100.\n"
-                + "• Each horizon has its own 9 group models (technical, trend, sector, volatility, global, currencies, bonds, commodities, calendar) and a meta model "
+                + "• Each horizon has its own 10 group models (technical, trend, sector, volatility, global, currencies, bonds, commodities, calendar, cross-market chains) and a meta model "
                 + "that learnt how much to trust each, separately for range-bound and high-volatility markets. Probabilities are calibrated on out-of-sample forecasts.\n"
                 + "• Proven edge = on the newest sessions it never learnt from, the model beat “always guess the usual side” and the 90% bootstrap band of its skill stays above zero. "
                 + "Without it a forecast is shown grey and confidence is capped.\n"
                 + "• Confidence is separate from direction: strength, proven edge, agreement of the groups, data quality and event risk.\n"
                 + "• Live option/futures evidence (Today tab) and news events can move a forecast by at most ±10 points; their weights are re-learnt from this phone's own record.\n"
+                + "• Up / flat / down: \"flat\" = a move smaller than a quarter of the horizon's usual volatility. Expected return and typical high/low come from the same history.\n"
+                + "• Signal quality (HIGH / MEDIUM / LOW) is separate from the forecast: 67% bullish is not BUY.\n"
                 + "• Trade gate: a forecast below your threshold (Settings), without proven edge, with low confidence or right before an event shows NO TRADE. "
                 + "Signals only — the app never places orders.", 12, Ui.DIM, false));
         return info;

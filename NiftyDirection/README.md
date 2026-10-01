@@ -1,4 +1,4 @@
-# Nifty Direction Pure 2.0 (Android)
+# Nifty Direction Pure 2.1 (Android)
 
 A **Nifty 50 direction engine** on Zerodha Kite. It does not guess "up or down". It **classifies** the market the way desks do:
 which side the evidence favours right now, how strongly, and how much of the evidence agrees.
@@ -32,6 +32,25 @@ Blend (smooth by minute): before the open structure 85% / live 15%, then live 30
 Each factor's weight = base × source trust (Kite / NSE 1.0, Yahoo 0.8, Gemini 0.6, typed 0.5, word list 0.35) × freshness × learnt multiplier (needs 100 readings: about 70 sessions with the app open at 9:45 and 11:30; ±15% until 400 readings, ±40% after).
 Regime: enter a side at ±25, keep it until ±15 (hysteresis). CONFLICT when structure and live are both ≥30 and opposite (confidence halved).
 NO EDGE when evidence is weak or mixed; RANGE only with 2+ real range signs.
+
+## Pure 2.1 — wider data, event chains, three-way outlook
+1. **More sources:** official feeds from the Fed, ECB, Bank of England, Bank of Japan, US BEA and PIB, NSE filings (kept only for Nifty 50 companies), and Google News searches for the 15 heaviest constituents (3 requests). All go through the same de-duplication and source tiers. BLS and the US Treasury block automated readers, so they are not included.
+2. **Company → sector → Nifty:** company news reaches the index through the stock's own weight plus a spillover to its sector peers (30% for lasting news, 10% otherwise). The path is shown with each event. **Persistence by story type:** results, policy and macro data decay 4× slower; orders and contracts 2×; broker opinions 1×; block deals, flows and rumours twice as fast.
+3. **Cross-market chains:**
+   - Oil shock: Brent → rupee → Nifty
+   - Rates & dollar: US 10Y → dollar → rupee → Nifty
+   - US rates → tech: US 10Y → Nasdaq → Nifty
+   - plus a consensus implied move from 8 drivers.
+
+   Each link's beta is learnt from the 250 sessions before the date. The chains are a 10th model group and are shown live with their numbers.
+4. **Three-way outlook:** up / flat / down probabilities per horizon (flat = a move under ¼ of the horizon's volatility), expected return, and typical high/low.
+5. **Data quality + conflicts:**
+   - freshness of every live source and the news reader;
+   - checks where sources disagree (GIFT vs overnight world, option/futures evidence vs price, Bank Nifty vs Nifty, stale FII);
+   - each conflict lowers intraday confidence;
+   - every forecast carries a **signal quality** (HIGH / MEDIUM / LOW) with its reason, separate from the forecast.
+
+Models are version 2 and retrain by themselves outside market hours.
 
 ## Pure 2.0 — NIFTY AI prediction engine
 The first tab is now **AI**: a multi-layer prediction engine (full design in [ARCHITECTURE.md](ARCHITECTURE.md)).

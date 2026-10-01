@@ -157,7 +157,7 @@ public class MainActivity extends Activity implements Brain.Listener {
         boolean has = IntelRunner.hasModels(dir);
         boolean market = inSession();
         // first training is the user's choice (big download); after that, weekly retrains (and model-version upgrades) run outside market hours
-        if (!market && !fcTriedTrain && (has || ForecastRunner.hasModelFiles(dir)) && IntelRunner.needsTraining(dir)) { fcTriedTrain = true; fcTrain(); return; }
+        if (!market && !fcTriedTrain && (has || IntelRunner.hasModelFiles(dir) || ForecastRunner.hasModelFiles(dir)) && IntelRunner.needsTraining(dir)) { fcTriedTrain = true; fcTrain(); return; }
         if (!has) return;
         IntelEngine.Forecast l = IntelRunner.last;
         long age = l == null ? Long.MAX_VALUE : System.currentTimeMillis() - l.at;

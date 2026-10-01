@@ -24,21 +24,44 @@ public final class News {
             {"Moneycontrol", "https://www.moneycontrol.com/rss/marketreports.xml"},
             {"Mint", "https://www.livemint.com/rss/markets"},
             {"RBI (official)", "https://www.rbi.org.in/pressreleases_rss.xml"},
-            {"SEBI (official)", "https://www.sebi.gov.in/sebirss.xml"}};
+            {"SEBI (official)", "https://www.sebi.gov.in/sebirss.xml"},
+            // primary sources abroad and in government (central banks, US statistics, Indian government)
+            {"Fed (official)", "https://www.federalreserve.gov/feeds/press_all.xml"},
+            {"ECB (official)", "https://www.ecb.europa.eu/rss/press.html"},
+            {"Bank of England (official)", "https://www.bankofengland.co.uk/rss/news"},
+            {"Bank of Japan (official)", "https://www.boj.or.jp/en/rss/whatsnew.xml"},
+            {"US BEA (official)", "https://apps.bea.gov/rss/rss.xml"},
+            {"PIB (official)", "https://pib.gov.in/RssMain.aspx?ModId=6&Lang=1&Regid=3"},
+            // company filings: kept only for Nifty 50 constituents
+            {"NSE filings (official)", "https://nsearchives.nseindia.com/content/RSS/Online_announcements.xml"}};
+
+    static final String FILINGS = "NSE filings (official)";
 
     static final Pattern ITEM = Pattern.compile("<item>(.*?)</item>", Pattern.DOTALL);
 
     /** Headlines from the last `hours` hours, newest first, duplicates removed. */
-    public static List<NewsItem> fetch(int hours) {
+    public static List<NewsItem> fetch(int hours) { return fetch(hours, null); }
+
+    /**
+     * As fetch(hours), plus company news: Google News queries for the heaviest Nifty constituents (by `weights`),
+     * and NSE filings kept only when they name a constituent.
+     */
+    public static List<NewsItem> fetch(int hours, Map<String, Double> weights) {
         List<NewsItem> out = new ArrayList<>();
         Set<String> seen = new HashSet<>();
         Map<String, String> h = new HashMap<>();
         h.put("User-Agent", Http.BROWSER_UA);
         long cutoff = System.currentTimeMillis() - hours * 3600_000L;
-        for (String[] feed : FEEDS) {
+        List<String[]> feeds = new ArrayList<>(java.util.Arrays.asList(FEEDS));
+        feeds.addAll(companyFeeds(weights));
+        for (String[] feed : feeds) {
             try {
                 String xml = Http.get(feed[1], h, 12000);
                 for (NewsItem n : parse(xml, feed[0])) {
+                    if (feed[0].equals(FILINGS)) {
+                        if (weights == null || com.krish.niftydirection.intel.Constituents.mentioned(n.title, weights).isEmpty()) continue;
+                        if (!n.summary.isEmpty()) n.title = n.title + ": " + (n.summary.length() > 140 ? n.summary.substring(0, 140) : n.summary);
+                    }
                     if (feed[0].contains("(official)")) { n.official = true; n.source = feed[0]; }
                     if (n.time > 0 && n.time < cutoff) continue;
                     String key = norm(n.title);
@@ -48,7 +71,28 @@ public final class News {
             } catch (Exception ignored) { }
         }
         out.sort((a, b) -> Long.compare(b.time, a.time));
-        return out.size() > 80 ? new ArrayList<>(out.subList(0, 80)) : out;
+        return out.size() > 120 ? new ArrayList<>(out.subList(0, 120)) : out;
+    }
+
+    /** Google News searches for the 15 heaviest constituents, five names per query (three requests). */
+    public static List<String[]> companyFeeds(Map<String, Double> weights) {
+        List<String[]> out = new ArrayList<>();
+        if (weights == null || weights.isEmpty()) return out;
+        List<Map.Entry<String, Double>> w = new ArrayList<>(weights.entrySet());
+        w.sort((a, b) -> Double.compare(b.getValue(), a.getValue()));
+        StringBuilder q = new StringBuilder();
+        int inQ = 0;
+        for (int i = 0; i < Math.min(15, w.size()); i++) {
+            String name = com.krish.niftydirection.intel.Constituents.newsName(w.get(i).getKey());
+            if (q.length() > 0) q.append("+OR+");
+            q.append("%22").append(Http.enc(name)).append("%22");
+            if (++inQ == 5 || i == Math.min(15, w.size()) - 1) {
+                out.add(new String[]{"Google News", "https://news.google.com/rss/search?q=" + q + "+when:1d&hl=en-IN&gl=IN&ceid=IN:en"});
+                q.setLength(0);
+                inQ = 0;
+            }
+        }
+        return out;
     }
 
     static List<NewsItem> parse(String xml, String feedName) {

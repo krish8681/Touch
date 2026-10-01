@@ -47,6 +47,8 @@ public class History {
     public final Map<String, TreeMap<String, Double>> global = new LinkedHashMap<>();   // name → IST date → close
     public final Set<String> expiries = new HashSet<>();                      // weekly expiry sessions
     public final List<String> sectors = new ArrayList<>();                    // aux keys "SEC:<name>"
+    /** Derived values computed once per date (e.g. learnt cross-market betas). Not saved; a copy starts empty. */
+    public final Map<String, Object> cache = new java.util.concurrent.ConcurrentHashMap<>();
 
     public static float[] nan() { float[] f = new float[BARS]; java.util.Arrays.fill(f, Float.NaN); return f; }
 

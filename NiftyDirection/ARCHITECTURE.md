@@ -1,4 +1,4 @@
-# Nifty Direction Pure 2.0 — Prediction Engine Architecture
+# Nifty Direction Pure 2.1 — Prediction Engine Architecture
 
 This is the architecture as built (code in `src/com/krish/niftydirection/intel`, wired in by `data/IntelRunner` and `ui/IntelPage`).
 It runs entirely on the phone: Kite Connect + NSE + Yahoo + public news feeds in, calibrated probabilities out. **Signals only — the app never places orders.**
@@ -62,7 +62,21 @@ It runs entirely on the phone: Kite Connect + NSE + Yahoo + public news feeds in
 
 Also built: **Impact graph** (`ImpactGraph`, learnt driver → Nifty and driver → driver links), **Event memory** (today's sequence), **What changed?**, **Why?**, **Data quality** (`IntelEngine.quality`) and the **trade gate**.
 
-## Inputs (70, in 9 groups)
+## 2.1 additions
+
+| Area | What was added | Where |
+|---|---|---|
+| Data universe | Fed, ECB, BoE, BoJ, US BEA, PIB official feeds (tier 1); NSE filings for constituents; Google News searches for the 15 heaviest constituents | `data/News` |
+| Company → sector → Nifty | exposure = stock weight ÷ 6% + spillover × peers' weight ÷ 6% (spillover 0.3 for lasting news, 0.1 otherwise); the path is stored as `Event.chain` | `EventImpact.exposure` |
+| Persistence | half-life × 4 FUNDAMENTAL (results, policy, macro data, M&A), × 2 ORDERS, × 1 OPINION, × 0.5 FLOW (block deals, rumours) | `EventImpact.persistence` |
+| Cross-market event graph | chains Brent → USD/INR → Nifty; US 10Y → DXY → USD/INR → Nifty; US 10Y → Nasdaq → Nifty; consensus of 8 direct drivers. Betas come from regressions over the 250 sessions before each date (no look-ahead), cached per date. Implied Nifty move = root move × Π betas. They form model group 10 and a live card. | `CrossMarket` |
+| Three-way outlook | P(flat) = share of past moves under 0.25 × horizon vol (per volatility bucket); P(up) = p·(1 − P(flat)), P(down) = (1 − p)·(1 − P(flat)); expected return = (2p − 1) × mean |move|; typical high/low = median excursions before the target, tilted toward the forecast side | `HorizonModel.outlook`, `Trainer.excursion` |
+| Data quality + conflicts | per-source freshness vs expected age (live sources are not marked stale while the market is closed), news-reader quality. Conflicts: GIFT vs overnight world, Today-tab evidence vs today's price move, Bank Nifty vs Nifty divergence, stale FII. Each conflict × 0.9 on intraday confidence (floor 0.7). Score = 0.6 inputs + 0.25 sources + 0.15 evidence coverage. | `IntelEngine.quality`, `conflicts` |
+| Signal quality | HIGH (tradeable, confidence ≥ 65, no conflicts), MEDIUM (tradeable), LOW (gate failed), each with its reason | `IntelEngine.forecast` |
+
+Model version 2 (10 groups). Older models retrain automatically outside market hours.
+
+## Inputs (74, in 10 groups)
 
 | Group | Inputs |
 |---|---|
@@ -75,6 +89,7 @@ Also built: **Impact graph** (`ImpactGraph`, learnt driver → Nifty and driver 
 | Bonds & rates | US 10Y, 13W, 5Y, 30Y changes, curve slope and its change, 10Y 5-day change |
 | Commodities | Brent, WTI, gold, silver, copper, Brent 5-day change, crude shock score |
 | Calendar | time of day, weekly expiry, day of week |
+| Cross-market chains | oil chain, rates & dollar chain, US rates → tech chain, consensus implied move (all in Nifty volatility units) |
 
 Moves are divided by Nifty's recent daily volatility. Missing inputs are NaN (the model uses its training average). Inputs 0–28 are the original forecaster's (`forecast.Features`), so old and new share one code path.
 

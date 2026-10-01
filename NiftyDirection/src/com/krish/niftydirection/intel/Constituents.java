@@ -31,6 +31,17 @@ public final class Constituents {
             {"HDFCLIFE", "hdfc life"}, {"SBILIFE", "sbi life"}, {"TATACONSUM", "tata consumer"}, {"INDIGO", "interglobe", "indigo"},
             {"JIOFIN", "jio financial"}, {"MAXHEALTH", "max healthcare"}, {"BAJAJ-AUTO", "bajaj auto"}};
 
+    /** The name news uses for a constituent ("HDFC Bank"), for company news searches. */
+    public static String newsName(String symbol) {
+        for (String[] a : ALIASES) if (a[0].equals(symbol)) {
+            String n = a[1];
+            StringBuilder b = new StringBuilder();
+            for (String w : n.split(" ")) { if (b.length() > 0) b.append(' '); b.append(w.length() <= 3 ? w.toUpperCase(Locale.US) : Character.toUpperCase(w.charAt(0)) + w.substring(1)); }
+            return b.toString();
+        }
+        return symbol;
+    }
+
     /** Constituents named in a headline (by alias or symbol), with their index weights. */
     public static Map<String, Double> mentioned(String text, Map<String, Double> weights) {
         Map<String, Double> out = new LinkedHashMap<>();

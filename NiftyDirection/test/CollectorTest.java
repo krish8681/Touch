@@ -158,7 +158,7 @@ public class CollectorTest {
         com.krish.niftydirection.data.News.cluster(cp);
         check(cp.get(0).verification.equals("CORROBORATED"), "copied text on two sites = CORROBORATED: " + cp.get(0).verification);
 
-        List<com.krish.niftydirection.model.EventItem> ev = EventCalendar.upcoming(today, 10, Arrays.asList("2026-10-27"), Arrays.asList("2026-10-06"), "2026-10-01 My meeting", items);
+        List<com.krish.niftydirection.model.EventItem> ev = EventCalendar.upcoming(today, 10, Arrays.asList("2026-10-27"), Arrays.asList("2026-10-06"), today + " My meeting", items);
         boolean rbi = false, mine = false, fromNews = false;
         for (com.krish.niftydirection.model.EventItem ei : ev) { if (ei.name.startsWith("RBI policy decision")) rbi = true; if (ei.name.equals("My meeting")) mine = true; if (ei.source.startsWith("news")) fromNews = true; }
         check(rbi && mine && fromNews, "calendar has RBI (7 Oct), my event and a news event: " + ev.size());

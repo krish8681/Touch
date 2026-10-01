@@ -39,6 +39,11 @@ public final class IntelEngine {
         public Map<String, String> sectorOf = new LinkedHashMap<>();
         public List<Quote> stocks = new ArrayList<>();
         public List<String> dataIssues = new ArrayList<>();
+        /** When each live source was last refreshed (epoch ms), from the collector. */
+        public Map<String, Long> sourceTime = new LinkedHashMap<>();
+        public boolean marketOpen;
+        public double gift = Double.NaN, niftyLast = Double.NaN, niftyPrevClose = Double.NaN, futLast = Double.NaN;
+        public String newsReader = "", fiiDate = "";
         public long now = System.currentTimeMillis();
         public String today = "";
         public int minute;
@@ -53,7 +58,10 @@ public final class IntelEngine {
     public static final class Quality {
         public double score = 1;
         public final Map<String, Double> groups = new LinkedHashMap<>();   // group → share of inputs available
+        public final Map<String, Double> sources = new LinkedHashMap<>();  // live source → freshness score 0..1
         public final List<String> issues = new ArrayList<>();
+        /** Sources or signals that disagree with each other (each one lowers intraday confidence by 10%). */
+        public final List<String> conflicts = new ArrayList<>();
     }
 
     public static final class HPred {
@@ -65,6 +73,10 @@ public final class IntelEngine {
         public String confLabel = "Low", direction = "NEUTRAL", why0 = "";
         public double range50 = Double.NaN, range68 = Double.NaN, range90 = Double.NaN;   // fraction of price
         public boolean tradeable;
+        /** Three-way outlook and size: P(up), P(flat), P(down), expected return, typical high and low (fractions of price). */
+        public double pUp3 = Double.NaN, pFlat = Double.NaN, pDown3 = Double.NaN, expReturn = Double.NaN, expHigh = Double.NaN, expLow = Double.NaN;
+        /** HIGH / MEDIUM / LOW: how usable this forecast is as a trading signal, and the main reason. */
+        public String signalQuality = "LOW", signalReason = "";
         public final List<String> gate = new ArrayList<>();
         public final List<Line> why = new ArrayList<>();
         public final List<String> changed = new ArrayList<>();
@@ -95,6 +107,8 @@ public final class IntelEngine {
         public List<String> memory = new ArrayList<>();
         public List<ImpactGraph.Edge> graph = new ArrayList<>();
         public Map<String, double[]> scorecard = new LinkedHashMap<>();
+        /** Cross-market chains as seen today (paths with learnt betas and implied Nifty moves). */
+        public List<CrossMarket.Path> chains = new ArrayList<>();
     }
 
     public static Forecast forecast(List<HorizonModel> models, History h, int d, int k, boolean preOpen, LiveContext ctx, JSONObject prev,
@@ -126,6 +140,7 @@ public final class IntelEngine {
         if (!Double.isNaN(f[2]) && Math.abs(f[2]) > 1.0 && (Double.isNaN(f[52]) || Math.abs(f[52]) < 0.4)) reg.flags.add("INDIA_SPECIFIC");
         fc.regime = reg;
 
+        fc.chains = CrossMarket.paths(h, day.date);
         fc.quality = quality(f, models, ctx);
         double ev = 0;
         if (ctx != null && ctx.evidenceAvailable && ctx.evidenceCoverage >= 0.5)
@@ -183,7 +198,8 @@ public final class IntelEngine {
             double agreement = totW > 0 ? agreeW / totW : 0.5;
             double strength = Math.min(1, Math.abs(p.pFinal - 0.5) / 0.15);
             double edge = !m.info.tested() ? 0.4 : m.info.proven ? 0.6 + 0.4 * Math.min(1, Math.max(0, m.info.skillLo) / 0.02) : 0.15;
-            double c = 100 * (0.35 * strength + 0.25 * edge + 0.2 * agreement + 0.2 * fc.quality.score) * fc.risk.mult[i] * (reg.panic ? 0.85 : 1);
+            double conflictMult = hz.swing() ? 1 : Math.max(0.7, 1 - 0.1 * fc.quality.conflicts.size());
+            double c = 100 * (0.35 * strength + 0.25 * edge + 0.2 * agreement + 0.2 * fc.quality.score) * fc.risk.mult[i] * (reg.panic ? 0.85 : 1) * conflictMult;
             if (m.info.tested() && !m.info.proven) c = Math.min(c, 30);
             if (!m.info.tested()) c = Math.min(c, 45);
             p.confidence = (int) Math.round(Math.max(0, Math.min(100, c)));
@@ -192,6 +208,8 @@ public final class IntelEngine {
             // ---- expected range
             double[] rg = m.expectedRange(sigma, reg.volBucket(), hz);
             p.range50 = rg[0]; p.range68 = rg[1]; p.range90 = rg[2];
+            double[] ol = m.outlook(p.pFinal, sigma, reg.volBucket(), hz);
+            p.pUp3 = ol[0]; p.pFlat = ol[1]; p.pDown3 = ol[2]; p.expReturn = ol[3]; p.expHigh = ol[4]; p.expLow = ol[5];
 
             // ---- trade gate: is the forecast strong enough to act on? (signals only — the app never trades)
             if (p.sideProb() < tradeThreshold) p.gate.add(String.format(Locale.US, "probability %.0f%% is below the %.0f%% threshold", p.sideProb() * 100, tradeThreshold * 100));
@@ -202,6 +220,10 @@ public final class IntelEngine {
             if (!Double.isNaN(p.range68) && p.range68 * 100 < 0.1) p.gate.add("expected move is too small to cover costs");
             if ("NEUTRAL".equals(p.direction)) p.gate.add("no side");
             p.tradeable = p.gate.isEmpty();
+            // signal quality: separate from the forecast itself — "67% bullish" is not "BUY"
+            if (p.tradeable && p.confidence >= 65 && (hz.swing() || fc.quality.conflicts.isEmpty())) { p.signalQuality = "HIGH"; p.signalReason = "passes every check"; }
+            else if (p.tradeable) { p.signalQuality = "MEDIUM"; p.signalReason = !fc.quality.conflicts.isEmpty() && !hz.swing() ? "sources disagree: " + fc.quality.conflicts.get(0) : "confidence is medium"; }
+            else { p.signalQuality = "LOW"; p.signalReason = p.gate.isEmpty() ? "" : p.gate.get(0); }
             if (!fc.risk.why[i].isEmpty()) p.gate.add(0, "event risk: " + fc.risk.why[i]);
 
             // ---- What changed? (vs the previous forecast today)
@@ -266,6 +288,11 @@ public final class IntelEngine {
         return FeatureEngine.NAMES[fi].toLowerCase(Locale.US) + (f[fi] > prevF[fi] ? " ↑" : " ↓");
     }
 
+    /**
+     * Data Quality + conflict engine. Inputs: share of each model group's inputs present (weighted by how much the models use it),
+     * freshness of every live source against how fresh it should be (nothing is "stale" while the market is closed), the news reader,
+     * and checks where sources disagree. Score = 0.6 × model inputs + 0.25 × live sources + 0.15 × evidence coverage.
+     */
     static Quality quality(double[] f, List<HorizonModel> models, LiveContext ctx) {
         Quality q = new Quality();
         double[] imp = new double[HorizonModel.G];
@@ -283,11 +310,66 @@ public final class IntelEngine {
             if (share < 0.5) q.issues.add(FeatureEngine.GROUP_NAMES[g] + ": only " + have + " of " + idx.length + " inputs available");
         }
         double a = wsum > 0 ? avail / wsum : 0;
-        double live = ctx == null ? 0.6 : ctx.evidenceAvailable ? Math.max(0, Math.min(1, ctx.evidenceCoverage)) : 0.5;
-        if (ctx != null && !ctx.evidenceAvailable) q.issues.add("Live option / futures evidence not loaded (log in to Kite)");
-        if (ctx != null) for (int i = 0; i < Math.min(4, ctx.dataIssues.size()); i++) q.issues.add(ctx.dataIssues.get(i));
-        q.score = 0.75 * a + 0.25 * live;
+        double src = 0.6, live = 0.5;
+        if (ctx != null) {
+            double ss = 0; int sn = 0;
+            for (Map.Entry<String, Long> e : ctx.sourceTime.entrySet()) {
+                double exp = expectedMin(e.getKey());
+                boolean liveSource = exp <= 30;
+                double age = (ctx.now - e.getValue()) / 60000.0;
+                double sc = !ctx.marketOpen && liveSource ? 1 : age <= exp ? 1 : Math.max(0, 1 - (age - exp) / (3 * exp));
+                q.sources.put(e.getKey(), sc);
+                ss += sc; sn++;
+                if (sc < 0.5) q.issues.add(e.getKey() + " is old (" + Math.round(age) + " min)");
+            }
+            double nr = ctx.newsReader.startsWith("Gemini") ? 1 : ctx.newsReader.isEmpty() ? 0.5 : 0.6;
+            q.sources.put("News reader (" + (ctx.newsReader.isEmpty() ? "none" : ctx.newsReader) + ")", nr);
+            ss += nr; sn++;
+            src = sn > 0 ? ss / sn : 0.6;
+            live = ctx.evidenceAvailable ? Math.max(0, Math.min(1, ctx.evidenceCoverage)) : 0.5;
+            if (!ctx.evidenceAvailable) q.issues.add("Live option / futures evidence not loaded (log in to Kite)");
+            for (int i = 0; i < Math.min(4, ctx.dataIssues.size()); i++) q.issues.add(ctx.dataIssues.get(i));
+            conflicts(q, f, ctx);
+        }
+        q.score = 0.6 * a + 0.25 * src + 0.15 * live;
         return q;
+    }
+
+    /** Freshness each live source should have, in minutes (daily sources: three days, to cover weekends). */
+    static double expectedMin(String source) {
+        String s = source.toLowerCase(Locale.US);
+        if (s.contains("fii") || s.contains("weights") || s.contains("daily")) return 3 * 1440;
+        if (s.contains("global")) return 30;
+        if (s.contains("news")) return 20;
+        if (s.contains("candles")) return 10;
+        if (s.contains("option")) return 4;
+        return 3;   // spot, futures quote, Bank Nifty, breadth, Kite prices
+    }
+
+    /** Checks where two sources tell different stories. */
+    static void conflicts(Quality q, double[] f, LiveContext ctx) {
+        // GIFT Nifty vs the overnight world: a gap one way while world markets went the other way
+        if (!ctx.marketOpen && !Double.isNaN(ctx.gift) && !Double.isNaN(ctx.futLast) && ctx.futLast > 0 && !Double.isNaN(f[52])) {
+            double gap = (ctx.gift / ctx.futLast - 1) * 100;
+            if (gap > 0.4 && f[52] < -0.8 || gap < -0.4 && f[52] > 0.8)
+                q.conflicts.add(String.format(Locale.US, "GIFT Nifty points %+.1f%% but world markets were %s overnight", gap, f[52] > 0 ? "up" : "down"));
+        }
+        // the Today-tab evidence vs the price models' own read of today (move since open, scaled)
+        if (ctx.evidenceAvailable && ctx.evidenceConf >= 50 && !Double.isNaN(f[2])) {
+            if (ctx.evidenceScore >= 30 && f[2] < -1.0 || ctx.evidenceScore <= -30 && f[2] > 1.0)
+                q.conflicts.add(String.format(Locale.US, "option/futures evidence is %s (%+.0f) while Nifty is %s today", ctx.evidenceScore > 0 ? "bullish" : "bearish",
+                        ctx.evidenceScore, f[2] > 0 ? "rising" : "falling"));
+        }
+        // bank vs index: Bank Nifty and Nifty far apart today
+        if (!Double.isNaN(f[13]) && Math.abs(f[13]) > 1.5) q.conflicts.add("Bank Nifty and Nifty are moving very differently today");
+        // stale daily flow data
+        if (!ctx.fiiDate.isEmpty() && !ctx.fiiDate.equals("typed")) {
+            try {
+                java.text.SimpleDateFormat fm = new java.text.SimpleDateFormat("dd-MMM-yyyy", Locale.US);
+                long age = (ctx.now - fm.parse(ctx.fiiDate).getTime()) / 86400000L;
+                if (age > 4) q.issues.add("FII / DII figures are " + age + " days old");
+            } catch (Exception ignored) { }
+        }
     }
 
     // ================================================================== state for "What changed?" and the event memory

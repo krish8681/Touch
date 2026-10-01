@@ -170,11 +170,31 @@ public class IntelTest {
         check("older news decays faster at short horizons", Math.abs(oe.impact[0]) < Math.abs(oe.impact[6]));
         NewsItem rum = item("Inflation fears grip markets", "Mint", -0.5, "HIGH", now - 6 * 3600000L, true, false);
         rum.speculative = true;
-        check("rumours count half", Math.abs(EventImpact.build(Collections.singletonList(rum), null, w, sec, now, "2026-10-01", 600).get(0).impact[3] * 2 - oe.impact[3]) < 1e-12);
+        EventImpact.Event re = EventImpact.build(Collections.singletonList(rum), null, w, sec, now, "2026-10-01", 600).get(0);
+        check("rumours count half and fade fast", re.persistence.equals("FLOW") && Math.abs(re.impact[3]) < 0.5 * Math.abs(oe.impact[3]));
         EventImpact.Event big = EventImpact.build(Collections.singletonList(item("HDFC Bank results beat estimates", "Mint", 0.6, "HIGH", now, true, false)), null, w, sec, now, "2026-10-01", 600).get(0);
         EventImpact.Event small = EventImpact.build(Collections.singletonList(item("Trent results beat estimates", "Mint", 0.6, "HIGH", now, true, false)), null, w, sec, now, "2026-10-01", 600).get(0);
         check("company news weighted by Nifty weight", big.exposure == 1 && small.exposure < 0.2 && big.constituents.contains("HDFCBANK"));
         check("news score bounded", Math.abs(EventImpact.score(ev)[2]) < 1);
+
+        // ---- 9b. persistence classes + company → sector → Nifty chain
+        w.put("ICICIBANK", 0.08); sec.put("ICICIBANK", "Financials");
+        EventImpact.Event rs = EventImpact.build(Collections.singletonList(item("HDFC Bank Q2 results: profit beats estimates", "Mint", 0.6, "HIGH", now - 4 * 3600000L, true, false)), null, w, sec, now, "2026-10-01", 600).get(0);
+        EventImpact.Event opi = EventImpact.build(Collections.singletonList(item("Broker says HDFC Bank target price raised", "Mint", 0.6, "HIGH", now - 4 * 3600000L, true, false)), null, w, sec, now, "2026-10-01", 600).get(0);
+        EventImpact.Event blk = EventImpact.build(Collections.singletonList(item("Block deal in HDFC Bank shares", "Mint", 0.6, "HIGH", now - 4 * 3600000L, true, false)), null, w, sec, now, "2026-10-01", 600).get(0);
+        check("persistence classes: results / opinion / block deal", rs.persistence.equals("FUNDAMENTAL") && opi.persistence.equals("OPINION") && blk.persistence.equals("FLOW"));
+        check("lasting news keeps more of its impact after 4 hours", Math.abs(rs.impact[2]) > Math.abs(opi.impact[2]) && Math.abs(opi.impact[2]) > Math.abs(blk.impact[2]));
+        check("company → sector → Nifty chain shown", rs.chain.contains("HDFCBANK") && rs.chain.contains("Financials") && rs.chain.contains("peers 8%"));
+
+        // ---- 9c. more sources: official central banks + company searches
+        boolean fed = false;
+        for (String[] fd : com.krish.niftydirection.data.News.FEEDS) if (fd[0].startsWith("Fed (official)")) fed = true;
+        Map<String, Double> wt = new LinkedHashMap<>();
+        String[] syms = {"HDFCBANK", "RELIANCE", "ICICIBANK", "BHARTIARTL", "INFY", "TCS", "SBIN", "LT", "AXISBANK", "ITC", "KOTAKBANK", "BAJFINANCE", "HINDUNILVR", "MARUTI", "M&M", "SUNPHARMA"};
+        for (int i = 0; i < syms.length; i++) wt.put(syms[i], 0.12 - i * 0.005);
+        List<String[]> cf = com.krish.niftydirection.data.News.companyFeeds(wt);
+        check("official central-bank feeds + 3 company searches for the top 15", fed && cf.size() == 3 && cf.get(0)[1].toLowerCase().contains("%22hdfc+bank%22") && !cf.get(2)[1].contains("SUNPHARMA"));
+        check("Fed is a tier-1 source", EventImpact.tier("Fed (official)", false) == 1 && EventImpact.tier("Bank of Japan (official)", false) == 1);
 
         // ---- 10. surprise + event calendar
         List<EventCalendarRisk.Surprise> su = EventCalendarRisk.surprises("2026-10-01 16:00 India CPI | exp=4.5 | act=4.3 | good=down\n2026-10-02 random line");
@@ -218,6 +238,35 @@ public class IntelTest {
         ImpactGraph.Edge br = null;
         for (ImpactGraph.Edge e : g) if (e.from.equals(Markets.BRENT) && e.to.equals(Markets.USDINR)) br = e;
         check("impact graph: Brent → rupee learnt and significant", br != null && br.corr > 0.5 && br.significant());
+
+        // ---- 12b. cross-market chains: learnt betas, implied moves, live paths
+        List<CrossMarket.Path> paths = CrossMarket.paths(sig, sig.days.get(400).date);
+        CrossMarket.Path oil = paths.get(0);
+        System.out.println(oil.describe());
+        check("oil chain learns Brent → rupee beta ≈ 0.3", Math.abs(oil.beta[0] - 0.3) < 0.08 && oil.t[0] > 2);
+        check("chain inputs present in the feature vector", !Double.isNaN(f200[70]) && !Double.isNaN(f200[73]) && FeatureEngine.groupOf(70) == 9);
+
+        // ---- 12c. three-way outlook, expected return, typical high/low
+        double[] ol = m1.outlook(0.62, 0.01, 1, h1);
+        System.out.println("outlook 1h @62%: " + Arrays.toString(ol));
+        check("three-way probabilities add up", Math.abs(ol[0] + ol[1] + ol[2] - 1) < 1e-12 && ol[1] > 0.05 && ol[1] < 0.5);
+        check("expected return follows the side; high above, low below", ol[3] > 0 && ol[4] > 0 && ol[5] < 0 && m1.outlook(0.38, 0.01, 1, h1)[3] < 0);
+        check("forecast carries the outlook", !Double.isNaN(p1.pFlat) && !Double.isNaN(p1.expHigh) && !p1.signalQuality.isEmpty());
+
+        // ---- 12d. data quality + conflicts + signal quality
+        IntelEngine.LiveContext lc = new IntelEngine.LiveContext();
+        lc.evidenceAvailable = true; lc.evidenceScore = 60; lc.evidenceConf = 80; lc.evidenceCoverage = 1; lc.marketOpen = true; lc.newsReader = "keywords";
+        lc.today = sig.days.get(dl).date; lc.minute = 11 * 60;
+        lc.sourceTime.put("Nifty spot", lc.now - 60000L); lc.sourceTime.put("Option chain", lc.now - 30 * 60000L);
+        History down = ForecastTest.truncated(sig, dl, kl);
+        History.Day dd0 = down.days.get(dl);
+        for (int i = 0; i < kl; i++) { float fac = (float) (1 - 0.0012 * (i + 1)); dd0.c[i] = dd0.o[0] * fac; dd0.h[i] = dd0.c[i] * 1.0002f; dd0.l[i] = dd0.c[i] * 0.9998f; }
+        IntelEngine.Forecast fq = IntelEngine.forecast(Collections.singletonList(m1), down, dl, kl, false, lc, null, null, 0.62);
+        System.out.println("quality " + fq.quality.score + " sources " + fq.quality.sources + " conflicts " + fq.quality.conflicts);
+        check("stale option chain flagged, live spot fresh", fq.quality.sources.get("Option chain") < 0.5 && fq.quality.sources.get("Nifty spot") == 1);
+        check("bullish evidence vs a falling Nifty = conflict", !fq.quality.conflicts.isEmpty() && fq.quality.conflicts.get(0).contains("bullish"));
+        IntelEngine.HPred pq = fq.preds.get(2);
+        check("signal quality with a reason", ("LOW".equals(pq.signalQuality) && !pq.signalReason.isEmpty()) || !"LOW".equals(pq.signalQuality));
 
         // ---- 13. expected range covers about 68% of fresh moves
         int in = 0, tot = 0;

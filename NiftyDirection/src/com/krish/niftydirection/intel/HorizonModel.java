@@ -13,7 +13,7 @@ import java.util.Map;
  * the calibration map, the expected-range table and the walk-forward test results.
  */
 public final class HorizonModel {
-    public static final int VERSION = 1;
+    public static final int VERSION = 2;   // 2: cross-market chain group, three-way outlook, excursions
     public static final int G = FeatureEngine.GROUPS.length;
 
     public String id;
@@ -40,6 +40,9 @@ public final class HorizonModel {
         public Map<String, double[]> byRegime = new LinkedHashMap<>();
         /** |move| / horizon volatility quantiles {50%, 68%, 90%} per volatility bucket {low, normal, high}. */
         public double[][] range = new double[3][];
+        /** Per volatility bucket: share of moves smaller than FLAT_Z × horizon volatility ("flat"), mean |move| / horizon vol,
+         *  and the median highest-high / lowest-low excursion before the target, in horizon-vol units. */
+        public double[] flat = new double[3], meanAbs = new double[3], excUp = new double[3], excDn = new double[3];
         /** Learnt share of each feature group in the meta model (adds to 100). */
         public double[] importance = new double[G];
         public boolean tested() { return testDays > 0 && !Double.isNaN(brier); }
@@ -143,7 +146,7 @@ public final class HorizonModel {
         JSONArray rg = new JSONArray();
         for (double[] q : i.range) rg.put(q == null ? new JSONArray() : arr(q));
         ij.put("range", rg);
-        ij.put("importance", arr(i.importance));
+        ij.put("importance", arr(i.importance)).put("flat", arr(i.flat)).put("meanAbs", arr(i.meanAbs)).put("excUp", arr(i.excUp)).put("excDn", arr(i.excDn));
         return j.put("info", ij);
     }
 
@@ -172,8 +175,37 @@ public final class HorizonModel {
         for (int b = 0; rg != null && b < Math.min(3, rg.length()); b++) { double[] q = darr(rg.getJSONArray(b)); i.range[b] = q.length == 3 ? q : null; }
         JSONArray im = ij.optJSONArray("importance");
         if (im != null && im.length() == G) i.importance = darr(im);
+        i.flat = arr3(ij, "flat"); i.meanAbs = arr3(ij, "meanAbs"); i.excUp = arr3(ij, "excUp"); i.excDn = arr3(ij, "excDn");
         return m;
     }
+
+    static double[] arr3(JSONObject j, String k) throws Exception {
+        JSONArray a = j.optJSONArray(k);
+        return a != null && a.length() == 3 ? darr(a) : new double[]{Double.NaN, Double.NaN, Double.NaN};
+    }
+
+    /** Moves smaller than this many horizon-volatilities count as "flat" (about one in five). */
+    public static final double FLAT_Z = 0.25;
+
+    /**
+     * Three-way outlook from P(up) and the flat share of this volatility bucket (direction and size treated as independent):
+     * {P(up), P(flat), P(down), expected return (fraction), typical high, typical low (fractions vs price)}.
+     * The high/low excursions are tilted toward the forecast side: at P(up) 0.7 the up-excursion grows ×1.2 and the down one shrinks ×0.8.
+     */
+    public double[] outlook(double pUp, double sigmaDaily, int bucket, Horizon hz) {
+        double sh = sigmaDaily * Math.sqrt(hz.minutes / 375.0);
+        double fl = pick(info.flat, bucket), ma = pick(info.meanAbs, bucket), eu = pick(info.excUp, bucket), ed = pick(info.excDn, bucket);
+        double[] o = new double[6];
+        java.util.Arrays.fill(o, Double.NaN);
+        if (Double.isNaN(pUp)) return o;
+        if (!Double.isNaN(fl)) { o[1] = fl; o[0] = pUp * (1 - fl); o[2] = (1 - pUp) * (1 - fl); }
+        if (!Double.isNaN(ma) && !Double.isNaN(sh)) o[3] = (2 * pUp - 1) * ma * sh;
+        if (!Double.isNaN(eu) && !Double.isNaN(sh)) o[4] = Math.exp(eu * sh * (0.5 + pUp)) - 1;
+        if (!Double.isNaN(ed) && !Double.isNaN(sh)) o[5] = Math.exp(-ed * sh * (1.5 - pUp)) - 1;
+        return o;
+    }
+
+    static double pick(double[] v, int b) { return v == null || v.length < 3 ? Double.NaN : !Double.isNaN(v[b]) ? v[b] : v[1]; }
 
     static JSONObject lr(LogReg l) throws Exception { return new JSONObject().put("w", arr(l.w)).put("mean", arr(l.mean)).put("sd", arr(l.sd)); }
 

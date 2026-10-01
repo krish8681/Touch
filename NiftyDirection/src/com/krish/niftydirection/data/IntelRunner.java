@@ -110,6 +110,12 @@ public final class IntelRunner {
 
     public static boolean hasModels(File base) { return !models(base).isEmpty(); }
 
+    /** Any model file, even from an older version that must be retrained. */
+    public static boolean hasModelFiles(File base) {
+        File[] fs = dir(base).listFiles((x, n) -> n.startsWith("model_"));
+        return fs != null && fs.length > 0;
+    }
+
     public static boolean needsTraining(File base) {
         List<HorizonModel> m = models(base);
         if (m.size() < Horizon.ALL.length) return true;
@@ -137,6 +143,10 @@ public final class IntelRunner {
         c.userEvents = userEvents == null ? "" : userEvents;
         if (s == null) return c;
         c.news = s.news; c.events = s.events; c.weights = s.weights; c.sectorOf = s.sectorOf; c.stocks = s.stocks;
+        c.sourceTime = s.sourceTime; c.marketOpen = s.live; c.newsReader = s.newsReader == null ? "" : s.newsReader; c.fiiDate = s.fiiDate == null ? "" : s.fiiDate;
+        c.gift = s.giftNifty;
+        if (s.nifty != null && s.nifty.ok()) { c.niftyLast = s.nifty.last; c.niftyPrevClose = s.nifty.prevClose; }
+        if (s.fut != null && s.fut.ok()) c.futLast = s.fut.last;
         if (r != null && s.nifty != null && s.nifty.ok() && System.currentTimeMillis() - s.time < 30 * 60_000L) {
             c.evidenceAvailable = true;
             c.evidenceScore = r.score; c.evidenceConf = r.confidence; c.evidenceCoverage = r.coverage;
