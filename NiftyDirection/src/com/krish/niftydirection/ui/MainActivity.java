@@ -21,6 +21,8 @@ import com.krish.niftydirection.data.Collector;
 import com.krish.niftydirection.data.ForecastRunner;
 import com.krish.niftydirection.data.Kite;
 import com.krish.niftydirection.data.HistoryLoader;
+import com.krish.niftydirection.data.IntelRunner;
+import com.krish.niftydirection.intel.IntelEngine;
 import com.krish.niftydirection.data.Prefs;
 import com.krish.niftydirection.data.Store;
 import com.krish.niftydirection.service.WatchService;
@@ -28,7 +30,7 @@ import com.krish.niftydirection.service.WatchService;
 import java.util.Calendar;
 
 public class MainActivity extends Activity implements Brain.Listener {
-    static final String[] TABS = {"Forecast", "Today", "Evidence", "Options", "Market", "News", "Record"};
+    static final String[] TABS = {"AI", "Today", "Evidence", "Options", "Market", "News", "Record"};
     static final String[] ICONS = {"↗", "◉", "≡", "⊞", "◍", "✎", "✓"};
 
     private Prefs prefs;
@@ -143,7 +145,7 @@ public class MainActivity extends Activity implements Brain.Listener {
 
     // ================================================================== forecast (1H / 3H / 6H / next day)
 
-    private final ForecastPage.Actions fcActions = new ForecastPage.Actions() {
+    private final IntelPage.Actions fcActions = new IntelPage.Actions() {
         @Override public void update() { fcUpdate(); }
         @Override public void train() { fcTrain(); }
     };
@@ -152,11 +154,12 @@ public class MainActivity extends Activity implements Brain.Listener {
     private void autoForecast() {
         if (fcWorking != null || !prefs.hasValidSession()) return;
         java.io.File dir = getFilesDir();
-        if (!ForecastRunner.hasModelFiles(dir)) return;   // first training is the user's choice (big download)
+        boolean has = IntelRunner.hasModels(dir);
         boolean market = inSession();
-        if (!market && !fcTriedTrain && ForecastRunner.needsTraining(dir)) { fcTriedTrain = true; fcTrain(); return; }
-        if (ForecastRunner.models(dir).isEmpty()) return;
-        ForecastRunner.Live l = ForecastRunner.last;
+        // first training is the user's choice (big download); after that, weekly retrains (and model-version upgrades) run outside market hours
+        if (!market && !fcTriedTrain && (has || ForecastRunner.hasModelFiles(dir)) && IntelRunner.needsTraining(dir)) { fcTriedTrain = true; fcTrain(); return; }
+        if (!has) return;
+        IntelEngine.Forecast l = IntelRunner.last;
         long age = l == null ? Long.MAX_VALUE : System.currentTimeMillis() - l.at;
         boolean wantPreOpen = l != null && !l.preOpen && !Double.isNaN(expectedOpen());   // GIFT just became available
         if (wantPreOpen || age > (market ? 5 : preOpenWindow() ? 15 : 60) * 60_000L) fcUpdate();
@@ -179,8 +182,9 @@ public class MainActivity extends Activity implements Brain.Listener {
                 String today = Collector.day(c.getTime());
                 int minute = c.get(Calendar.HOUR_OF_DAY) * 60 + c.get(Calendar.MINUTE);
                 HistoryLoader.Progress pr = (w, d, t) -> { fcWorking = (train ? "Training: " : "Forecast: ") + w + (t > 1 ? " (" + d + "/" + t + ")" : ""); ui.post(this::renderIfForecast); };
-                if (train) ForecastRunner.train(kite, dir, today, null, pr);
-                ForecastRunner.live(kite, dir, today, minute, expectedOpen(), null, pr);
+                if (train) IntelRunner.train(kite, dir, today, null, pr);
+                double thr = Math.max(0.5, Math.min(0.95, prefs.num("trade_threshold", 62) / 100.0));
+                IntelRunner.live(kite, dir, today, minute, expectedOpen(), liveContext(), thr, null, pr);
             } catch (Kite.TokenExpired e) {
                 prefs.clearSession();
                 err = "Kite login expired — log in again.";
@@ -191,6 +195,11 @@ public class MainActivity extends Activity implements Brain.Listener {
             fcWorking = null;
             ui.post(() -> { updateLogin(); if (e2 != null) updateStatus(e2); renderIfForecast(); });
         }, "forecast").start();
+    }
+
+    private IntelEngine.LiveContext liveContext() {
+        Brain.Output o = Brain.last;
+        return IntelRunner.context(o == null ? null : o.snap, o == null ? null : o.result, prefs.str("user_events", ""));
     }
 
     /** Before 9:15 on a weekday: the open GIFT Nifty points to (Nifty × GIFT ÷ near futures). NaN otherwise. */
@@ -276,7 +285,7 @@ public class MainActivity extends Activity implements Brain.Listener {
         page.removeAllViews();
         Brain.Output o = Brain.last;
         if (tab == 0) {
-            try { page.addView(ForecastPage.build(this, getFilesDir(), fcWorking, prefs.hasValidSession(), fcActions)); }
+            try { page.addView(IntelPage.build(this, getFilesDir(), fcWorking, prefs.hasValidSession(), fcActions)); }
             catch (Throwable t) { page.addView(Pages.empty(this, "Could not draw this page: " + t)); }
             return;
         }

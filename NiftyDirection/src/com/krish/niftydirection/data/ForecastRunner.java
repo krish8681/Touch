@@ -75,7 +75,8 @@ public class ForecastRunner {
         File fd = new File(dir, "forecast");
         fd.mkdirs();
         File f = new File(fd, "history.bin.gz"), stamp = new File(fd, "history_date.txt");
-        if (f.exists() && stamp.exists() && today.equals(read(stamp).trim())) {
+        String stampText = today + "|" + GLOBAL.length;   // a new market list rebuilds the cache the same day
+        if (f.exists() && stamp.exists() && stampText.equals(read(stamp).trim())) {
             try (DataInputStream in = new DataInputStream(new BufferedInputStream(new GZIPInputStream(new FileInputStream(f))))) { return History.read(in); }
             catch (Exception ignored) { }
         }
@@ -129,7 +130,7 @@ public class ForecastRunner {
             if (m != null && m.size() > 100) h.global.put(g[0], m);
         }
         try (DataOutputStream o = new DataOutputStream(new BufferedOutputStream(new GZIPOutputStream(new FileOutputStream(f))))) { h.write(o); }
-        if (HistoryLoader.settled()) HistoryLoader.write(stamp, today);   // before 6:00 IST: rebuild later with settled global closes
+        if (HistoryLoader.settled()) HistoryLoader.write(stamp, stampText);   // before 6:00 IST: rebuild later with settled global closes
         return h;
     }
 
@@ -260,27 +261,8 @@ public class ForecastRunner {
         History base = history(kite, dir, today, cancel, pr);
         History h = base.copy();
         Live out = new Live();
-        if (minute >= History.OPEN_MIN + 5) {
-            pr.step("Today's bars…", 0, 1);
-            LinkedHashMap<String, Long> tok = tokens(kite);
-            History.Day d = new History.Day(today);
-            int cut = Math.min(minute, 15 * 60 + 30);
-            for (Map.Entry<String, Long> e : tok.entrySet()) {
-                if (cancel != null && cancel.get()) throw new HistoryLoader.CancelledException();
-                List<Candle> cs = kite.historical(e.getValue(), "5minute", today + " 09:00:00", today + " 15:35:00", false);
-                for (Candle c : cs) {
-                    if (!today.equals(c.date) || c.minute + 5 > cut) continue;   // only bars that have closed
-                    int s = History.slot(c.minute);
-                    if (s < 0 || s >= History.BARS) continue;
-                    if (e.getKey().equals("NIFTY")) { d.o[s] = (float) c.o; d.h[s] = (float) c.h; d.l[s] = (float) c.l; d.c[s] = (float) c.c; }
-                    else d.aux(e.getKey())[s] = (float) c.c;
-                }
-                if (e.getKey().equals("NIFTY") && Double.isNaN(History.last(d.c, History.BARS))) break;   // no session today
-            }
-            int last = -1;
-            for (int i = 0; i < History.BARS; i++) if (!Float.isNaN(d.c[i])) last = i;
-            if (last >= 0) { d.bars = last + 1; h.days.add(d); out.intraday = true; }
-        }
+        History.Day td = todayBars(kite, today, minute, cancel, pr);
+        if (td != null) { h.days.add(td); out.intraday = true; }
         if (!out.intraday && !Double.isNaN(expectedOpen) && expectedOpen > 0 && minute < History.OPEN_MIN + 15
                 && !h.days.isEmpty() && h.days.get(h.days.size() - 1).date.compareTo(today) < 0) {
             List<Forecaster.Model> om = models(dir, true);
@@ -311,6 +293,32 @@ public class ForecastRunner {
         for (Forecaster.Model mo : models) out.predictions.add(Forecaster.predict(mo, h, di, k));
         last = out;
         return out;
+    }
+
+    /** Today's finished 5-minute bars of Nifty and the aux series, or null before the first bar / on a holiday. */
+    public static History.Day todayBars(Kite kite, String today, int minute, AtomicBoolean cancel, HistoryLoader.Progress pr) throws Exception {
+        if (minute < History.OPEN_MIN + 5) return null;
+        pr.step("Today's bars…", 0, 1);
+        LinkedHashMap<String, Long> tok = tokens(kite);
+        History.Day d = new History.Day(today);
+        int cut = Math.min(minute, 15 * 60 + 30);
+        for (Map.Entry<String, Long> e : tok.entrySet()) {
+            if (cancel != null && cancel.get()) throw new HistoryLoader.CancelledException();
+            List<Candle> cs = kite.historical(e.getValue(), "5minute", today + " 09:00:00", today + " 15:35:00", false);
+            for (Candle c : cs) {
+                if (!today.equals(c.date) || c.minute + 5 > cut) continue;   // only bars that have closed
+                int s = History.slot(c.minute);
+                if (s < 0 || s >= History.BARS) continue;
+                if (e.getKey().equals("NIFTY")) { d.o[s] = (float) c.o; d.h[s] = (float) c.h; d.l[s] = (float) c.l; d.c[s] = (float) c.c; }
+                else d.aux(e.getKey())[s] = (float) c.c;
+            }
+            if (e.getKey().equals("NIFTY") && Double.isNaN(History.last(d.c, History.BARS))) break;   // no session today
+        }
+        int last = -1;
+        for (int i = 0; i < History.BARS; i++) if (!Float.isNaN(d.c[i])) last = i;
+        if (last < 0) return null;
+        d.bars = last + 1;
+        return d;
     }
 
     static String read(File f) throws Exception { return new String(java.nio.file.Files.readAllBytes(f.toPath()), StandardCharsets.UTF_8); }

@@ -1,0 +1,42 @@
+import com.krish.niftydirection.data.*;
+import com.krish.niftydirection.intel.*;
+import com.krish.niftydirection.model.*;
+import java.io.File;
+import java.util.concurrent.atomic.AtomicBoolean;
+/** End-to-end against the mock Kite + Yahoo server: download history, train 7 horizons, live forecast, log, what changed, pre-open. */
+public class IntelRunnerTest {
+    public static void main(String[] a) throws Exception {
+        Kite.ROOT = "http://127.0.0.1:" + a[0];
+        HistoryLoader.YAHOO = new String[]{"http://127.0.0.1:" + a[0], "http://127.0.0.1:" + a[0]};
+        File dir = new File(a[2]); dir.mkdirs();
+        Kite k = new Kite("KEY", "TOKEN");
+        long t0 = System.currentTimeMillis();
+        String rep = IntelRunner.train(k, dir, a[1], new AtomicBoolean(), (w, d, n) -> {});
+        System.out.println(rep);
+        boolean ok = IntelRunner.models(dir).size() == 7 && !IntelRunner.needsTraining(dir) && !IntelRunner.graph(dir).isEmpty();
+        Snapshot s = new Snapshot();
+        s.time = System.currentTimeMillis();
+        NewsItem n = new NewsItem();
+        n.title = "RBI unexpectedly tightens liquidity"; n.source = "RBI (official)"; n.official = true; n.read = true; n.lead = true;
+        n.niftyImpact = -0.7; n.severity = "HIGH"; n.time = System.currentTimeMillis() - 20 * 60000; n.verification = "VERIFIED";
+        s.news.add(n);
+        IntelEngine.LiveContext ctx = IntelRunner.context(s, null, "");
+        IntelEngine.Forecast fc = IntelRunner.live(k, dir, a[1], 11 * 60 + 2, Double.NaN, ctx, 0.62, new AtomicBoolean(), (w, d, x) -> {});
+        int filled = 0;
+        for (IntelEngine.HPred p : fc.preds) { if (p.has()) filled++; System.out.printf("%-4s %-8s P(up) %.3f conf %3d %-6s range68 ±%.2f%% %s%n", p.hz.id, p.direction, p.pFinal, p.confidence, p.confLabel, p.range68 * 100, p.tradeable ? "TRADEABLE" : "no trade: " + p.gate); }
+        System.out.println("regime " + fc.regime.label() + " · " + fc.regime.detail() + " · quality " + fc.quality.score + " · events " + fc.events.size() + " · memory " + fc.memory);
+        ok &= fc.intraday && filled == 7 && fc.events.size() == 1 && fc.events.get(0).tier == 1 && fc.news[2] < 0 && !fc.memory.isEmpty();
+        File logF = new File(dir, "intel/log_" + a[1].substring(0, 7) + ".jsonl");
+        ok &= logF.exists() && java.nio.file.Files.readAllLines(logF.toPath()).size() == 7;
+        // a second update minutes later: no extra log lines (30-min spacing), state used for What changed
+        IntelEngine.Forecast fc2 = IntelRunner.live(k, dir, a[1], 11 * 60 + 7, Double.NaN, ctx, 0.62, new AtomicBoolean(), (w, d, x) -> {});
+        ok &= java.nio.file.Files.readAllLines(logF.toPath()).size() == 7 && fc2.preds.size() == 7;
+        // pre-open, from a GIFT-implied open
+        IntelEngine.Forecast po = IntelRunner.live(k, dir, a[1], 8 * 60, 25000, ctx, 0.62, new AtomicBoolean(), (w, d, x) -> {});
+        System.out.println("pre-open: " + po.asOf + " · 1D P(up) " + po.preds.get(5).pFinal);
+        ok &= po.preOpen && po.k == 0 && po.preds.get(5).has();
+        System.out.println("took " + (System.currentTimeMillis() - t0) / 1000 + "s");
+        System.out.println(ok ? "1 passed, 0 failed" : "0 passed, 1 failed");
+        if (!ok) System.exit(1);
+    }
+}

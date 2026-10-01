@@ -35,8 +35,8 @@ public class HistoryLoader {
     public static class CancelledException extends Exception { CancelledException() { super("Cancelled"); } }
 
     static final String NIFTY = "NSE:NIFTY 50", BANK = "NSE:NIFTY BANK", VIX = "NSE:INDIA VIX";
-    static final String[][] GLOBAL = {{"S&P 500", "^GSPC"}, {"Nasdaq", "^IXIC"}, {"Nikkei", "^N225"}, {"Hang Seng", "^HSI"},
-            {"Brent crude", "BZ=F"}, {"USD/INR", "INR=X"}, {"US 10Y yield", "^TNX"}, {"Dollar index", "DX-Y.NYB"}};
+    /** World markets, bonds, currencies and commodities (see intel.Markets). */
+    static final String[][] GLOBAL = com.krish.niftydirection.intel.Markets.YAHOO;
 
     private final Kite kite;
     private final File cache;
@@ -139,6 +139,9 @@ public class HistoryLoader {
     /** Before 6:00 IST yesterday's US, Brent and USD/INR sessions may still be trading, so their bars are not closes yet. */
     static final int SETTLED_MIN = 6 * 60;
 
+    /** Yahoo chart hosts (not final so tests can point them at a mock server). */
+    public static String[] YAHOO = {"https://query1.finance.yahoo.com", "https://query2.finance.yahoo.com"};
+
     static boolean settled() {
         Calendar c = Calendar.getInstance(Collector.IST);
         if (Collector.nowOverride > 0) c.setTimeInMillis(Collector.nowOverride);
@@ -160,8 +163,8 @@ public class HistoryLoader {
             else {
                 Map<String, String> h = new HashMap<>();
                 h.put("User-Agent", Http.BROWSER_UA);
-                try { body = Http.get("https://query1.finance.yahoo.com/v8/finance/chart/" + Http.enc(symbol) + "?range=10y&interval=1d", h, 20000); }
-                catch (Exception e) { body = Http.get("https://query2.finance.yahoo.com/v8/finance/chart/" + Http.enc(symbol) + "?range=10y&interval=1d", h, 20000); }
+                try { body = Http.get(YAHOO[0] + "/v8/finance/chart/" + Http.enc(symbol) + "?range=10y&interval=1d", h, 20000); }
+                catch (Exception e) { body = Http.get(YAHOO[1] + "/v8/finance/chart/" + Http.enc(symbol) + "?range=10y&interval=1d", h, 20000); }
                 if (settled) {
                     f.getParentFile().mkdirs();
                     File[] old = f.getParentFile().listFiles((dd, n) -> n.startsWith("y_" + safe + "_"));

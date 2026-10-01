@@ -6,6 +6,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 public class ForecastRunnerTest {
     public static void main(String[] a) throws Exception {
         Kite.ROOT = "http://127.0.0.1:" + a[0];
+        HistoryLoader.YAHOO = new String[]{"http://127.0.0.1:" + a[0], "http://127.0.0.1:" + a[0]};   // no internet in tests
         File dir = new File(a[2]); dir.mkdirs();
         ForecastRunner.TrainOutput t = ForecastRunner.train(new Kite("KEY", "TOKEN"), dir, a[1], new AtomicBoolean(), (w, d, n) -> {});
         System.out.println(t.text);

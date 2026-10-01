@@ -100,7 +100,10 @@ public class SettingsActivity extends Activity {
             re.setOnClickListener(v -> { pin.delete(); re.setEnabled(false); re.setText("Will re-pick on the next update"); });
             add(re);
         }
-        section("📅  My events", "One per line: yyyy-mm-dd name. They raise event risk on that day. RBI, Fed, CPI, Budget and expiries are built in.");
+        section("📅  My events", "One per line: yyyy-mm-dd [HH:MM] name. They raise event risk on that day (with a time: 30 minutes before is PRE-EVENT). "
+                + "RBI, Fed, CPI, Budget and expiries are built in.\n"
+                + "Surprise engine: add | exp=… and, once released, | act=… — e.g. 2026-10-12 16:00 India CPI | exp=4.5 | act=4.3 | good=down "
+                + "(good=down: a lower number is good for shares). Actual − expected becomes a primary-source event.");
         multi("user_events", "e.g. 2026-10-14 Big bank results");
 
         section("⏱  Updates", null);
@@ -115,6 +118,10 @@ public class SettingsActivity extends Activity {
         section("🧠  Learning", "Weights can move a little toward the evidence that has been right. Protected: refitted weekly from past days only, "
                 + "last 20 days held back as a test, 100 readings needed per factor, and new weights are used only if they pass the test.");
         check("autotune", "Let the record adjust weights", true);
+
+        section("🎯  Trade gate", "The forecast and the decision to act are separate. A horizon shows NO TRADE unless its probability reaches this level, "
+                + "it has a proven edge, confidence is at least medium, data quality is fine and no event is minutes away. Signals only — the app never trades.");
+        text("trade_threshold", "Probability needed before a forecast counts as strong enough (55–90, %)", "62", NUM);
 
         section("ℹ️  How to read the app", "Direction Score 0–100: 50 = no side. A side starts when the signed score passes ±25 and ends when it falls back through ±15.\n"
                 + "Labels: BULLISH, BEARISH, RANGE (real range signs), NO EDGE (weak or mixed evidence), CONFLICT (positioning and price disagree).\n"

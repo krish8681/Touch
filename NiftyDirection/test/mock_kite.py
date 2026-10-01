@@ -76,7 +76,7 @@ def generic(token, interval, frm, to, oi):
         return None
     base = 25000 if token in (256265, 9001, 9002, 9003) else 55000 if token == 260105 else 13 if token == 264969 else 1000 if token < 500 else 100
     out = []
-    days = [d for d in bdays(f, t) if d < TODAY or interval == "day"]
+    days = [d for d in bdays(f, t) if d <= TODAY]   # today: 5-minute bars up to 10:55 (a live morning)
     for d in days:
         r = random.Random(hash((token, d)) & 0xffffffff)
         rd = random.Random(int(d.replace("-", "")))          # market-wide direction for the day
@@ -88,7 +88,7 @@ def generic(token, interval, frm, to, oi):
             out.append(row)
         else:
             p = base * (1 + (int(d.replace("-", "")) % 97 - 48) / 2000.0)
-            for n in range(75):
+            for n in range(21 if d == TODAY else 75):
                 m = 9 * 60 + 15 + 5 * n
                 c = p * (1 + drift + r.gauss(0, 0.0006))
                 out.append(["%sT%02d:%02d:00+0530" % (d, m // 60, m % 60), p, max(p, c) * 1.0003, min(p, c) * 0.9997, c, 10000])
@@ -135,6 +135,19 @@ class H(BaseHTTPRequestHandler):
                 {"name": "models/gemini-3.8-flash-lite", "supportedGenerationMethods": ["generateContent"]},
                 {"name": "models/gemini-3.9-flash-image", "supportedGenerationMethods": ["generateContent"]},
                 {"name": "models/text-embedding-9", "supportedGenerationMethods": ["embedContent"]}]}))
+        if u.path.startswith("/v8/finance/chart/"):   # Yahoo daily closes: a seeded random walk per symbol, ~4 years
+            import random, zlib
+            sym = u.path.rsplit("/", 1)[1]
+            rnd = random.Random(zlib.crc32(sym.encode()))
+            lvl = 4.0 if sym in ("%5ETNX", "%5EIRX", "%5EFVX", "%5ETYX", "^TNX", "^IRX", "^FVX", "^TYX") else 100.0
+            ts, cl = [], []
+            x = d - datetime.timedelta(days=1500)
+            while x < d:
+                if x.weekday() < 5:
+                    lvl *= math.exp(rnd.gauss(0, 0.01))
+                    ts.append(int(datetime.datetime(x.year, x.month, x.day, 8, 0, tzinfo=datetime.timezone.utc).timestamp())); cl.append(round(lvl, 4))
+                x += datetime.timedelta(days=1)
+            return self.send(200, json.dumps({"chart": {"result": [{"timestamp": ts, "indicators": {"quote": [{"close": cl}]}}]}}))
         if self.headers.get("Authorization") != "token KEY:TOKEN":
             return self.send(403, json.dumps({"status": "error", "error_type": "TokenException", "message": "Incorrect api_key or access_token."}))
         if u.path == "/quote":

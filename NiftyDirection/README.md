@@ -1,4 +1,4 @@
-# Nifty Direction Pure 1.2 (Android)
+# Nifty Direction Pure 2.0 (Android)
 
 A **Nifty 50 direction engine** on Zerodha Kite. It does not guess "up or down". It **classifies** the market the way desks do:
 which side the evidence favours right now, how strongly, and how much of the evidence agrees.
@@ -14,6 +14,7 @@ which side the evidence favours right now, how strongly, and how much of the evi
 ## What you see
 | Page | What it shows |
 |---|---|
+| ↗ AI | NIFTY AI: regime, current signal, 7 horizons (direction, probability, confidence, expected range, trade gate, Why?, What changed?), top factors, event risk, event memory, constituent movers, data quality, track record (walk-forward + live), prediction matrix, impact graph |
 | ◉ Today | Direction Score gauge, regime (BULLISH / BEARISH / RANGE / NO EDGE / CONFLICT), transition ("Bullish → weakening"), confidence, event-risk and volatility-regime pills, what to do next, support + resistance, live option and futures flow, momentum state, the three scores (structure / live / events), conflict breakdown, score line with hysteresis bands, coming events, index tiles incl. GIFT Nifty |
 | ≡ Evidence | Data-quality table (age, LIVE / DELAYED / DAILY / STALE, source trust, update time) and every factor with its reading, weight, source, freshness and learnt multiplier |
 | ⊞ Options | Chain ATM ±10 with IV per strike, "Today" (vs yesterday) and "Live" (last ~15 min, read from IV change) activity per side, walls, PCR, ATM IV change, max pain (location only) |
@@ -31,6 +32,20 @@ Blend (smooth by minute): before the open structure 85% / live 15%, then live 30
 Each factor's weight = base × source trust (Kite / NSE 1.0, Yahoo 0.8, Gemini 0.6, typed 0.5, word list 0.35) × freshness × learnt multiplier (needs 100 readings: about 70 sessions with the app open at 9:45 and 11:30; ±15% until 400 readings, ±40% after).
 Regime: enter a side at ±25, keep it until ±15 (hysteresis). CONFLICT when structure and live are both ≥30 and opposite (confidence halved).
 NO EDGE when evidence is weak or mixed; RANGE only with 2+ real range signs.
+
+## Pure 2.0 — NIFTY AI prediction engine
+The first tab is now **AI**: a multi-layer prediction engine (full design in [ARCHITECTURE.md](ARCHITECTURE.md)).
+- **7 horizons:** 15 min, 30 min, 1 hour, 3 hours, 6 hours, 1 day, 1 week. Each has its own models.
+- **70 inputs in 9 groups:** technical (incl. RSI, MACD, Bollinger, stochastic), trend, sector & banks, volatility, global markets (14 indices + global risk score), currencies, bonds & rates (US curve), commodities (Brent, WTI, gold, silver, copper, crude shock), calendar. 29 world series come from Yahoo.
+- **Per horizon:** 9 group models → a meta model that learns how much to trust each group, separately in range-bound and high-volatility markets → calibrated probability (isotonic / Platt).
+- **Market regime first:** trending bull/bear, range, high/low volatility, risk-on/off, global shock, panic, expiry, event-driven, news-dominated, India-specific.
+- **Proven edge** needs the Brier skill's 90% block-bootstrap band above zero on 120 unseen sessions. On pure noise this falsely passes ~1.4% of the time.
+- **Each row:** direction, probability, **confidence (separate)**, expected range (50/68/90%), **trade gate** (NO TRADE unless strong enough; threshold in Settings).
+- **Tap a row for Why?** (each group's push in probability points and the inputs behind it) and **What changed?**
+- **News → events:** de-duplicated stories, 4 source tiers, rumours half weight, exposure by Nifty weight of the named stocks or sector, time decay by horizon. A **surprise engine** handles actual vs expected releases you type in.
+- **Event risk mode** around scheduled releases, **event memory** of the day, **impact graph** of learnt driver links, **data quality**, constituent movers.
+- **Feedback loop:** every forecast is logged and scored once its time passes. The live option/futures and news overlays start from conservative weights and are re-learnt from that record only when the re-learnt weights test better.
+- `build.sh` takes tool paths from the environment (`ANDROID_JAR`, `AAPT2`, `D8_JAR`, `APKSIGNER_JAR`, `LAMBDA_STUBS`, `KEYSTORE`). It falls back to `javac` when ecj is not present.
 
 ## Pure 1.2.1 (fixes)
 - **Forecasts are tested before they are trusted:** each model is learnt again on all but the last 120 sessions and scored on those unseen sessions (targets that reach into the test period are left out of learning). The card shows the hit rate vs "always guess the usual side" and a skill score. A model that does not beat the base rate shows **No proven edge**, gets no Strong/Clear/Mild label and is left out of the final line. Models retrain once by themselves (model version 4).
@@ -88,8 +103,9 @@ Not done (Tier 3, later): historical factor analytics beyond the Record page, op
 
 ## Build
 `./build.sh` → `build/NiftyDirection_v<version>_<date>_<time>.apk` (ecj → d8 → aapt2 → align → apksigner, no Gradle).
-Tests: `./test/run_tests.sh` (engine scenarios + end-to-end collector against a local mock Kite server).
+Tests: `./test/run_tests.sh` (engine scenarios, forecaster, prediction engine, end-to-end collector and runners against a local mock Kite + Yahoo server).
 
 ## Code layout
+`intel` (prediction engine: Horizon, Markets, FeatureEngine, Regime, Trainer, HorizonModel, Calibrator, EventImpact, EventCalendarRisk, Constituents, ImpactGraph, Feedback, IntelEngine — pure Java; data/IntelRunner feeds it) ·
 `forecast` (History, Features, LogReg, Forecaster — pure Java; data/HistoryLoader + ForecastRunner feed it) · `model` (Quote, Candle, OptionRow, Snapshot) · `engine` (Engine, Chain, Factor, Result — pure Java) ·
-`data` (Kite, Nse, Global, Http, Collector, Store, Prefs, Brain) · `ui` (MainActivity, Pages, Views, Ui, SettingsActivity, LoginActivity) · `service` (WatchService)
+`data` (Kite, Nse, Global, Http, Collector, Store, Prefs, Brain) · `ui` (MainActivity, IntelPage, Pages, Views, Ui, SettingsActivity, LoginActivity) · `service` (WatchService)

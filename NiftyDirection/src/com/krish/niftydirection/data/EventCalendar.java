@@ -40,7 +40,10 @@ public final class EventCalendar {
         if (userText != null) for (String line : userText.split("\n")) {
             line = line.trim();
             if (line.length() < 11 || !line.substring(0, 10).matches("\\d{4}-\\d{2}-\\d{2}")) continue;
-            all.add(new EventItem(line.substring(0, 10), line.substring(10).trim().isEmpty() ? "My event" : line.substring(10).trim(), 3, "my list"));
+            String name = line.substring(10).trim();
+            int bar = name.indexOf('|');   // "| exp=… | act=…" belongs to the surprise engine, not the name
+            if (bar >= 0) name = name.substring(0, bar).trim();
+            all.add(new EventItem(line.substring(0, 10), name.isEmpty() ? "My event" : name, 3, "my list"));
         }
         // events the news reader spotted
         if (news != null) for (NewsItem n : news) {
