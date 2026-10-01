@@ -88,6 +88,10 @@ Not done (Tier 3, later): historical factor analytics beyond the Record page, op
 
 ## Build
 `./build.sh` → `build/NiftyDirection_<version>_<date>_<time>.apk` (ecj → d8 → aapt2 → align → apksigner, no Gradle).
+**Windows:** install Java 11+ (e.g. Adoptium), put the keystore at `keystore\release.jks`, then in this folder run
+`powershell -ExecutionPolicy Bypass -File build.ps1` (downloads the tools once, asks for the keystore password).
+
+**Linux:**
 1. One time: `./tools/setup_toolchain.sh` (Linux x64 with Java 11+, Node/npm and python3; installs to `/root/androidtools`).
 2. Put the release keystore at `keystore/release.jks`. Use the same keystore as the installed app, or Android refuses the update.
 3. `KS_PASS=<keystore password> ./build.sh`
