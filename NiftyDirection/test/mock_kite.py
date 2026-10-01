@@ -161,7 +161,7 @@ class H(BaseHTTPRequestHandler):
 def do_POST(self):
     u = urlparse(self.path)
     n = int(self.headers.get("Content-Length", 0)); body = json.loads(self.rfile.read(n))
-    if ":generateContent" not in u.path or "key=GKEY" not in u.query or self.headers.get("Content-Type") != "application/json":
+    if ":generateContent" not in u.path or self.headers.get("x-goog-api-key") != "GKEY" or "key=" in u.query or self.headers.get("Content-Type") != "application/json":
         return self.send(400, json.dumps({"error": {"message": "bad request " + u.path}}))
     text = body["contents"][0]["parts"][0]["text"]
     import re

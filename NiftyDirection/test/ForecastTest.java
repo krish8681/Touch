@@ -76,6 +76,16 @@ public class ForecastTest {
         check("model info filled", m1.info.days > 500 && m1.info.samples > 10000 && !Double.isNaN(m1.info.medMove));
         for (Forecaster.Horizon hz : Forecaster.HORIZONS) check("trains " + hz.id, Forecaster.train(sig, hz).lr != null);
 
+        // ---- 2b. walk-forward test: a real pattern shows an edge on unseen sessions, pure noise does not
+        check("walk-forward test ran", m1.info.tested() && m1.info.testDays == 112 && m1.info.testSamples > 2000);
+        check("planted pattern has a proven edge", m1.info.proven() && m1.info.skill() > 0.05);
+        Forecaster.Model mn = Forecaster.train(synth(560, 0.0, 5), Forecaster.HORIZONS[0]);
+        System.out.println("noise: hit " + mn.info.hit + " base " + mn.info.baseHit + " skill " + mn.info.skill());
+        check("pure noise has no proven edge", mn.info.tested() && !mn.info.proven());
+        check("no-edge model gets no strength label", Forecaster.strength(0.7, mn.info).equals("No proven edge"));
+        Forecaster.Model back1 = Forecaster.fromJson(Forecaster.toJson(m1));
+        check("test results survive JSON", back1.info.testDays == m1.info.testDays && Math.abs(back1.info.brier - m1.info.brier) < 1e-12 && back1.info.proven());
+
         // ---- 3. no look-ahead: features at (d,k) are the same when everything after that moment is removed
         int[] sidx = sig.sessionIndex();
         boolean same = true;
@@ -125,7 +135,7 @@ public class ForecastTest {
         for (int i = 0; i < 75; i++) { today.c[i] = Float.NaN; today.h[i] = Float.NaN; today.l[i] = Float.NaN; if (i > 0) today.o[i] = Float.NaN; }
         today.aux.clear(); today.bars = 0;
         Forecaster.Prediction pp = Forecaster.predict(op, pre, 300, 0);
-        check("pre-open forecast from an expected open", !Double.isNaN(pp.pUp) && pp.label.equals("Today's close") && pp.when.equals("at today's close"));
+        check("pre-open forecast from an expected open", !Double.isNaN(pp.pUp) && pp.label.equals("Today's close vs the open") && pp.when.equals("at today's close"));
         check("yesterday's internals filled", !Double.isNaN(f0[27]) && !Double.isNaN(f0[28]));
 
         // ---- 6. model survives saving

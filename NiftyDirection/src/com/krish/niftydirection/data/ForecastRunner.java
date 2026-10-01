@@ -129,7 +129,7 @@ public class ForecastRunner {
             if (m != null && m.size() > 100) h.global.put(g[0], m);
         }
         try (DataOutputStream o = new DataOutputStream(new BufferedOutputStream(new GZIPOutputStream(new FileOutputStream(f))))) { h.write(o); }
-        HistoryLoader.write(stamp, today);
+        if (HistoryLoader.settled()) HistoryLoader.write(stamp, today);   // before 6:00 IST: rebuild later with settled global closes
         return h;
     }
 
@@ -174,16 +174,26 @@ public class ForecastRunner {
             Forecaster.Info in = m.info;
             t.append(String.format(Locale.US, "%s: %,d examples from %d sessions · went up %.0f%% of the time · usual move %.2f%%%n",
                     hz.label, in.samples, in.days, in.upShare * 100, in.medMove * 100));
+            t.append("  ").append(testLine(in)).append('\n');
             Forecaster.Model mo = Forecaster.train(h, hz, true);   // pre-open model: from the opening price
             HistoryLoader.write(new File(fd, "model_P_" + hz.id + ".json"), Forecaster.toJson(mo).toString());
             in = mo.info;
             t.append(String.format(Locale.US, "  from the open (%s): %,d sessions · went up %.0f%% · usual move %.2f%%%n",
                     hz.bars < 0 ? "to today's close" : hz.label.toLowerCase(Locale.US), in.samples, in.upShare * 100, in.medMove * 100));
+            t.append("    ").append(testLine(in)).append('\n');
         }
         out.text = t.toString();
         HistoryLoader.write(new File(fd, "report.txt"), out.text);
         pr.step("Done", Forecaster.HORIZONS.length, Forecaster.HORIZONS.length);
         return out;
+    }
+
+    /** One line on how the model did on the sessions it never saw. */
+    public static String testLine(Forecaster.Info in) {
+        if (!in.tested()) return "not tested (too little history for a held-back test)";
+        return String.format(Locale.US, "test on last %d unseen sessions (from %s): right %.1f%% vs %.1f%% always guessing %s · skill %+.1f%% · %s",
+                in.testDays, in.testFrom, in.hit * 100, in.baseHit * 100, in.upShare >= 0.5 ? "UP" : "DOWN", in.skill() * 100,
+                in.proven() ? "EDGE" : "NO PROVEN EDGE");
     }
 
     public static List<Forecaster.Model> models(File dir) { return models(dir, false); }

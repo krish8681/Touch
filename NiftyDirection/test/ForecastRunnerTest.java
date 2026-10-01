@@ -16,7 +16,7 @@ public class ForecastRunnerTest {
                 && !Double.isNaN(l.predictions.get(0).pUp) && t.models.get(0).info.days > 500 && !ForecastRunner.needsTraining(dir);
         ForecastRunner.Live po = ForecastRunner.live(new Kite("KEY", "TOKEN"), dir, a[1], 8 * 60, 25000, new AtomicBoolean(), (w, d, n) -> {});
         System.out.println("pre-open: " + po.asOf + " · " + po.predictions.get(3).label + " " + po.predictions.get(3).pUp);
-        ok &= po.preOpen && po.predictions.size() == 4 && "Today's close".equals(po.predictions.get(3).label) && !Double.isNaN(po.predictions.get(0).pUp);
+        ok &= po.preOpen && po.predictions.size() == 4 && "Today's close vs the open".equals(po.predictions.get(3).label) && !Double.isNaN(po.predictions.get(0).pUp);
         // second call must come from the day cache (fast)
         long t0 = System.currentTimeMillis();
         ForecastRunner.history(new Kite("KEY", "TOKEN"), dir, a[1], null, (w, d, n) -> {});

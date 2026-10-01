@@ -27,10 +27,21 @@ which side the evidence favours right now, how strongly, and how much of the evi
 **Events:** news tone (Gemini or word list) adds at most ±15; calendar + big news set event risk, which lowers confidence.
 **VIX:** volatility regime only (orderly bullish / unstable / risk-off / orderly weakness); lowers confidence when high or rising, never votes.
 
-Blend: before the open structure 85% / live 15%; 9:15–9:30 55 / 45; after 9:30 30 / 70.
-Each factor's weight = base × source trust (Kite / NSE 1.0, Yahoo 0.8, Gemini 0.6, typed 0.5, word list 0.35) × freshness × learnt multiplier (after 20 days).
+Blend (smooth by minute): before the open structure 85% / live 15%, then live 30% at 9:30, 40% at 9:45, 55% at 10:15, 65% at 11:00, 75% from 13:00.
+Each factor's weight = base × source trust (Kite / NSE 1.0, Yahoo 0.8, Gemini 0.6, typed 0.5, word list 0.35) × freshness × learnt multiplier (needs 100 readings: about 70 sessions with the app open at 9:45 and 11:30; ±15% until 400 readings, ±40% after).
 Regime: enter a side at ±25, keep it until ±15 (hysteresis). CONFLICT when structure and live are both ≥30 and opposite (confidence halved).
 NO EDGE when evidence is weak or mixed; RANGE only with 2+ real range signs.
+
+## Pure 1.2.1 (fixes)
+- **Forecasts are tested before they are trusted:** each model is learnt again on all but the last 120 sessions and scored on those unseen sessions (targets that reach into the test period are left out of learning). The card shows the hit rate vs "always guess the usual side" and a skill score. A model that does not beat the base rate shows **No proven edge**, gets no Strong/Clear/Mild label and is left out of the final line. Models retrain once by themselves (model version 4).
+- **Final line** counts only what the models see beyond Nifty's usual up-share, so a model saying "UP 54%" on a market that rises 54% of the time no longer reads as UP.
+- **Login kept on permission errors:** only a Kite `TokenException` logs you out. A 403 `PermissionException` (e.g. no market-data add-on) is now shown as the error it is.
+- **Live watch keeps running with the screen off:** the CPU stays awake during the 8:30–15:35 window (Doze stopped the timer before), and an alarm wakes the watch when the window opens.
+- **Learnt weights can reach their full range:** the track record keeps 260 days (was 120, which capped every factor at ±15% for ever).
+- **No half-day global closes:** before 6:00 IST the still-trading US / Brent / USD-INR bars are not used or cached.
+- One Kite rate limit for the whole app (screen, forecast and watch no longer pace separately).
+- Pre-open "Today's close" card renamed **Today's close vs the open** (that is what it predicts).
+- Security: no Android cloud/device backup of settings (API secret, token, Gemini key); Gemini key sent in a header, not the URL; `build.sh` reads the keystore password from `KS_PASS`.
 
 ## Pure 1.2
 - **Pre-open fix:** overnight Kite resets each quote's previous close, so before 9:15 every change read 0.00% (Bank Nifty "flat", futures "no build-up", breadth 0:0). The app now keeps the last session's numbers (saved in the evening, or fetched once from day candles) so the morning idea uses yesterday's real moves.
@@ -70,7 +81,7 @@ The Forecast tab (first tab) answers one question: **which way is Nifty moving n
 - **News verification:** same story grouped; 1 publisher = PROVISIONAL (half weight, can't raise event risk), 2+ = CONFIRMED, official RBI / SEBI feed = VERIFIED; rumours half weight; duplicates counted once.
 - **Already priced:** each story is checked against Nifty's move since it came out (fresh shock / absorbing / re-accelerating / already priced / faded).
 - **Gemini model pinned:** "auto" picks once and keeps it; every rating logs model, prompt version and time.
-- **Protected learning:** weekly refit from past days only, last 20 days held back to test, 100+ readings per factor, ±15% until 500, used only if it passes the test.
+- **Protected learning:** weekly refit from past days only, last 20 days held back to test, 100+ readings per factor, ±15% until 400, used only if it passes the test.
 - **High internal disagreement** flag (35%+ of the evidence against the score's side), **smooth structure/live blend** by minute, **expiry-day mode** (weekly / monthly / event + expiry; max-pain magnet late on expiry), **gap regime** (normal / moderate / large / extreme · hold / fill / gap-and-go / reversal), **attribution coverage** check, **world risk vs India macro** split, **2-of-3 confirmation** before a bullish ↔ bearish flip (overridden by a ±60 score or confirmed high-risk news).
 
 Not done (Tier 3, later): historical factor analytics beyond the Record page, option-surface modelling, cross-asset correlation regimes, automatic parameter search. True order-flow (who hit the bid/ask) is not available from Kite REST.

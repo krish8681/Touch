@@ -136,22 +136,38 @@ public class HistoryLoader {
         } catch (Exception ignored) { }
     }
 
-    /** Yahoo daily closes keyed by the IST date of each session (cached for the day). Only closes before today. */
+    /** Before 6:00 IST yesterday's US, Brent and USD/INR sessions may still be trading, so their bars are not closes yet. */
+    static final int SETTLED_MIN = 6 * 60;
+
+    static boolean settled() {
+        Calendar c = Calendar.getInstance(Collector.IST);
+        if (Collector.nowOverride > 0) c.setTimeInMillis(Collector.nowOverride);
+        return c.get(Calendar.HOUR_OF_DAY) * 60 + c.get(Calendar.MINUTE) >= SETTLED_MIN;
+    }
+
+    /**
+     * Yahoo daily closes keyed by the IST date of each session (cached for the day). Only closes before today;
+     * before 6:00 IST also not yesterday's (still trading), and nothing is cached so the day's later read gets the real close.
+     */
     static TreeMap<String, Double> yahoo(File dir, String symbol, String today) {
         String safe = symbol.replaceAll("[^A-Za-z0-9]", "_");
         File f = new File(new File(dir, "history_cache"), "y_" + safe + "_" + today + ".json");
+        boolean settled = settled();
+        String cutoff = settled ? today : Collector.daysAgo(today, 1);
         try {
             String body;
-            if (f.exists()) body = new String(java.nio.file.Files.readAllBytes(f.toPath()), StandardCharsets.UTF_8);
+            if (settled && f.exists()) body = new String(java.nio.file.Files.readAllBytes(f.toPath()), StandardCharsets.UTF_8);
             else {
                 Map<String, String> h = new HashMap<>();
                 h.put("User-Agent", Http.BROWSER_UA);
                 try { body = Http.get("https://query1.finance.yahoo.com/v8/finance/chart/" + Http.enc(symbol) + "?range=10y&interval=1d", h, 20000); }
                 catch (Exception e) { body = Http.get("https://query2.finance.yahoo.com/v8/finance/chart/" + Http.enc(symbol) + "?range=10y&interval=1d", h, 20000); }
-                f.getParentFile().mkdirs();
-                File[] old = f.getParentFile().listFiles((dd, n) -> n.startsWith("y_" + safe + "_"));
-                if (old != null) for (File x : old) x.delete();
-                write(f, body);
+                if (settled) {
+                    f.getParentFile().mkdirs();
+                    File[] old = f.getParentFile().listFiles((dd, n) -> n.startsWith("y_" + safe + "_"));
+                    if (old != null) for (File x : old) x.delete();
+                    write(f, body);
+                }
             }
             JSONObject res = new JSONObject(body).getJSONObject("chart").getJSONArray("result").getJSONObject(0);
             JSONArray ts = res.getJSONArray("timestamp");
@@ -163,7 +179,7 @@ public class HistoryLoader {
                 double c = cl.optDouble(i, Double.NaN);
                 if (Double.isNaN(c)) continue;
                 String day = fmt.format(new java.util.Date(ts.getLong(i) * 1000L));
-                if (day.compareTo(today) >= 0) continue;
+                if (day.compareTo(cutoff) >= 0) continue;
                 m.put(day, c);
             }
             return m;

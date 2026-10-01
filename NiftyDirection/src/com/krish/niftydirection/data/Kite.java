@@ -35,7 +35,9 @@ public class Kite {
     public static class TokenExpired extends IOException { TokenExpired(String m) { super(m); } }
 
     private final String apiKey, token;
-    private long lastQuote, lastHist;
+    /** Shared by every Kite object: the screen, the forecast thread and the watch service all count against one rate limit. */
+    private static long lastQuote, lastHist;
+    private static final Object PACE = new Object();
 
     public Kite(String apiKey, String accessToken) { this.apiKey = apiKey; this.token = accessToken; }
 
@@ -75,7 +77,7 @@ public class Kite {
             return Http.get(url, headers(), 25000);
         } catch (Http.HttpError e) {
             String msg = kiteMessage(e.body, e.getMessage());
-            if (e.code == 403 || (e.body != null && e.body.contains("TokenException"))) throw new TokenExpired(msg);
+            if (isTokenError(e.code, e.body)) throw new TokenExpired(msg);
             throw new IOException(msg);
         }
     }
@@ -84,15 +86,28 @@ public class Kite {
         try { return new JSONObject(body); } catch (org.json.JSONException e) { throw new IOException("Kite sent an unreadable reply"); }
     }
 
+    /**
+     * Only a TokenException means the login is gone. Kite also answers 403 for PermissionException
+     * (e.g. the Kite Connect app has no market-data / historical add-on): that must not log the user out.
+     */
+    public static boolean isTokenError(int code, String body) {
+        String type = "";
+        try { type = new JSONObject(body).optString("error_type", ""); } catch (Exception ignored) { }
+        if (!type.isEmpty()) return type.equals("TokenException");
+        return code == 403 && (body == null || !body.contains("PermissionException"));
+    }
+
     static String kiteMessage(String body, String fallback) {
         try { return new JSONObject(body).optString("message", fallback); } catch (Exception x) { return fallback; }
     }
 
-    private synchronized void pace(boolean hist) {
-        long gap = hist ? 350 : 1050;   // Kite: quote 1/s, historical 3/s
-        long now = System.currentTimeMillis(), last = hist ? lastHist : lastQuote;
-        if (now - last < gap) try { Thread.sleep(gap - (now - last)); } catch (InterruptedException ignored) {}
-        if (hist) lastHist = System.currentTimeMillis(); else lastQuote = System.currentTimeMillis();
+    private static void pace(boolean hist) {
+        synchronized (PACE) {
+            long gap = hist ? 350 : 1050;   // Kite: quote 1/s, historical 3/s
+            long now = System.currentTimeMillis(), last = hist ? lastHist : lastQuote;
+            if (now - last < gap) try { Thread.sleep(gap - (now - last)); } catch (InterruptedException ignored) {}
+            if (hist) lastHist = System.currentTimeMillis(); else lastQuote = System.currentTimeMillis();
+        }
     }
 
     /** Full quotes. Keys like "NSE:NIFTY 50", "NFO:NIFTY26OCTFUT". Unknown symbols are simply missing from the result. */

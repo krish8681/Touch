@@ -19,7 +19,9 @@ public final class Forecaster {
 
     public static final int STEP = 3, ITERS = 12;
     public static final double LAMBDA = 10;
-    public static final int VERSION = 3;
+    public static final int VERSION = 4;
+    /** Walk-forward test: the most recent sessions are held back, the model learns from the older ones only. */
+    public static final int TEST_DAYS = 120, MIN_TEST_DAYS = 60;
 
     public static final class Horizon {
         public final String id, label;
@@ -86,6 +88,17 @@ public final class Forecaster {
         public String id, label, from = "", to = "";
         public int samples, days;
         public double upShare = Double.NaN, medMove = Double.NaN;   // medMove = median |log move| over the horizon
+        // walk-forward test on sessions the model never saw (NaN / 0 = not tested)
+        public String testFrom = "";
+        public int testDays, testSamples;
+        public double hit = Double.NaN, baseHit = Double.NaN;       // share called right: model vs always guessing the usual side
+        public double brier = Double.NaN, baseBrier = Double.NaN;   // probability error: model vs the usual up-share
+
+        public boolean tested() { return testDays >= MIN_TEST_DAYS && !Double.isNaN(brier); }
+        /** Beat the "always the usual side" guess on unseen sessions, both in calls and in probability error. */
+        public boolean proven() { return tested() && brier < baseBrier && hit > baseHit; }
+        /** 1 - brier / baseBrier: above 0 = better than the base rate, below 0 = worse. */
+        public double skill() { return tested() && baseBrier > 0 ? 1 - brier / baseBrier : Double.NaN; }
     }
 
     public static final class Model {
@@ -125,8 +138,46 @@ public final class Forecaster {
         double[][] X = s.X.toArray(new double[0][]);
         int[] y = toInt(s.y), rows = new int[n];
         for (int i = 0; i < n; i++) rows[i] = i;
+        evaluate(h, s, X, y, in);
         m.lr = LogReg.fit(X, y, rows, n, LAMBDA, ITERS);
         return m;
+    }
+
+    /**
+     * Walk-forward test: learn from the older sessions, score the last TEST_DAYS sessions.
+     * Training samples whose target falls inside the test period are dropped (no overlap between the two).
+     */
+    static void evaluate(History h, Samples s, double[][] X, int[] y, Info in) {
+        java.util.TreeSet<Integer> dd = new java.util.TreeSet<>(s.day);
+        int nTest = Math.min(TEST_DAYS, dd.size() / 5);
+        if (nTest < MIN_TEST_DAYS) return;
+        Integer[] days = dd.toArray(new Integer[0]);
+        int first = days[days.length - nTest];
+        int n = s.size(), nTr = 0, nTe = 0;
+        int[] tr = new int[n], te = new int[n];
+        for (int i = 0; i < n; i++) {
+            if (s.day.get(i) >= first) te[nTe++] = i;
+            else if (s.tday.get(i) < first) tr[nTr++] = i;
+        }
+        if (nTr < 200 || nTe < 50) return;
+        LogReg lr = LogReg.fit(X, y, tr, nTr, LAMBDA, ITERS);
+        int ups = 0;
+        for (int r = 0; r < nTr; r++) ups += y[tr[r]];
+        double base = ups / (double) nTr;
+        double hit = 0, baseHit = 0, br = 0, bb = 0;
+        for (int r = 0; r < nTe; r++) {
+            int i = te[r];
+            double p = lr.predict(X[i]);
+            if ((p >= 0.5 ? 1 : 0) == y[i]) hit++;
+            if ((base >= 0.5 ? 1 : 0) == y[i]) baseHit++;
+            br += (p - y[i]) * (p - y[i]);
+            bb += (base - y[i]) * (base - y[i]);
+        }
+        in.testFrom = h.days.get(first).date;
+        in.testDays = nTest;
+        in.testSamples = nTe;
+        in.hit = hit / nTe; in.baseHit = baseHit / nTe;
+        in.brier = br / nTe; in.baseBrier = bb / nTe;
     }
 
     // ================================================================== live
@@ -144,7 +195,7 @@ public final class Forecaster {
         Horizon hz = horizon(m.id);
         Prediction p = new Prediction();
         p.id = m.id; p.label = hz.label; p.info = m.info;
-        if (m.open) p.label = hz.bars < 0 ? "Today's close" : hz.label.replace("Next", "First") + " after the open";
+        if (m.open) p.label = hz.bars < 0 ? "Today's close vs the open" : hz.label.replace("Next", "First") + " after the open";
         int[] sidx = h.sessionIndex();
         History.Day day = h.days.get(d);
         p.price = k == 0 ? day.open() : day.closeAt(k);
@@ -195,7 +246,9 @@ public final class Forecaster {
         if (m.lr != null) j.put("w", arr(m.lr.w)).put("mean", arr(m.lr.mean)).put("sd", arr(m.lr.sd));
         Info i = m.info;
         j.put("info", new JSONObject().put("id", i.id).put("label", i.label).put("from", i.from).put("to", i.to)
-                .put("samples", i.samples).put("days", i.days).put("upShare", nz(i.upShare)).put("medMove", nz(i.medMove)));
+                .put("samples", i.samples).put("days", i.days).put("upShare", nz(i.upShare)).put("medMove", nz(i.medMove))
+                .put("testFrom", i.testFrom).put("testDays", i.testDays).put("testSamples", i.testSamples)
+                .put("hit", nz(i.hit)).put("baseHit", nz(i.baseHit)).put("brier", nz(i.brier)).put("baseBrier", nz(i.baseBrier)));
         return j;
     }
 
@@ -212,8 +265,16 @@ public final class Forecaster {
         i.id = ij.optString("id"); i.label = ij.optString("label"); i.from = ij.optString("from"); i.to = ij.optString("to");
         i.samples = ij.optInt("samples"); i.days = ij.optInt("days");
         i.upShare = nan(ij, "upShare"); i.medMove = nan(ij, "medMove");
+        i.testFrom = ij.optString("testFrom"); i.testDays = ij.optInt("testDays"); i.testSamples = ij.optInt("testSamples");
+        i.hit = nan(ij, "hit"); i.baseHit = nan(ij, "baseHit"); i.brier = nan(ij, "brier"); i.baseBrier = nan(ij, "baseBrier");
         m.info = i;
         return m;
+    }
+
+    /** Like strength(pUp), but a model that did not beat the base rate on unseen sessions never gets a strength label. */
+    public static String strength(double pUp, Info info) {
+        if (info != null && info.tested() && !info.proven()) return "No proven edge";
+        return strength(pUp);
     }
 
     /** Plain words for a probability of UP. */

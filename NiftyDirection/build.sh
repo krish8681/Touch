@@ -1,6 +1,8 @@
 #!/bin/bash
 # Offline build: ecj -> d8 -> aapt2 -> align -> apksigner. Usage: ./build.sh
 set -e
+: "${KS_PASS:?set KS_PASS to the keystore password}"
+export KS_PASS
 cd "$(dirname "$0")"
 T=/root/androidtools/node_modules/@drxiaozhi/minapk/tools
 AAPT2=/root/androidtools/node_modules/aaptjs3/bin/x64/linux/aapt2
@@ -17,6 +19,6 @@ java -cp $T/d8.jar com.android.tools.r8.D8 --release --min-api 26 --lib $T/andro
 (cd $B/dex && zip -q ../unsigned.apk classes.dex)
 python3 tools/zipalign.py $B/unsigned.apk $B/aligned.apk
 OUT="NiftyDirection_${VER// /_}_$(TZ=Asia/Kolkata date +%Y%m%d_%H%M).apk"
-java -jar $T/apksigner.jar sign --ks keystore/release.jks --ks-pass pass:niftydir --key-pass pass:niftydir --out $B/$OUT $B/aligned.apk 2>&1 | grep -v JAVA_TOOL || true
+java -jar $T/apksigner.jar sign --ks keystore/release.jks --ks-pass env:KS_PASS --key-pass env:KS_PASS --out $B/$OUT $B/aligned.apk 2>&1 | grep -v JAVA_TOOL || true
 java -jar $T/apksigner.jar verify $B/$OUT 2>&1 | grep -v JAVA_TOOL || true
 echo "BUILT $B/$OUT"

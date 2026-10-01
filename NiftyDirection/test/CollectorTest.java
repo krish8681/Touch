@@ -21,6 +21,11 @@ public class CollectorTest {
 
     public static void main(String[] a) throws Exception {
         Kite.ROOT = "http://127.0.0.1:" + a[0];
+        // ---- only a TokenException means the login is gone (403 PermissionException must not log the user out)
+        check(Kite.isTokenError(403, "{\"status\":\"error\",\"error_type\":\"TokenException\",\"message\":\"x\"}"), "403 TokenException = expired");
+        check(!Kite.isTokenError(403, "{\"status\":\"error\",\"error_type\":\"PermissionException\",\"message\":\"Insufficient permission\"}"), "403 PermissionException is not expiry");
+        check(!Kite.isTokenError(429, "{\"status\":\"error\",\"error_type\":\"NetworkException\",\"message\":\"Too many requests\"}"), "429 is not expiry");
+        check(Kite.isTokenError(403, "<html>Forbidden</html>"), "bare 403 still treated as expiry");
         String today = a[1];
         File dir = new File(a[2]); dir.mkdirs();
         Collector.Config cfg = new Collector.Config();

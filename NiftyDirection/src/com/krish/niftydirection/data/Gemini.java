@@ -53,7 +53,7 @@ public final class Gemini {
     }
 
     static String newest(String key) throws Exception {
-        String body = Http.get(ROOT + "models?pageSize=200&key=" + Http.enc(key), null, 15000);
+        String body = Http.get(ROOT + "models?pageSize=200", keyHeader(key), 15000);
         JSONArray a = new JSONObject(body).optJSONArray("models");
         String best = "", bestLite = "";
         double bv = -1, bl = -1;
@@ -100,7 +100,7 @@ public final class Gemini {
         req.put("generationConfig", new JSONObject().put("responseMimeType", "application/json").put("temperature", 0.1));
         String body;
         try {
-            body = postJson(ROOT + "models/" + model + ":generateContent?key=" + Http.enc(key), req.toString());
+            body = postJson(ROOT + "models/" + model + ":generateContent", key, req.toString());
         } catch (Http.HttpError e) {
             if (e.code == 404 && isAuto(preferred)) {
                 String old = model;
@@ -108,7 +108,7 @@ public final class Gemini {
                 pin(chosen);
                 lastSwitchNote = "Gemini model " + old + " is no longer available; switched to " + chosen + ".";
                 model = chosen;
-                body = postJson(ROOT + "models/" + model + ":generateContent?key=" + Http.enc(key), req.toString());
+                body = postJson(ROOT + "models/" + model + ":generateContent", key, req.toString());
             } else throw new Exception(geminiError(e));
         }
         JSONObject resp = new JSONObject(body);
@@ -153,8 +153,15 @@ public final class Gemini {
         try { return "Gemini: " + new JSONObject(e.body).getJSONObject("error").optString("message", e.getMessage()); } catch (Exception x) { return "Gemini: " + e.getMessage(); }
     }
 
-    static String postJson(String url, String json) throws Exception {
+    /** The key goes in a header, not the URL, so it does not end up in proxy or server URL logs. */
+    static Map<String, String> keyHeader(String key) {
         Map<String, String> h = new HashMap<>();
+        h.put("x-goog-api-key", key);
+        return h;
+    }
+
+    static String postJson(String url, String key, String json) throws Exception {
+        Map<String, String> h = keyHeader(key);
         h.put("Content-Type", "application/json");
         return Http.send("POST", url, h, json.getBytes("UTF-8"), 45000);
     }

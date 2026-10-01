@@ -121,13 +121,13 @@ public class Store {
                     }
                 }
             }
-            // keep ~120 days
-            if (all.length() > 130) {
+            // keep ~260 days: enough training readings (2 checkpoints a day, last 20 days held back) to reach FULL_OBS
+            if (all.length() > KEEP_DAYS + 10) {
                 List<String> keys = new ArrayList<>();
                 Iterator<String> it = all.keys();
                 while (it.hasNext()) keys.add(it.next());
                 java.util.Collections.sort(keys);
-                for (int i = 0; i < keys.size() - 120; i++) all.remove(keys.get(i));
+                for (int i = 0; i < keys.size() - KEEP_DAYS; i++) all.remove(keys.get(i));
             }
             write(f, all.toString());
         } catch (Exception ignored) {}
@@ -173,7 +173,8 @@ public class Store {
         return out;
     }
 
-    public static final int MIN_OBS = 100, FULL_OBS = 500, VALIDATION_DAYS = 20;
+    /** At most 2 readings per factor a day, so FULL_OBS needs (FULL_OBS / 2 + VALIDATION_DAYS) kept days: 220 of KEEP_DAYS 260. */
+    public static final int MIN_OBS = 100, FULL_OBS = 400, VALIDATION_DAYS = 20, KEEP_DAYS = 260;
 
     /**
      * Protected walk-forward calibration. Returns key → {hits, samples, multiplier}, plus "_meta" →

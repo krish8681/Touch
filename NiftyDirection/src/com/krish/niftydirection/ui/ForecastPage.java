@@ -97,6 +97,8 @@ final class ForecastPage {
         info.addView(Ui.header(c, "How to read this"));
         info.addView(Ui.text(c, "• UP 60% means: in the last 3 years, when the inputs looked like this, Nifty was higher at that time about 60 times out of 100.\n"
                 + "• Strong = 65%+ · Clear = 58–65% · Mild = 53–58% · Toss-up = below 53%.\n"
+                + "• Every model is tested on the last 120 sessions it never learnt from. One that did not beat \"always guess the usual side\" "
+                + "shows \"No proven edge\" and does not count in the final line.\n"
                 + "• Typical move = the usual size of the move over that time, up or down.\n"
                 + "• Models retrain by themselves once a week (outside market hours).\n"
                 + "• Live-only inputs (option chain, FII, news, order book) are being saved every refresh: " + Recorder.days(dir)
@@ -120,11 +122,21 @@ final class ForecastPage {
      * Same side → that side. One side and the other undecided → a lean. Opposite → no clear side.
      */
     static String[] finalDirection(ForecastRunner.Live l, com.krish.niftydirection.data.Brain.Output o) {
-        double sum = 0; int n = 0;
-        for (Forecaster.Prediction p : l.predictions) if (!Double.isNaN(p.pUp)) { sum += p.pUp; n++; }
-        double avg = n > 0 ? sum / n : 0.5;
-        int fSide = Math.abs(avg - 0.5) < 0.03 ? 0 : avg > 0.5 ? 1 : -1;
-        String fText = fSide == 0 ? "forecast models: toss-up" : String.format(Locale.US, "forecast models: %s (avg %.0f%%)", fSide > 0 ? "UP" : "DOWN", Math.max(avg, 1 - avg) * 100);
+        // Only models that beat the base rate on unseen sessions vote, and only with what they see BEYOND the usual
+        // up-share (Nifty rises on most days, so "UP 54%" alone says nothing).
+        double sum = 0; int n = 0, skipped = 0;
+        for (Forecaster.Prediction p : l.predictions) {
+            if (Double.isNaN(p.pUp)) continue;
+            if (p.info != null && p.info.tested() && !p.info.proven()) { skipped++; continue; }
+            double base = p.info != null && !Double.isNaN(p.info.upShare) ? p.info.upShare : 0.5;
+            sum += p.pUp - base; n++;
+        }
+        double avg = n > 0 ? sum / n : 0;
+        int fSide = Math.abs(avg) < 0.03 ? 0 : avg > 0 ? 1 : -1;
+        String fText = n == 0 ? "forecast models: no model with a proven edge"
+                : fSide == 0 ? "forecast models: nothing beyond the usual drift"
+                : String.format(Locale.US, "forecast models: %s (%+.0f pts vs the usual up-share)", fSide > 0 ? "UP" : "DOWN", avg * 100);
+        if (skipped > 0) fText += " · " + skipped + " without a proven edge ignored";
         int eSide = 0;
         String eText = "evidence score: not loaded yet";
         if (o != null && o.result != null) {
@@ -145,8 +157,12 @@ final class ForecastPage {
     static String bestAnswer(ForecastRunner.Live l) {
         Forecaster.Prediction best = null;
         for (Forecaster.Prediction p : l.predictions)
-            if (!Double.isNaN(p.pUp) && (best == null || Math.abs(p.pUp - 0.5) > Math.abs(best.pUp - 0.5))) best = p;
+            if (!Double.isNaN(p.pUp) && (p.info == null || !p.info.tested() || p.info.proven())
+                    && (best == null || Math.abs(p.pUp - 0.5) > Math.abs(best.pUp - 0.5))) best = p;
+        if (best == null) for (Forecaster.Prediction p : l.predictions) if (!Double.isNaN(p.pUp)) { best = p; break; }
         if (best == null) return "No forecast yet.";
+        if (best.info != null && best.info.tested() && !best.info.proven())
+            return "No horizon beat the base rate on unseen sessions — treat these forecasts as no better than a coin weighted by the usual drift.";
         boolean up = best.pUp >= 0.5;
         StringBuilder b = new StringBuilder(String.format(Locale.US, "Most likely: %s — %s, %.0f%% (%s).",
                 best.label, up ? "UP" : "DOWN", Math.max(best.pUp, 1 - best.pUp) * 100, best.when));
@@ -161,16 +177,18 @@ final class ForecastPage {
         LinearLayout k = Ui.card(c);
         boolean has = !Double.isNaN(p.pUp);
         double up = has ? p.pUp : 0.5;
-        String st = has ? Forecaster.strength(up) : "";
+        String st = has ? Forecaster.strength(up, p.info) : "";
+        boolean noEdge = st.equals("No proven edge");
         LinearLayout head = Ui.row(c);
         head.addView(Ui.text(c, p.label, 15, Ui.TEXT, true), Ui.weight(1));
-        if (has) head.addView(Ui.pill(c, st, st.equals("Toss-up") ? Ui.GREY : up >= 0.5 ? Ui.GREEN : Ui.RED), Ui.wrap());
+        if (has) head.addView(Ui.pill(c, st, st.equals("Toss-up") || noEdge ? Ui.GREY : up >= 0.5 ? Ui.GREEN : Ui.RED), Ui.wrap());
         k.addView(head);
         k.addView(Ui.text(c, p.when, 12, Ui.DIM, false), Ui.top(c, 2));
         String big = !has ? "No model" : up >= 0.5 ? String.format(Locale.US, "UP %.0f%%", up * 100) : String.format(Locale.US, "DOWN %.0f%%", (1 - up) * 100);
-        int color = !has || st.equals("Toss-up") ? Ui.GREY : up >= 0.5 ? Ui.GREEN : Ui.RED;
+        int color = !has || st.equals("Toss-up") || noEdge ? Ui.GREY : up >= 0.5 ? Ui.GREEN : Ui.RED;
         k.addView(Ui.text(c, big, 26, color, true), Ui.top(c, 6));
         if (has) k.addView(bar(c, up), Ui.top(c, 6));
+        if (p.info != null) k.addView(Ui.text(c, "Tested: " + ForecastRunner.testLine(p.info), 11, p.info.proven() ? Ui.DIM : Ui.AMBER, false), Ui.top(c, 6));
         if (!Double.isNaN(p.moveMedPts)) k.addView(Ui.text(c, String.format(Locale.US, "Typical move over this time: ±%.0f points", p.moveMedPts), 12, Ui.DIM, false), Ui.top(c, 6));
         if (!p.reasons.isEmpty()) {
             k.addView(Ui.text(c, "Biggest reasons:", 12, Ui.DIM, true), Ui.top(c, 8));
