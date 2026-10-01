@@ -87,7 +87,10 @@ The Forecast tab (first tab) answers one question: **which way is Nifty moving n
 Not done (Tier 3, later): historical factor analytics beyond the Record page, option-surface modelling, cross-asset correlation regimes, automatic parameter search. True order-flow (who hit the bid/ask) is not available from Kite REST.
 
 ## Build
-`./build.sh` → `build/NiftyDirection_v<version>_<date>_<time>.apk` (ecj → d8 → aapt2 → align → apksigner, no Gradle).
+`./build.sh` → `build/NiftyDirection_<version>_<date>_<time>.apk` (ecj → d8 → aapt2 → align → apksigner, no Gradle).
+1. One time: `./tools/setup_toolchain.sh` (Linux x64 with Java 11+, Node/npm and python3; installs to `/root/androidtools`).
+2. Put the release keystore at `keystore/release.jks`. Use the same keystore as the installed app, or Android refuses the update.
+3. `KS_PASS=<keystore password> ./build.sh`
 Tests: `./test/run_tests.sh` (engine scenarios + end-to-end collector against a local mock Kite server).
 
 ## Code layout
