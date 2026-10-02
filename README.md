@@ -10,7 +10,7 @@ A **NIFTY market-intelligence and probability engine** for Android. It answers f
 > Decision support only — not investment advice. Weights are starting engineering values, not validated
 > optima; use the prediction log and replay tools to measure before risking capital.
 
-**Install:** `release/NiftyDirectionEngine-v3.0.0.apk` (Android 8.0+, sideload / "install unknown apps").
+**Install:** `release/NiftyDirectionEngine-v3.1.0.apk` (Android 8.0+, sideload / "install unknown apps").
 It opens in **Simulator** mode (synthetic data, works offline/after hours). Switch to live data in **Setup**.
 
 ## Project layout
@@ -49,12 +49,34 @@ release/  prebuilt APK
 
 ## Data sources (app)
 
+**Kite Connect mode (recommended)** — with a Kite Connect subscription:
+
+| Data | From Kite | Gap-filled by |
+|------|-----------|---------------|
+| NIFTY, Bank Nifty, India VIX, sector indices, all 50 stocks | one `/quote` call per cycle | — |
+| Near-month futures price, OI, volume | `/quote` | — |
+| Futures OI history (1-min, today) + previous-day OI | historical API with `oi=1` | — |
+| Option chain (nearest expiry, ATM ±20 strikes): LTP, best bid/ask, OI, volume | `/quote` + NFO instrument dump | IV implied from prices (Black-Scholes); ΔOI from NSE's chain, else change since first fetch today |
+| 1-min NIFTY & VIX bars, 1-year daily history | historical API | — |
+| Free-float index weights | — | NSE (refreshed every 6 h) |
+| FII/DII flows | — | NSE |
+| Global markets, news | — | Yahoo, RSS |
+
+Setup: in developers.kite.trade set any redirect URL for your app (e.g. `https://127.0.0.1/kite`; the app
+intercepts it), enter the API key and secret in **Setup**, tap **Login to Kite**. Access tokens expire daily
+(~06:00 IST); the app shows a banner when today's login is needed and falls back to NSE/Yahoo meanwhile. The
+API secret stays in the app's private storage on the phone.
+Rate limits are respected: one quote request per cycle (Kite allows 1/s), historical requests once a minute,
+sequentially (limit 3/s), instrument dump once a day (cached).
+
+**Public mode** (no Kite):
+
 | Feed | Source | Notes |
 |------|--------|-------|
-| NIFTY, Bank Nifty, VIX, sector indices | NSE `allIndices` (Kite overrides if logged in) | |
+| NIFTY, Bank Nifty, VIX, sector indices | NSE `allIndices` | |
 | 50 constituents + free-float mcap | NSE `getIndicesData` (legacy endpoint fallback) | live index weights |
 | Option chain | NSE `option-chain-v3` (legacy fallback) | OI, ΔOI, volume, IV, LTP, bid/ask |
-| Futures price/OI/ΔOI | NSE `getSymbolDerivativesData` (Kite if logged in) | |
+| Futures price/OI/ΔOI | NSE `getSymbolDerivativesData` | |
 | FII/DII | NSE `fiidiiTradeReact` | previous session |
 | Intraday bars / daily history | Yahoo chart API, NSE `getIndexChart` fallback | |
 | Global markets | Yahoo (ES=F, NQ=F, Nikkei, HSI, DXY, US10Y, Brent, gold, USDINR…) | |
@@ -62,8 +84,7 @@ release/  prebuilt APK
 | Slow macro (CPI, GDP, PMI, repo…) | entered in Setup | capped bias only |
 
 NSE/Yahoo are public website endpoints: they can be delayed, rate-limited or changed without notice. Each feed's
-status is shown on the Home tab. **Kite Connect** (optional): enter API key + secret, tap *Login to Kite*; the
-redirect's `request_token` is exchanged for the daily access token.
+status is shown on the Home tab.
 
 ## App tabs
 
@@ -82,6 +103,7 @@ Requires JDK 17+ and the Android SDK (platform 35).
 ```bash
 ./gradlew :engine:test            # engine unit tests (simulated session, replay no-look-ahead, news dedup, BS parity…)
 ./gradlew :app:assembleDebug      # APK → app/build/outputs/apk/debug/app-debug.apk
+./gradlew :app:testDebugUnitTest --tests '*KiteDataTest*'   # Kite client vs mock server + real NFO instrument dump
 ./gradlew :app:testDebugUnitTest -DliveNetwork=true --tests '*LiveFeedTest*'   # hits real NSE endpoints
 ```
 

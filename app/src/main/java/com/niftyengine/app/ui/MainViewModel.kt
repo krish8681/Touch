@@ -87,7 +87,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     private fun makeProvider(): SnapshotProvider = when (_settings.value.mode) {
         DataMode.SIMULATED -> SimulatedMarket(seed = System.currentTimeMillis() / 86_400_000L)
-        else -> LiveSnapshotProvider { _settings.value }
+        else -> LiveSnapshotProvider(File(getApplication<Application>().cacheDir, "kite")) { _settings.value }
     }
 
     fun start() {
@@ -176,6 +176,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         val old = _settings.value
         settingsStore.save(new)
         _settings.value = new
+        if (old.kiteAccessToken != new.kiteAccessToken && new.mode == DataMode.LIVE_KITE) refreshNow()
         if (old.mode != new.mode || old.engineConfig() != new.engineConfig()) {
             engine = NiftyDirectionEngine(new.engineConfig())
             if (old.mode != new.mode) { provider = makeProvider(); path.clear(); _ui.update { it.copy(chart = emptyList(), output = null) } }

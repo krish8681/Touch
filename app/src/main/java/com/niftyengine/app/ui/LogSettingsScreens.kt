@@ -210,13 +210,19 @@ fun SettingsScreen(current: AppSettings, onSave: (AppSettings) -> Unit, onKiteLo
         Field("Live refresh (seconds)", refresh, KeyboardType.Number) { refresh = it }
         Field("Simulator: seconds per simulated minute", simSpeed, KeyboardType.Number) { simSpeed = it }
     }
-    Card("Kite Connect (optional)") {
+    Card("Kite Connect") {
+        Label("1. In developers.kite.trade → your app, set any Redirect URL (e.g. https://127.0.0.1/kite) — the app intercepts it.\n" +
+            "2. Enter API key + secret here, tap Login to Kite, sign in. Tokens expire daily (~6 AM), so log in once each trading day.\n" +
+            "3. With Kite active: quotes, option chain, futures OI history and 1-min/daily candles come from Kite; NSE adds free-float weights, ΔOI and FII/DII; Yahoo/RSS add global markets and news.\n" +
+            "The API secret is stored only in this app's private storage on this phone.",
+            color = C.dim, size = 10.sp, mono = false)
+        Spacer(Modifier.height(6.dp))
         Field("API key", kKey, KeyboardType.Text) { kKey = it }
         Field("API secret", kSecret, KeyboardType.Password, secret = true) { kSecret = it }
         Field("Access token (filled by login)", kToken, KeyboardType.Text, secret = true) { kToken = it }
         if (current.kiteTokenDate.isNotBlank()) Label("Token issued: ${current.kiteTokenDate} (expires daily)", color = C.dim, size = 10.sp)
         Button(onClick = { onKiteLogin(build()) }, enabled = kKey.isNotBlank() && kSecret.isNotBlank(), modifier = Modifier.fillMaxWidth(),
-            colors = ButtonDefaults.buttonColors(containerColor = C.blue)) { Text("Login to Kite", fontSize = 12.sp) }
+            colors = ButtonDefaults.buttonColors(containerColor = C.blue)) { Text("Login to Kite (switches to Kite mode)", fontSize = 12.sp) }
     }
     Card("Prediction & trade filter") {
         Field("Prediction horizon (minutes)", horizon, KeyboardType.Number) { horizon = it }

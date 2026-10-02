@@ -45,7 +45,12 @@ data class FuturesData(
     /** OI at previous day close. NaN if unknown (engine then uses intraday OI history). */
     val prevOpenInterest: Double = Double.NaN,
     val volume: Double = 0.0,
+    /** Today's futures bars with OI (e.g. Kite historical `oi=1`), ascending. Optional. */
+    val intraday: List<FuturesBar> = emptyList(),
 )
+
+@Serializable
+data class FuturesBar(val t: Long, val price: Double, val oi: Double, val volume: Double = 0.0)
 
 @Serializable
 data class OptionLeg(

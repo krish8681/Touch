@@ -8,7 +8,7 @@ import com.niftyengine.engine.model.MacroInputs
 enum class DataMode(val label: String) {
     SIMULATED("Simulator (offline demo)"),
     LIVE_PUBLIC("Live · NSE + Yahoo + RSS"),
-    LIVE_KITE("Live · Kite + NSE + Yahoo + RSS"),
+    LIVE_KITE("Live · Kite Connect (recommended)"),
 }
 
 data class AppSettings(
@@ -35,6 +35,16 @@ data class AppSettings(
         creditGrowth = Double.NaN, liquidityCr = Double.NaN,
     ),
 ) {
+    /** Kite access tokens expire daily around 06:00 IST. */
+    fun kiteLoginNeeded(now: Long = System.currentTimeMillis()): Boolean {
+        if (mode != DataMode.LIVE_KITE) return false
+        if (kiteAccessToken.isBlank() || kiteTokenDate.isBlank()) return true
+        val z = com.niftyengine.engine.core.Session.zdt(now)
+        val issued = runCatching { java.time.LocalDate.parse(kiteTokenDate) }.getOrNull() ?: return true
+        val validFrom = if (z.hour < 6) z.toLocalDate().minusDays(1) else z.toLocalDate()
+        return issued.isBefore(validFrom)
+    }
+
     fun engineConfig() = EngineConfig(
         horizonMinutes = horizonMinutes, minProbability = minProbability, minConfidence = minConfidence,
         minExpectedMovePts = minExpectedMovePts, requireMarketOpen = mode != DataMode.SIMULATED,

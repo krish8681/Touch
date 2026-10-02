@@ -81,6 +81,14 @@ class MainActivity : ComponentActivity() {
                 Column(Modifier.fillMaxSize().background(C.bg).systemBarsPadding()) {
                     TopBar(ui.output?.dataSource ?: settings.mode.label, ui.running, ui.busy, ui.error,
                         onToggle = { if (ui.running) vm.stop() else vm.start() }, onRefresh = { vm.refreshNow() })
+                    if (settings.kiteLoginNeeded()) {
+                        Row(Modifier.fillMaxWidth().background(C.amber.copy(alpha = 0.15f)).clickable {
+                            if (settings.kiteApiKey.isNotBlank() && settings.kiteApiSecret.isNotBlank()) startKiteLogin(settings) else tab = Tab.SETTINGS
+                        }.padding(horizontal = 14.dp, vertical = 8.dp)) {
+                            Label("Kite login needed for today's session — tap to log in (using NSE/Yahoo until then)",
+                                color = C.amber, size = 11.sp, weight = FontWeight.Bold, mono = false)
+                        }
+                    }
                     val scroll = rememberScrollState()
                     LaunchedEffect(tab) { scroll.scrollTo(0) }
                     Column(Modifier.weight(1f).fillMaxWidth().verticalScroll(scroll).padding(horizontal = 12.dp, vertical = 10.dp)) {

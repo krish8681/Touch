@@ -40,6 +40,14 @@ class FuturesPositionEngine(private val state: EngineState) {
     fun analyze(s: MarketSnapshot, now: Long): Result {
         val f = s.futures ?: return Result(EngineSignal.unavailable("Futures", "futures quote unavailable"),
             FuturesState.NEUTRAL, FuturesState.NEUTRAL, Double.NaN)
+        // Seed OI history from feed bars (e.g. Kite historical with OI) so 30-minute positioning is
+        // available immediately instead of after 30 minutes of polling.
+        val seedFrom = state.futures.firstOrNull()?.t ?: Long.MAX_VALUE
+        val seed = f.intraday.filter { it.t < seedFrom && it.t < now && it.oi > 0 }
+        if (seed.isNotEmpty()) {
+            val basisNow = f.last - s.nifty.last // historical spot approximated assuming constant basis
+            seed.asReversed().forEach { b -> state.futures.addFirst(EngineState.FutTick(b.t, b.price, b.oi, b.volume, b.price - basisNow)) }
+        }
         state.futures.addLast(EngineState.FutTick(now, f.last, f.openInterest, f.volume, s.nifty.last))
         while (state.futures.size > 600) state.futures.removeFirst()
 
