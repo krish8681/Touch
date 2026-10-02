@@ -52,6 +52,8 @@ public class Prefs {
         c.guard.coolMin = (int) Math.max(0, num("guard_cool", 30));
         c.guard.noFirstMin = (int) Math.max(0, num("guard_first", 15));
         c.guard.noLastMin = (int) Math.max(0, num("guard_last", 30));
+        c.sessions = (int) Math.max(120, Math.min(1000, num("val_sessions", 500)));
+        c.blocks = (int) Math.max(3, Math.min(10, num("val_blocks", 6)));
         return c;
     }
 

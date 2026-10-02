@@ -155,6 +155,7 @@ public class Collector {
         s.futExpiries = futExp; s.optExpiries = optExp;
         s.events = EventCalendar.upcoming(s.today, 10, futExp, optExp, cfg.userEvents, s.news);
         s.collectMs = System.currentTimeMillis() - t0;
+        Recorder2.record(dir, s);   // live-only market data → our own history for future models
         return s;
     }
 

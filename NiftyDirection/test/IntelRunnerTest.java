@@ -8,13 +8,23 @@ public class IntelRunnerTest {
     public static void main(String[] a) throws Exception {
         Kite.ROOT = "http://127.0.0.1:" + a[0];
         HistoryLoader.YAHOO = new String[]{"http://127.0.0.1:" + a[0], "http://127.0.0.1:" + a[0]};
+        com.krish.niftydirection.data.Nse.ARCHIVES = "http://127.0.0.1:" + a[0];   // NSE positioning from the mock
+        ForecastRunner.YEARS_DAYS = 3 * 365 + 10;   // shorter history keeps the test quick
+        ForecastRunner.POI_SESSIONS = 120;
         File dir = new File(a[2]); dir.mkdirs();
         Kite k = new Kite("KEY", "TOKEN");
         long t0 = System.currentTimeMillis();
         String rep = IntelRunner.train(k, dir, a[1], new AtomicBoolean(), (w, d, n) -> {});
         System.out.println(rep);
-        boolean ok = IntelRunner.models(dir).size() == 9 && !IntelRunner.needsTraining(dir) && !IntelRunner.graph(dir).isEmpty();
-        Validator.Report vr = IntelRunner.validate(k, dir, a[1], new Validator.Config(), new AtomicBoolean(), (w, d, n) -> {});
+        com.krish.niftydirection.forecast.History hh = ForecastRunner.history(k, dir, a[1], new AtomicBoolean(), (w, d, n) -> {});
+        boolean data = hh.global.containsKey(FeatureEngine.POI_FII_FUT) && hh.global.get(FeatureEngine.POI_FII_FUT).size() > 50
+                && hh.days.get(hh.days.size() - 1).aux.containsKey("STK:HDFCBANK");
+        double[] fv = FeatureEngine.compute(hh, hh.days.size() - 1, 30, hh.sessionIndex());
+        data &= !Double.isNaN(fv[82]) && !Double.isNaN(fv[78]) && !Double.isNaN(fv[74]) && FeatureEngine.NAMES.length == 88 && FeatureEngine.HIGH.length == 88;
+        System.out.println("new data: positioning " + (hh.global.containsKey(FeatureEngine.POI_FII_FUT) ? hh.global.get(FeatureEngine.POI_FII_FUT).size() : 0)
+                + " sessions, leaders " + hh.days.get(hh.days.size() - 1).aux.containsKey("STK:HDFCBANK") + ", inputs " + FeatureEngine.N + " → " + (data ? "ok" : "MISSING"));
+        boolean ok = data && IntelRunner.models(dir).size() == 9 && !IntelRunner.needsTraining(dir) && !IntelRunner.graph(dir).isEmpty();
+        Validator.Report vr = IntelRunner.validate(k, dir, a[1], quick(), new AtomicBoolean(), (w, d, n) -> {});
         System.out.println("validation: " + vr.verdict + " — " + vr.summary + " · audit " + vr.auditChecked + "/" + vr.auditFailed);
         ok &= vr.sessions > 0 && vr.auditFailed == 0 && !IntelRunner.needsValidation(dir) && IntelRunner.governor(dir).size() == 9;
         Snapshot s = new Snapshot();
@@ -24,7 +34,7 @@ public class IntelRunnerTest {
         n.niftyImpact = -0.7; n.severity = "HIGH"; n.time = System.currentTimeMillis() - 20 * 60000; n.verification = "VERIFIED";
         s.news.add(n);
         IntelEngine.LiveContext ctx = IntelRunner.context(s, null, "");
-        Validator.Config cfg = new Validator.Config();
+        Validator.Config cfg = quick();
         IntelEngine.Forecast fc = IntelRunner.live(k, dir, a[1], 11 * 60 + 2, Double.NaN, ctx, cfg, new AtomicBoolean(), (w, d, x) -> {});
         int filled = 0;
         for (IntelEngine.HPred p : fc.preds) { if (p.has()) filled++; System.out.printf("%-4s %-8s P(up) %.3f conf %3d %-6s range68 ±%.2f%% %s%n", p.hz.id, p.direction, p.pFinal, p.confidence, p.confLabel, p.range68 * 100, p.tradeable ? "TRADEABLE" : "no trade: " + p.gate); }
@@ -62,4 +72,5 @@ public class IntelRunnerTest {
         System.out.println(ok ? "1 passed, 0 failed" : "0 passed, 1 failed");
         if (!ok) System.exit(1);
     }
+    static Validator.Config quick() { Validator.Config c = new Validator.Config(); c.sessions = 250; c.blocks = 4; return c; }
 }

@@ -181,8 +181,10 @@ public final class IntelEngine {
             if (preOpen) pm = sig(logit(pm) * shrink);
             p.pModel = pm;
             double[] ov = Feedback.applyOverlay(pm, ev, fc.news[i], hz.band, overlays == null ? null : overlays.get(hz.band));
-            p.pFinal = ov[0];
-            p.evPush = ov[1]; p.newsPush = ov[2];
+            // live pushes (option evidence, news) are untested priors: on a horizon without a proven edge they count half
+            double trust = m.info.proven ? 1 : 0.5;
+            p.pFinal = pm + trust * (ov[0] - pm);
+            p.evPush = ov[1] * trust; p.newsPush = ov[2] * trust;
             p.direction = p.pFinal >= 0.53 ? "BULLISH" : p.pFinal <= 0.47 ? "BEARISH" : "NEUTRAL";
 
             // ---- Why? (probability points per group, then the live overlays)
@@ -229,6 +231,7 @@ public final class IntelEngine {
 
             // ---- trade gate: is the forecast strong enough to act on? (signals only — the app never trades)
             if (p.sideProb() < tradeThreshold) p.gate.add(String.format(Locale.US, "probability %.0f%% is below the %.0f%% threshold", p.sideProb() * 100, tradeThreshold * 100));
+            if (hz.watchOnly()) p.gate.add(hz.swing() ? "watch only: too few independent weeks to prove an edge" : "watch only: moves this short are smaller than costs");
             if (!m.info.proven) p.gate.add(m.info.tested() ? "no proven edge on unseen sessions" : "not tested yet");
             if (p.confidence < 40) p.gate.add("confidence is low (" + p.confidence + ")");
             if (EventCalendarRisk.PRE_EVENT.equals(fc.risk.mode) && !hz.swing()) p.gate.add("a scheduled event is less than 30 minutes away");

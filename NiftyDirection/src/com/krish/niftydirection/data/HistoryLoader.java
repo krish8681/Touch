@@ -192,6 +192,49 @@ public class HistoryLoader {
         }
     }
 
+    /** History.global keys of the participant-OI series, in the order of Nse.participantDay's values. */
+    public static final String[] POI_KEYS = {com.krish.niftydirection.intel.FeatureEngine.POI_FII_FUT, com.krish.niftydirection.intel.FeatureEngine.POI_FII_OPT,
+            com.krish.niftydirection.intel.FeatureEngine.POI_CLIENT_FUT, com.krish.niftydirection.intel.FeatureEngine.POI_PRO_FUT, com.krish.niftydirection.intel.FeatureEngine.POI_DII_FUT};
+
+    /**
+     * NSE participant-wise open interest for the newest `max` sessions (one small file a day from NSE's archive), cached in
+     * cache/poi.csv so each day is fetched once. Stops early after repeated failures (NSE unreachable): missing days stay NaN.
+     */
+    public TreeMap<String, double[]> participant(List<String> sessions, int max, Progress pr) throws Exception {
+        File f = new File(cache, "poi.csv");
+        TreeMap<String, double[]> out = new TreeMap<>();
+        java.util.Set<String> missing = new java.util.HashSet<>();
+        if (f.exists()) for (String line : new String(java.nio.file.Files.readAllBytes(f.toPath()), java.nio.charset.StandardCharsets.UTF_8).split("\n")) {
+            String[] p = line.split(",");
+            if (p.length == 2 && "none".equals(p[1])) { missing.add(p[0]); continue; }
+            if (p.length < 6) continue;
+            double[] v = new double[5];
+            for (int i = 0; i < 5; i++) try { v[i] = Double.parseDouble(p[i + 1]); } catch (Exception e) { v[i] = Double.NaN; }
+            out.put(p[0], v);
+        }
+        List<String> want = new ArrayList<>();
+        for (int i = Math.max(0, sessions.size() - max); i < sessions.size(); i++) { String d = sessions.get(i); if (!out.containsKey(d) && !missing.contains(d)) want.add(d); }
+        StringBuilder add = new StringBuilder();
+        int fails = 0, done = 0;
+        for (String d : want) {
+            checkCancel();
+            if (done++ % 20 == 0) pr.step("NSE positioning history " + d.substring(0, 7) + " (first run only)…", done, want.size());
+            double[] v = com.krish.niftydirection.data.Nse.participantDay(d);
+            if (v == null) {
+                if (++fails >= 8 && out.isEmpty()) break;   // NSE unreachable from here: skip this source
+                if (fails >= 25) break;
+                continue;   // not persisted: a network blip should not hide the day for ever
+            }
+            fails = 0;
+            out.put(d, v);
+            add.append(d);
+            for (double x : v) add.append(',').append(Double.isNaN(x) ? "" : String.format(java.util.Locale.US, "%.5f", x));
+            add.append('\n');
+        }
+        if (add.length() > 0) try (java.io.FileWriter w = new java.io.FileWriter(f, true)) { w.write(add.toString()); }
+        return out;
+    }
+
     static void write(File f, String s) throws Exception {
         try (Writer w = new OutputStreamWriter(new FileOutputStream(f), StandardCharsets.UTF_8)) { w.write(s); }
     }

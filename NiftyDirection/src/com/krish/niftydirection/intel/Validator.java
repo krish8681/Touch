@@ -35,7 +35,7 @@ import java.util.TreeMap;
 public final class Validator {
     private Validator() {}
 
-    public static final int REPLAY_SESSIONS = 250, BLOCKS = 4, MIN_TRAIN_SESSIONS = 300, AUDIT = 40, MIN_BUCKET = 30;
+    public static final int MIN_TRAIN_SESSIONS = 300, AUDIT = 40, MIN_BUCKET = 30;
     public static final int VERSION = 1;
 
     public interface Progress { void step(String what, int done, int total); }
@@ -49,6 +49,8 @@ public final class Validator {
         public Set<String> eventDates = new HashSet<>();   // RBI / Fed / Budget days, for the regime and stress tables
         /** Risk guard applied to live act signals (not to the replay, which tests the raw engine). */
         public Journal.Guard guard = new Journal.Guard();
+        /** Replay window (sessions) and walk-forward blocks. 500 sessions ≈ 2 years: enough for the daily horizons to be judged. */
+        public int sessions = 500, blocks = 6;
     }
 
     /** Approximate Zerodha charges for one futures round trip, in ₹ (brokerage, STT, exchange, SEBI, stamp, GST). */
@@ -159,6 +161,7 @@ public final class Validator {
     public static Report run(History h, Config cfg, Progress pr) {
         Report rep = new Report();
         rep.lot = cfg.lot; rep.slippagePts = cfg.slippagePts; rep.stopMult = cfg.stopMult; rep.threshold = cfg.threshold;
+        final int BLOCKS = Math.max(2, cfg.blocks);
         pr.step("Preparing the replay…", 0, BLOCKS + 2);
         Trainer.Dataset ds = Trainer.dataset(h);
         int[] sidx = h.sessionIndex();
@@ -167,7 +170,7 @@ public final class Validator {
         for (int i = 0; i < sessions.size(); i++) pos.put(sessions.get(i), i);
         java.util.TreeSet<String> dset = new java.util.TreeSet<>(ds.date);
         String[] D = dset.toArray(new String[0]);
-        int nRep = Math.min(REPLAY_SESSIONS, D.length - MIN_TRAIN_SESSIONS);
+        int nRep = Math.min(Math.max(60, cfg.sessions), D.length - MIN_TRAIN_SESSIONS);
         if (nRep < 60) {
             rep.summary = "Not enough history for a replay (" + D.length + " sessions; needs " + (MIN_TRAIN_SESSIONS + 60) + ").";
             return rep;

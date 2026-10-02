@@ -123,12 +123,14 @@ public class SettingsActivity extends Activity {
                 + "it has a proven edge, confidence is at least medium, data quality is fine and no event is minutes away. Signals only — the app never trades.");
         text("trade_threshold", "Probability needed before a forecast counts as strong enough (55–90, %)", "62", NUM);
 
-        section("🧪  Pre-live validation (simulated trading)", "After every training the app replays the last ~12 months through the same engine and trades every "
+        section("🧪  Pre-live validation (simulated trading)", "After every training the app replays the last ~2 years (500 sessions) through the same engine and trades every "
                 + "\"strong enough\" signal in Nifty futures: entry at the next 5-minute bar, exit at the horizon's end or the stop, with slippage and "
                 + "approximate Zerodha charges (brokerage, STT, exchange, SEBI, stamp, GST). Only horizons that PASS may show \"strong enough to act on\" live.");
         text("sim_lot", "Nifty futures lot size (check the current lot with your broker)", "65", NUM);
         text("sim_slip", "Slippage per side, Nifty points", "1", DEC);
         text("sim_stop", "Stop = this × the 68% expected range (0 = no stop)", "1", DEC);
+        text("val_sessions", "Replay length, sessions (120–1000; longer = fairer for the daily horizons, slower)", "500", NUM);
+        text("val_blocks", "Walk-forward blocks (3–10)", "6", NUM);
 
         section("🛡  Risk guard", "Protects you on a bad day. While it is on, no new \"strong enough to act on\" signal is shown when any rule is hit. "
                 + "It counts the trades you mark \"I took this\" in the AI tab (your real trades).");

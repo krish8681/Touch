@@ -13,7 +13,7 @@ import java.util.Map;
  * the calibration map, the expected-range table and the walk-forward test results.
  */
 public final class HorizonModel {
-    public static final int VERSION = 3;   // 3: 2-hour and Day-close horizons (2: chains, three-way outlook)
+    public static final int VERSION = 4;   // 4: weighted fits, group gating, shrinkage, leaders + positioning (3: 2-hour, Day close)
     public static final int G = FeatureEngine.GROUPS.length;
 
     public String id;
@@ -22,6 +22,12 @@ public final class HorizonModel {
     public final LogReg[] groups = new LogReg[G];
     public LogReg meta;
     public Calibrator calib = new Calibrator();
+    /** Groups the meta model may use (false = its out-of-sample predictions did not beat the base rate). */
+    public boolean[] use = filled(G);
+    /** Final shrink toward the base rate: p = base + shrink × (calibrated − base), shrink chosen on unseen sessions. */
+    public double shrink = 1, base = Double.NaN;
+
+    static boolean[] filled(int n) { boolean[] b = new boolean[n]; java.util.Arrays.fill(b, true); return b; }
     public final Info info = new Info();
 
     public static final class Info {
@@ -45,6 +51,9 @@ public final class HorizonModel {
         public double[] flat = new double[3], meanAbs = new double[3], excUp = new double[3], excDn = new double[3];
         /** Learnt share of each feature group in the meta model (adds to 100). */
         public double[] importance = new double[G];
+        /** Shrink toward the base rate chosen on unseen sessions (1 = trusted fully, 0 = always the base rate); groups the meta model uses. */
+        public double shrink = 1;
+        public String used = "";
         public boolean tested() { return testDays > 0 && !Double.isNaN(brier); }
     }
 
@@ -61,11 +70,13 @@ public final class HorizonModel {
     }
 
     /** Meta inputs: each group's logit, and the same × range flag and × high-volatility flag. */
-    static double[] metaRow(double[] groupP, Regime r) {
+    static double[] metaRow(double[] groupP, Regime r) { return metaRow(groupP, r, null); }
+
+    static double[] metaRow(double[] groupP, Regime r, boolean[] use) {
         double[] m = new double[3 * G];
         double rg = r.rangeFlag(), hv = r.highVolFlag();
         for (int g = 0; g < G; g++) {
-            double l = Double.isNaN(groupP[g]) ? 0 : logit(groupP[g]);
+            double l = Double.isNaN(groupP[g]) || (use != null && !use[g]) ? 0 : logit(groupP[g]);
             m[g] = l; m[G + g] = l * rg; m[2 * G + g] = l * hv;
         }
         return m;
@@ -82,18 +93,20 @@ public final class HorizonModel {
         Output o = new Output();
         for (int g = 0; g < G; g++) o.groupP[g] = groups[g] == null ? Double.NaN : groups[g].predict(groupRow(f, g));
         if (meta == null) return o;
-        double[] m = metaRow(o.groupP, r);
+        double[] m = metaRow(o.groupP, r, use);
         double[] z = new double[m.length + 1];
         meta.row(m, z);
         o.intercept = meta.w[0];
         double s = meta.w[0];
         for (int j = 0; j < m.length; j++) { double c = meta.w[j + 1] * z[j + 1]; o.contrib[j % G] += c; s += c; }
         o.pRaw = sig(s);
-        o.p = calib.apply(o.pRaw);
-        double slope = (calib.apply(Math.min(0.999, o.pRaw + 0.01)) - calib.apply(Math.max(0.001, o.pRaw - 0.01))) / 0.02;
+        o.p = shrunk(calib.apply(o.pRaw));
+        double slope = (shrunk(calib.apply(Math.min(0.999, o.pRaw + 0.01))) - shrunk(calib.apply(Math.max(0.001, o.pRaw - 0.01)))) / 0.02;
         o.ptsPerLogit = Math.max(0, slope) * o.pRaw * (1 - o.pRaw) * 100;
         return o;
     }
+
+    double shrunk(double p) { return Double.isNaN(base) || Double.isNaN(p) ? p : base + shrink * (p - base); }
 
     /** The inputs inside group g that push hardest in direction `sign`: {feature index, push} pairs, strongest first. */
     public double[][] topInputs(double[] f, int g, double sign, int max) {
@@ -133,12 +146,17 @@ public final class HorizonModel {
         j.put("groups", gs);
         if (meta != null) j.put("meta", lr(meta));
         j.put("calib", calib.toJson());
+        StringBuilder us = new StringBuilder();
+        for (boolean b : use) us.append(b ? '1' : '0');
+        j.put("use", us.toString()).put("shrink", shrink);
+        if (!Double.isNaN(base)) j.put("base", base);
         Info i = info;
         JSONObject ij = new JSONObject().put("samples", i.samples).put("days", i.days).put("from", i.from).put("to", i.to).put("upShare", nz(i.upShare))
                 .put("testFrom", i.testFrom).put("testDays", i.testDays).put("testSamples", i.testSamples)
                 .put("hit", nz(i.hit)).put("baseHit", nz(i.baseHit)).put("brier", nz(i.brier)).put("baseBrier", nz(i.baseBrier))
                 .put("logLoss", nz(i.logLoss)).put("baseLogLoss", nz(i.baseLogLoss))
-                .put("skill", nz(i.skill)).put("skillLo", nz(i.skillLo)).put("skillHi", nz(i.skillHi)).put("proven", i.proven);
+                .put("skill", nz(i.skill)).put("skillLo", nz(i.skillLo)).put("skillHi", nz(i.skillHi)).put("proven", i.proven)
+                .put("shrink", i.shrink).put("used", i.used);
         JSONArray rel = new JSONArray();
         for (double[] b : i.reliability) rel.put(arr(b));
         ij.put("reliability", rel);
@@ -162,6 +180,10 @@ public final class HorizonModel {
         }
         if (j.has("meta")) { m.meta = lr(j.getJSONObject("meta")); if (m.meta != null && m.meta.mean.length != 3 * G) m.meta = null; }
         m.calib = Calibrator.fromJson(j.optJSONObject("calib"));
+        String us = j.optString("use", "");
+        for (int g = 0; g < Math.min(G, us.length()); g++) m.use[g] = us.charAt(g) == '1';
+        m.shrink = j.optDouble("shrink", 1);
+        m.base = j.optDouble("base", Double.NaN);
         JSONObject ij = j.getJSONObject("info");
         Info i = m.info;
         i.samples = ij.optInt("samples"); i.days = ij.optInt("days"); i.from = ij.optString("from"); i.to = ij.optString("to"); i.upShare = nan(ij, "upShare");
@@ -169,6 +191,7 @@ public final class HorizonModel {
         i.hit = nan(ij, "hit"); i.baseHit = nan(ij, "baseHit"); i.brier = nan(ij, "brier"); i.baseBrier = nan(ij, "baseBrier");
         i.logLoss = nan(ij, "logLoss"); i.baseLogLoss = nan(ij, "baseLogLoss");
         i.skill = nan(ij, "skill"); i.skillLo = nan(ij, "skillLo"); i.skillHi = nan(ij, "skillHi"); i.proven = ij.optBoolean("proven", false);
+        i.shrink = ij.optDouble("shrink", 1); i.used = ij.optString("used", "");
         JSONArray rel = ij.optJSONArray("reliability");
         if (rel != null) { i.reliability = new double[rel.length()][]; for (int b = 0; b < rel.length(); b++) i.reliability[b] = darr(rel.getJSONArray(b)); }
         JSONObject br = ij.optJSONObject("byRegime");

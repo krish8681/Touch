@@ -28,6 +28,12 @@ public final class Horizon {
 
     public boolean swing() { return sessions > 0; }
 
+    /**
+     * Shown, never acted on: 15 / 30 min (moves smaller than costs, no direction signal in five years of 5-minute data) and
+     * 1 week (only ~50 independent outcomes a year — too few to learn from or to prove anything).
+     */
+    public boolean watchOnly() { return "15m".equals(id) || "30m".equals(id) || "1W".equals(id); }
+
     /** "Day close": to today's close from wherever the forecast is made (only defined while the session is running). */
     public boolean eod() { return "EOD".equals(id); }
 

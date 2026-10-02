@@ -8,7 +8,14 @@ public final class LogReg {
     public double[] w;        // w[0] = intercept, w[1..p] = weights of the standardised inputs
     public double[] mean, sd;
 
-    public static LogReg fit(double[][] X, int[] y, int[] rows, int nRows, double lambda, int iters) {
+    public static LogReg fit(double[][] X, int[] y, int[] rows, int nRows, double lambda, int iters) { return fit(X, y, rows, nRows, lambda, iters, null); }
+
+    /**
+     * wt (indexed like X, or null = all 1): sample weights. Overlapping samples that share one outcome, or inputs that repeat
+     * all day, should count as the few independent observations they are — weights below 1 make the same ridge penalty
+     * shrink harder, so the model cannot become sure of itself from repeated noise.
+     */
+    public static LogReg fit(double[][] X, int[] y, int[] rows, int nRows, double lambda, int iters, double[] wt) {
         int p = X[0].length;
         LogReg m = new LogReg();
         m.mean = new double[p]; m.sd = new double[p];
@@ -21,9 +28,9 @@ public final class LogReg {
         }
         int q = p + 1;
         double[] w = new double[q];
-        int ups = 0;
-        for (int r = 0; r < nRows; r++) ups += y[rows[r]];
-        double base = Math.min(0.99, Math.max(0.01, (ups + 0.5) / (nRows + 1.0)));
+        double ups = 0, tw = 0;
+        for (int r = 0; r < nRows; r++) { double wr = wt == null ? 1 : wt[rows[r]]; ups += wr * y[rows[r]]; tw += wr; }
+        double base = Math.min(0.99, Math.max(0.01, (ups + 0.5) / (tw + 1.0)));
         w[0] = Math.log(base / (1 - base));
         double[] z = new double[q];
         for (int it = 0; it < iters; it++) {
@@ -32,7 +39,8 @@ public final class LogReg {
             for (int r = 0; r < nRows; r++) {
                 m.row(X[rows[r]], z);
                 double pr = sigmoid(dot(w, z));
-                double e = y[rows[r]] - pr, s = pr * (1 - pr);
+                double wr = wt == null ? 1 : wt[rows[r]];
+                double e = wr * (y[rows[r]] - pr), s = wr * pr * (1 - pr);
                 for (int a = 0; a < q; a++) {
                     if (z[a] == 0) continue;
                     g[a] += e * z[a];

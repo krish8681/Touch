@@ -36,9 +36,11 @@ import java.util.zip.GZIPOutputStream;
  *  - live(): the same History plus today's bars so far → one forecast per horizon. Same code path as training.
  */
 public class ForecastRunner {
-    public static final int YEARS_DAYS = 3 * 365 + 10;
+    public static int YEARS_DAYS = 5 * 365 + 10;     // 5 years: a longer replay can judge the daily horizons
     static final String ANCHOR = "2018-01-01";
     static final int CHUNK = 95;
+    /** Sessions of NSE participant-OI history to keep (about 3 years; older days stay empty). */
+    public static int POI_SESSIONS = 760;
     static final String[][] GLOBAL = HistoryLoader.GLOBAL;
     static final long RETRAIN_MS = 7L * 24 * 3600 * 1000;
 
@@ -48,6 +50,7 @@ public class ForecastRunner {
     static LinkedHashMap<String, Long> tokens(Kite kite) throws Exception {
         List<String> want = new ArrayList<>(Arrays.asList(HistoryLoader.NIFTY, HistoryLoader.BANK, HistoryLoader.VIX));
         for (String[] x : Collector.SECTORS) want.add(x[1]);
+        for (String[] x : com.krish.niftydirection.intel.FeatureEngine.LEADER_STOCKS) want.add("NSE:" + x[0]);
         Map<String, Quote> q = kite.quote(want);
         if (!q.containsKey(HistoryLoader.NIFTY)) throw new Exception("Kite gave no Nifty token.");
         LinkedHashMap<String, Long> t = new LinkedHashMap<>();
@@ -55,6 +58,7 @@ public class ForecastRunner {
         if (q.containsKey(HistoryLoader.BANK)) t.put(History.BANK, q.get(HistoryLoader.BANK).token);
         if (q.containsKey(HistoryLoader.VIX)) t.put(History.VIX, q.get(HistoryLoader.VIX).token);
         for (String[] x : Collector.SECTORS) if (q.containsKey(x[1])) t.put("SEC:" + x[0], q.get(x[1]).token);
+        for (String[] x : com.krish.niftydirection.intel.FeatureEngine.LEADER_STOCKS) if (q.containsKey("NSE:" + x[0])) t.put("STK:" + x[0], q.get("NSE:" + x[0]).token);
         return t;
     }
 
@@ -75,7 +79,7 @@ public class ForecastRunner {
         File fd = new File(dir, "forecast");
         fd.mkdirs();
         File f = new File(fd, "history.bin.gz"), stamp = new File(fd, "history_date.txt");
-        String stampText = today + "|" + GLOBAL.length;   // a new market list rebuilds the cache the same day
+        String stampText = today + "|" + GLOBAL.length + "|h2";   // h2: 5 years, leaders, NSE positioning   // a new market list rebuilds the cache the same day
         if (f.exists() && stamp.exists() && stampText.equals(read(stamp).trim())) {
             try (DataInputStream in = new DataInputStream(new BufferedInputStream(new GZIPInputStream(new FileInputStream(f))))) { return History.read(in); }
             catch (Exception ignored) { }
@@ -85,7 +89,7 @@ public class ForecastRunner {
         LinkedHashMap<String, Long> tok = tokens(kite);
         String from = Collector.daysAgo(today, YEARS_DAYS), yday = Collector.daysAgo(today, 1);
         List<String[]> blocks = grid(from, yday);
-        int total = tok.size() * blocks.size() + 2 + GLOBAL.length, done = 0;
+        int total = tok.size() * blocks.size() + 3 + GLOBAL.length, done = 0;
         History h = new History();
         TreeMap<String, History.Day> byDate = new TreeMap<>();
         for (Map.Entry<String, Long> e : tok.entrySet()) {
@@ -129,6 +133,15 @@ public class ForecastRunner {
             TreeMap<String, Double> m = HistoryLoader.yahoo(dir, g[1], today);
             if (m != null && m.size() > 100) h.global.put(g[0], m);
         }
+        pr.step("NSE positioning history…", ++done, total);
+        try {
+            java.util.TreeMap<String, double[]> poi = rl.participant(sessions, POI_SESSIONS, pr);
+            for (int i = 0; i < HistoryLoader.POI_KEYS.length; i++) {
+                TreeMap<String, Double> m = new TreeMap<>();
+                for (Map.Entry<String, double[]> e : poi.entrySet()) if (!Double.isNaN(e.getValue()[i])) m.put(e.getKey(), e.getValue()[i]);
+                if (m.size() > 20) h.global.put(HistoryLoader.POI_KEYS[i], m);
+            }
+        } catch (HistoryLoader.CancelledException ce) { throw ce; } catch (Exception ignored) { }
         try (DataOutputStream o = new DataOutputStream(new BufferedOutputStream(new GZIPOutputStream(new FileOutputStream(f))))) { h.write(o); }
         if (HistoryLoader.settled()) HistoryLoader.write(stamp, stampText);   // before 6:00 IST: rebuild later with settled global closes
         return h;

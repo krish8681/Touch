@@ -128,6 +128,14 @@ class H(BaseHTTPRequestHandler):
         b = body.encode(); self.send_response(code); self.send_header("Content-Type", ctype); self.send_header("Content-Length", str(len(b))); self.end_headers(); self.wfile.write(b)
     def do_GET(self):
         u = urlparse(self.path); q = parse_qs(u.query)
+        if u.path.startswith("/content/nsccl/fao_participant_oi_"):   # NSE participant-wise OI (synthetic, varies by date)
+            ds = u.path.rsplit("_", 1)[1][:8]; v = int(ds) % 89
+            rows = ['"Participant wise Open Interest (no. of contracts) in Equity Derivatives as on test",,,,,,,,,,,,,,',
+                    "Client Type,Future Index Long,Future Index Short,Future Stock Long,Future Stock Short\t,Option Index Call Long,Option Index Put Long,Option Index Call Short,Option Index Put Short,Option Stock Call Long,Option Stock Put Long,Option Stock Call Short,Option Stock Put Short,Total Long Contracts\t,Total Short Contracts"]
+            for who, fl, fs in (("Client", 200000 + v * 900, 90000), ("DII", 40000, 15000), ("FII", 30000 + v * 400, 300000 - v * 500), ("Pro", 40000 + v * 100, 25000)):
+                rows.append("%s,%d,%d,1,1,%d,%d,%d,%d,1,1,1,1,1,1" % (who, fl, fs, 600000 + v * 1000, 900000, 700000, 400000 + v * 800))
+            rows.append("TOTAL,1,1,1,1,1,1,1,1,1,1,1,1,1,1")
+            return self.send(200, "\n".join(rows) + "\n", "text/csv")
         if u.path.startswith("/v1beta/models"):
             return self.send(200, json.dumps({"models": [
                 {"name": "models/gemini-3.5-flash", "supportedGenerationMethods": ["generateContent"]},

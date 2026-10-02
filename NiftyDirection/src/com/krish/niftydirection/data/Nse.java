@@ -66,7 +66,7 @@ public final class Nse {
         for (int back = 0; back < 10 && found < 2; back++) {
             int dow = c.get(Calendar.DAY_OF_WEEK);
             if (dow != Calendar.SATURDAY && dow != Calendar.SUNDAY) {
-                String url = "https://nsearchives.nseindia.com/content/nsccl/fao_participant_oi_" + f.format(c.getTime()) + ".csv";
+                String url = ARCHIVES + "/content/nsccl/fao_participant_oi_" + f.format(c.getTime()) + ".csv";
                 try {
                     double p = fiiLongPct(Http.get(url, headers("https://www.nseindia.com/"), 12000));
                     if (!Double.isNaN(p)) {
@@ -78,6 +78,40 @@ public final class Nse {
             c.add(Calendar.DAY_OF_MONTH, -1);
         }
         return r;
+    }
+
+    /** NSE archive host (tests point it at a local mock). */
+    public static String ARCHIVES = "https://nsearchives.nseindia.com";
+
+    /** Participant OI file of one session (yyyy-MM-dd): {FII fut long share, FII options net, Client fut long share, Pro fut long share, DII fut long share}. Null if absent. */
+    public static double[] participantDay(String date) {
+        String ddmmyyyy = date.substring(8, 10) + date.substring(5, 7) + date.substring(0, 4);
+        try { return participantRow(Http.get(ARCHIVES + "/content/nsccl/fao_participant_oi_" + ddmmyyyy + ".csv", headers("https://www.nseindia.com/"), 12000)); }
+        catch (Exception e) { return null; }
+    }
+
+    static double[] participantRow(String csv) throws Exception {
+        BufferedReader br = new BufferedReader(new StringReader(csv));
+        String line;
+        Map<String, Integer> col = null;
+        Map<String, double[]> who = new java.util.HashMap<>();
+        while ((line = br.readLine()) != null) {
+            String[] p = line.split(",");
+            for (int i = 0; i < p.length; i++) p[i] = p[i].replace("\"", "").trim();
+            if (col == null) {
+                if (p.length > 8 && p[0].equalsIgnoreCase("Client Type")) { col = new java.util.HashMap<>(); for (int i = 0; i < p.length; i++) col.put(p[i].toLowerCase(Locale.US), i); }
+                continue;
+            }
+            Integer fl = col.get("future index long"), fs = col.get("future index short"), cl = col.get("option index call long"), pl = col.get("option index put long"),
+                    cs = col.get("option index call short"), ps = col.get("option index put short");
+            if (fl == null || fs == null || cl == null || pl == null || cs == null || ps == null || p.length <= Math.max(Math.max(fl, fs), Math.max(Math.max(cl, pl), Math.max(cs, ps)))) continue;
+            double a = num(p[fl]), b = num(p[fs]), c = num(p[cl]), d = num(p[pl]), e = num(p[cs]), f = num(p[ps]);
+            double opt = c + d + e + f;
+            who.put(p[0].toUpperCase(Locale.US), new double[]{a + b > 0 ? a / (a + b) : Double.NaN, opt > 0 ? ((c - e) - (d - f)) / opt : Double.NaN});
+        }
+        double[] fii = who.get("FII"), cli = who.get("CLIENT"), pro = who.get("PRO"), dii = who.get("DII");
+        if (fii == null || cli == null) return null;
+        return new double[]{fii[0], fii[1], cli[0], pro == null ? Double.NaN : pro[0], dii == null ? Double.NaN : dii[0]};
     }
 
     /** Parses the participant OI csv: "Client Type,Future Index Long,Future Index Short,..." and returns FII long %. */

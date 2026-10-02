@@ -31,7 +31,9 @@ public final class Trainer {
     private Trainer() {}
 
     public static final int STEP = 3, ITERS = 12, FOLDS = 5, TEST_DAYS = 120, MIN_TEST_DAYS = 60, BOOT = 400;
-    public static final double LAMBDA = 10, META_LAMBDA = 5, OOS_SHARE = 0.6;
+    public static final double LAMBDA = 20, META_LAMBDA = 20, OOS_SHARE = 0.6;
+    /** Recency weighting: a session this many sessions old counts half as much (markets change; 2023's bull run is not 2026). */
+    public static final double HALF_LIFE = 250;
 
     public interface Progress { void step(String what, int done, int total); }
 
@@ -150,6 +152,19 @@ public final class Trainer {
         in.days = days.size(); in.from = days.first(); in.to = days.last();
         String[] D = days.toArray(new String[0]);
 
+        // ---- sample weights: recency × 1 / (rows that share one outcome or one piece of information)
+        Map<String, Integer> dIdx = new HashMap<>();
+        for (int i = 0; i < D.length; i++) dIdx.put(D[i], i);
+        double overlap = targetOverlap(hz, n / (double) D.length);
+        double[] rec = new double[n], wMeta = new double[n];
+        double ws = 0, wu = 0;
+        for (int r = 0; r < n; r++) {
+            rec[r] = Math.pow(0.5, (D.length - 1 - dIdx.get(day[r])) / HALF_LIFE);
+            wMeta[r] = rec[r] / overlap;
+            ws += rec[r]; wu += rec[r] * y[r];
+        }
+        double recentBase = ws > 0 ? wu / ws : in.upShare;
+
         // ---- expected-range tables: |move| / horizon volatility, by volatility bucket
         List<List<Double>> zb = new ArrayList<>();
         for (int b = 0; b < 3; b++) zb.add(new ArrayList<>());
@@ -189,6 +204,12 @@ public final class Trainer {
             for (int g = 0; g < HorizonModel.G; g++) Xg[g][r] = HorizonModel.groupRow(f, g);
         }
 
+        double[][] wG = new double[HorizonModel.G][n];
+        for (int g = 0; g < HorizonModel.G; g++) {
+            double div = Math.max(overlap, dupFactor(Xg[g], day, n));
+            for (int r = 0; r < n; r++) wG[g][r] = rec[r] / div;
+        }
+
         // ---- 2. out-of-sample group probabilities (purged, expanding blocks over the newest 60%)
         double[][] oos = new double[n][];
         int startIdx = (int) Math.floor(D.length * (1 - OOS_SHARE));
@@ -202,7 +223,7 @@ public final class Trainer {
                 else if (day[r].compareTo(from) < 0 && tday[r].compareTo(from) < 0) tr[nTr++] = r;
             }
             if (nTr < 500 || nTe == 0) continue;
-            LogReg[] gm = fitGroups(Xg, y, tr, nTr);
+            LogReg[] gm = fitGroups(Xg, y, tr, nTr, wG);
             for (int t = 0; t < nTe; t++) oos[te[t]] = groupProbs(gm, Xg, te[t]);
         }
         List<Integer> oosRows = new ArrayList<>();
@@ -218,12 +239,14 @@ public final class Trainer {
                 else if (tday[r].compareTo(testFrom) < 0) trL.add(r);
             }
             if (trL.size() >= 500 && teL.size() >= 100) {
-                LogReg meta = fitMeta(oos, reg, y, trL);
-                Calibrator cal = calib(meta, oos, reg, y, trL);
+                boolean[] use = gate(oos, y, trL, wMeta);
+                LogReg meta = fitMeta(oos, reg, y, trL, use, wMeta);
+                Calibrator cal = calib(meta, oos, reg, y, trL, use, wMeta);
+                double alpha = chooseShrink(oos, reg, y, day, tday, trL, use, wMeta);
                 int baseUps = 0;
                 for (int r : trL) baseUps += y[r];
                 double base = baseUps / (double) trL.size();
-                evaluate(in, meta, cal, base, oos, reg, y, day, teL, hz);
+                evaluate(in, meta, cal, base, oos, reg, y, day, teL, hz, use, alpha, wmean(y, trL, rec));
                 in.testFrom = testFrom;
                 in.testDays = nTest;
             }
@@ -232,23 +255,31 @@ public final class Trainer {
         // ---- 6. production models: groups on everything, meta + calibration on all out-of-sample rows
         int[] allRows = new int[n];
         for (int r = 0; r < n; r++) allRows[r] = r;
-        LogReg[] gm = fitGroups(Xg, y, allRows, n);
+        LogReg[] gm = fitGroups(Xg, y, allRows, n, wG);
         System.arraycopy(gm, 0, m.groups, 0, gm.length);
         List<Integer> metaRows = oosRows;
-        if (metaRows.size() < 500) {   // too little history for stacking: meta learns from in-sample group probabilities
+        boolean stacked = metaRows.size() >= 500;
+        if (!stacked) {   // too little history for stacking: meta learns from in-sample group probabilities
             metaRows = new ArrayList<>();
             for (int r = 0; r < n; r++) { oos[r] = groupProbs(gm, Xg, r); metaRows.add(r); }
         }
-        m.meta = fitMeta(oos, reg, y, metaRows);
-        m.calib = calib(m.meta, oos, reg, y, metaRows);
+        m.use = stacked ? gate(oos, y, metaRows, wMeta) : HorizonModel.filled(HorizonModel.G);
+        m.meta = fitMeta(oos, reg, y, metaRows, m.use, wMeta);
+        m.calib = calib(m.meta, oos, reg, y, metaRows, m.use, wMeta);
+        m.shrink = stacked ? chooseShrink(oos, reg, y, day, tday, metaRows, m.use, wMeta) : 0.5;
+        m.base = recentBase;
+        in.shrink = m.shrink;
+        StringBuilder used = new StringBuilder();
+        for (int g = 0; g < HorizonModel.G; g++) if (m.use[g] && m.groups[g] != null) used.append(used.length() > 0 ? ", " : "").append(FeatureEngine.GROUP_NAMES[g]);
+        in.used = used.length() == 0 ? "none (no group beat the base rate on unseen sessions)" : used.toString();
         importance(m);
         return m;
     }
 
-    static LogReg[] fitGroups(double[][][] Xg, int[] y, int[] rows, int nRows) {
+    static LogReg[] fitGroups(double[][][] Xg, int[] y, int[] rows, int nRows, double[][] wG) {
         LogReg[] out = new LogReg[HorizonModel.G];
         for (int g = 0; g < HorizonModel.G; g++) {
-            LogReg lr = LogReg.fit(Xg[g], y, rows, nRows, LAMBDA, ITERS);
+            LogReg lr = LogReg.fit(Xg[g], y, rows, nRows, LAMBDA, ITERS, wG == null ? null : wG[g]);
             boolean any = false;
             for (double sd : lr.sd) if (sd > 0) any = true;
             out[g] = any ? lr : null;
@@ -262,23 +293,91 @@ public final class Trainer {
         return p;
     }
 
-    static LogReg fitMeta(double[][] oos, Regime[] reg, int[] y, List<Integer> rows) {
+    static LogReg fitMeta(double[][] oos, Regime[] reg, int[] y, List<Integer> rows, boolean[] use, double[] w) {
         double[][] M = new double[y.length][];
         int[] idx = new int[rows.size()];
-        for (int i = 0; i < idx.length; i++) { int r = rows.get(i); idx[i] = r; M[r] = HorizonModel.metaRow(oos[r], reg[r]); }
+        for (int i = 0; i < idx.length; i++) { int r = rows.get(i); idx[i] = r; M[r] = HorizonModel.metaRow(oos[r], reg[r], use); }
         for (int r = 0; r < M.length; r++) if (M[r] == null) M[r] = new double[3 * HorizonModel.G];
-        return LogReg.fit(M, y, idx, idx.length, META_LAMBDA, ITERS);
+        return LogReg.fit(M, y, idx, idx.length, META_LAMBDA, ITERS, w);
     }
 
-    static Calibrator calib(LogReg meta, double[][] oos, Regime[] reg, int[] y, List<Integer> rows) {
+    static Calibrator calib(LogReg meta, double[][] oos, Regime[] reg, int[] y, List<Integer> rows, boolean[] use, double[] w) {
         double[] p = new double[rows.size()];
         int[] yy = new int[rows.size()];
-        for (int i = 0; i < p.length; i++) { int r = rows.get(i); p[i] = meta.predict(HorizonModel.metaRow(oos[r], reg[r])); yy[i] = y[r]; }
-        return Calibrator.fit(p, yy, p.length);
+        double eff = 0;
+        for (int i = 0; i < p.length; i++) { int r = rows.get(i); p[i] = meta.predict(HorizonModel.metaRow(oos[r], reg[r], use)); yy[i] = y[r]; eff += w == null ? 1 : w[r]; }
+        return Calibrator.fit(p, yy, p.length, eff);
+    }
+
+    /** Rows that share one outcome: overlapping intraday targets, the whole day for Day close, days × sessions for swing horizons. */
+    static double targetOverlap(Horizon hz, double rowsPerDay) {
+        if (hz.swing()) return Math.max(1, rowsPerDay * hz.sessions);
+        if (hz.eod()) return Math.max(1, rowsPerDay / 2);
+        return Math.max(1, hz.bars / (double) STEP);
+    }
+
+    /** Average number of rows per distinct input row within a day: about 26 for inputs that change once a day, ~1 for intraday ones. */
+    static double dupFactor(double[][] X, String[] day, int n) {
+        int distinct = 0;
+        java.util.HashSet<Integer> seen = new java.util.HashSet<>();
+        String cur = null;
+        for (int r = 0; r < n; r++) {
+            if (!day[r].equals(cur)) { cur = day[r]; seen.clear(); }
+            if (seen.add(Arrays.hashCode(X[r]))) distinct++;
+        }
+        return distinct > 0 ? n / (double) distinct : 1;
+    }
+
+    static double wmean(int[] y, List<Integer> rows, double[] w) {
+        double a = 0, b = 0;
+        for (int r : rows) { a += w[r] * y[r]; b += w[r]; }
+        return b > 0 ? a / b : 0.5;
+    }
+
+    /** Group gating: a group feeds the meta model only if its out-of-sample predictions beat the base rate (weighted Brier). */
+    static boolean[] gate(double[][] oos, int[] y, List<Integer> rows, double[] w) {
+        boolean[] use = new boolean[HorizonModel.G];
+        double base = wmean(y, rows, w);
+        for (int g = 0; g < HorizonModel.G; g++) {
+            double num = 0, den = 0;
+            for (int r : rows) {
+                double p = oos[r][g];
+                if (Double.isNaN(p)) continue;
+                num += w[r] * (p - y[r]) * (p - y[r]); den += w[r] * (base - y[r]) * (base - y[r]);
+            }
+            use[g] = den > 0 && 1 - num / den > 0;
+        }
+        return use;
+    }
+
+    /**
+     * How far to trust the calibrated probability: meta + calibration are learnt on the earlier 70% of the out-of-sample
+     * sessions, then the shrink toward the base rate that scores best on the later 30% is kept (0 = always the base rate).
+     */
+    static double chooseShrink(double[][] oos, Regime[] reg, int[] y, String[] day, String[] tday, List<Integer> rows, boolean[] use, double[] w) {
+        TreeSet<String> ds = new TreeSet<>();
+        for (int r : rows) ds.add(day[r]);
+        if (ds.size() < 40) return 0.5;
+        String split = ds.toArray(new String[0])[(int) (ds.size() * 0.7)];
+        List<Integer> early = new ArrayList<>(), late = new ArrayList<>();
+        for (int r : rows) { if (day[r].compareTo(split) >= 0) late.add(r); else if (tday[r].compareTo(split) < 0) early.add(r); }
+        if (early.size() < 300 || late.size() < 100) return 0.5;
+        LogReg me = fitMeta(oos, reg, y, early, use, w);
+        Calibrator ce = calib(me, oos, reg, y, early, use, w);
+        double b = wmean(y, early, w);
+        double[] p = new double[late.size()];
+        for (int i = 0; i < p.length; i++) { int r = late.get(i); p[i] = ce.apply(me.predict(HorizonModel.metaRow(oos[r], reg[r], use))); }
+        double best = 0, bestErr = Double.MAX_VALUE;
+        for (int a = 0; a <= 20; a++) {
+            double al = a / 20.0, err = 0;
+            for (int i = 0; i < p.length; i++) { int r = late.get(i); double q = b + al * (p[i] - b); err += w[r] * (q - y[r]) * (q - y[r]); }
+            if (err < bestErr - 1e-12) { bestErr = err; best = al; }
+        }
+        return best;
     }
 
     static void evaluate(HorizonModel.Info in, LogReg meta, Calibrator cal, double base, double[][] oos, Regime[] reg, int[] y, String[] day,
-                         List<Integer> te, Horizon hz) {
+                         List<Integer> te, Horizon hz, boolean[] use, double alpha, double sbase) {
         int n = te.size();
         double hit = 0, bhit = 0, br = 0, bb = 0, ll = 0, bll = 0;
         Map<String, double[]> perDay = new LinkedHashMap<>();   // day → {model brier sum, base brier sum, count}
@@ -286,7 +385,8 @@ public final class Trainer {
         Map<String, double[]> byReg = new LinkedHashMap<>();
         double bc = Math.max(1e-4, Math.min(1 - 1e-4, base));
         for (int r : te) {
-            double p = cal.apply(meta.predict(HorizonModel.metaRow(oos[r], reg[r])));
+            double p = cal.apply(meta.predict(HorizonModel.metaRow(oos[r], reg[r], use)));
+            p = sbase + alpha * (p - sbase);
             int yy = y[r];
             boolean right = (p >= 0.5 ? 1 : 0) == yy, bright = (base >= 0.5 ? 1 : 0) == yy;
             if (right) hit++;

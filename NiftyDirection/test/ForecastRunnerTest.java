@@ -6,7 +6,10 @@ import java.util.concurrent.atomic.AtomicBoolean;
 public class ForecastRunnerTest {
     public static void main(String[] a) throws Exception {
         Kite.ROOT = "http://127.0.0.1:" + a[0];
-        HistoryLoader.YAHOO = new String[]{"http://127.0.0.1:" + a[0], "http://127.0.0.1:" + a[0]};   // no internet in tests
+        HistoryLoader.YAHOO = new String[]{"http://127.0.0.1:" + a[0], "http://127.0.0.1:" + a[0]};
+        com.krish.niftydirection.data.Nse.ARCHIVES = "http://127.0.0.1:" + a[0];   // NSE positioning from the mock
+        ForecastRunner.YEARS_DAYS = 3 * 365 + 10;   // shorter history keeps the test quick
+        ForecastRunner.POI_SESSIONS = 120;   // no internet in tests
         // noon IST on the test day: after 6:00 the day's history cache is written (before it, global closes are not final)
         java.text.SimpleDateFormat f = new java.text.SimpleDateFormat("yyyy-MM-dd HH:mm", java.util.Locale.US);
         f.setTimeZone(Collector.IST);

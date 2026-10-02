@@ -33,6 +33,40 @@ Each factor's weight = base × source trust (Kite / NSE 1.0, Yahoo 0.8, Gemini 0
 Regime: enter a side at ±25, keep it until ±15 (hysteresis). CONFLICT when structure and live are both ≥30 and opposite (confidence halved).
 NO EDGE when evidence is weak or mixed; RANGE only with 2+ real range signs.
 
+## Pure 2.6 — honest models + more data for direction
+
+Why every horizon failed (analysis of the on-phone export): the inputs carried almost no direction information, and the
+models were **over-confident** — the penalty for confident misses was 2–16× larger than the real information. Causes:
+52 of 74 inputs change only once a day (≈750 independent values for 52 inputs → memorised noise; e.g. the 30-min model
+leaned 21% on commodities), overlapping samples counted as independent, and a 2023–25 bull-market memory.
+
+Model fixes (model version 4 — retrains automatically):
+- **Weighted learning**: each sample counts as the share of independent information it carries (overlapping outcomes and
+  inputs that repeat all day count less), and recent sessions count more (half-life 250 sessions).
+- **Group gating**: a group of inputs feeds the forecast only if its out-of-sample predictions beat the base rate.
+  The report lists the groups used per horizon.
+- **Shrinkage**: the final probability is pulled toward the base rate by an amount chosen on unseen sessions — when the
+  model knows nothing it now says ~50% instead of a confident 62%.
+- Isotonic calibration only with enough *independent* observations; Platt otherwise.
+- Untested live pushes (news, option evidence) count half on horizons without a proven edge.
+- **Watch only**: 15 min, 30 min (moves smaller than costs) and 1 week (~50 independent outcomes a year) are shown but
+  never signal.
+- **Longer validation**: 5 years of history; the replay covers 500 sessions in 6 blocks (Settings → validation).
+
+New data for direction:
+- **Leaders & breadth**: 5-minute history of the 10 heaviest stocks → weighted share up, heavyweights vs Nifty (day and
+  last 30 min), dispersion.
+- **NSE positioning**: participant-wise OI (FII / client / pro / DII index futures long share, FII options net),
+  ~3 years, previous session's file (no look-ahead).
+- **Intraday extras**: place vs the opening 30-min range, share of the opening gap filled, VIX and Bank Nifty last 30 min.
+- **Live market recorder**: every few minutes of each session — option chain (PCR, ATM IV, straddle, OI build-up near
+  the money, walls, max pain), futures (basis, OI, order-book imbalance), breadth, VIX, GIFT Nifty, FII data — the
+  live-only data Kite has no history for, so future models can be tested on it. Export: `live_market_recorder.csv`.
+  AI → Health → Data collection shows how many sessions are recorded.
+
+Expect honesty, not miracles: positioning and option-chain data also tested at chance level on the 2025–26 data. The
+fixes mainly stop confident wrong calls; a horizon passes only if the longer replay proves an edge.
+
 ## Pure 2.5 — option strategy builder
 
 Options tab → **Strategy builder** (top of the page):

@@ -64,6 +64,7 @@ final class IntelPage {
             validateSection(c, col, dir, working, loggedIn, act);
         } else {
             col.addView(quality(c, fc), Ui.cardLp(c));
+            col.addView(dataCollection(c, dir, fc), Ui.cardLp(c));
             col.addView(record(c, fc, dir), Ui.cardLp(c));
             if (!models.isEmpty()) col.addView(matrix(c, models), Ui.cardLp(c));
             String rep = IntelRunner.report(dir);
@@ -72,6 +73,24 @@ final class IntelPage {
         }
         Pages.disclaimer(c, col);
         return col;
+    }
+
+    /** What the app collects for direction prediction, and how much of its own live-only history exists yet. */
+    static View dataCollection(Context c, File dir, IntelEngine.Forecast fc) {
+        LinearLayout k = Ui.card(c);
+        k.addView(Ui.title(c, "Data collection", "inputs for direction"));
+        int rec = com.krish.niftydirection.data.Recorder2.sessions(dir);
+        String[][] rows = {
+                {"Nifty, Bank Nifty, VIX, sectors · 5-min", "5 years"},
+                {"10 heaviest stocks · 5-min (leaders & breadth)", "5 years"},
+                {"NSE participant OI (FII / client / pro / DII)", "~3 years, daily"},
+                {"29 world markets, rates, FX, commodities", "daily"},
+                {"Live recorder: option chain, futures basis / OI / order book, breadth", rec + " session" + (rec == 1 ? "" : "s") + " so far"}};
+        for (String[] r : rows) k.addView(Ui.kv(c, r[0], r[1], Ui.TEXT));
+        k.addView(Ui.text(c, "Live-only data has no history at Kite, so the app records it itself every few minutes during the session. After about 120 recorded "
+                + "sessions it is enough to test as model inputs. Each model group is used only if it beat the base rate on unseen sessions — "
+                + "see \"What the models learnt from\" below.", 11, Ui.DIM, false), Ui.top(c, 6));
+        return k;
     }
 
     // ================================================================== top: actions + sections
@@ -247,8 +266,9 @@ final class IntelPage {
             String big = !p.has() ? "—" : arrow(p.direction) + String.format(Locale.US, " %.0f%%", p.sideProb() * 100);
             TextView bt = Ui.text(c, big, 19, col, true);
             r.addView(bt, Ui.wrap());
-            String chip = !p.has() ? (p.hz != null && p.hz.eod() && p.info != null ? "after close" : "no model") : !p.validation.isEmpty() ? p.validation : !p.proven() ? "no edge" : Double.isNaN(p.range68) ? p.signalQuality : String.format(Locale.US, "±%.2f%%", p.range68 * 100);
-            TextView ch = Ui.chip(c, chip, !p.has() ? Ui.GREY : !p.validation.isEmpty() ? verdictColor(p.validation) : !p.proven() ? Ui.GREY : Ui.CYAN);
+            boolean watch = p.hz != null && p.hz.watchOnly();
+            String chip = !p.has() ? (p.hz != null && p.hz.eod() && p.info != null ? "after close" : "no model") : watch ? "watch only" : !p.validation.isEmpty() ? p.validation : !p.proven() ? "no edge" : Double.isNaN(p.range68) ? p.signalQuality : String.format(Locale.US, "±%.2f%%", p.range68 * 100);
+            TextView ch = Ui.chip(c, chip, !p.has() || watch ? Ui.GREY : !p.validation.isEmpty() ? verdictColor(p.validation) : !p.proven() ? Ui.GREY : Ui.CYAN);
             ch.setMinWidth(Ui.dp(c, 72));
             r.addView(ch, Ui.gapLeft(c, 10));
             rowBox.addView(r);
@@ -648,7 +668,7 @@ final class IntelPage {
         br.addView(ex, Ui.weight(1));
         k.addView(br, Ui.top(c, 12));
         k.addView(Ui.text(c, "Export = one ZIP of CSV files for Excel / Python: summary, confidence buckets, market conditions, stress days, every replay "
-                + "forecast and simulated trade (all 9 horizons), the 74 inputs at every moment, the leakage audit and the live forecast + paper-trade log.",
+                + "forecast and simulated trade (all 9 horizons), the 88 inputs at every moment, the leakage audit and the live forecast + paper-trade log.",
                 11, Ui.DIM, false), Ui.top(c, 8));
         col.addView(k, Ui.cardLp(c));
         col.addView(journal(c, dir, act), Ui.cardLp(c));

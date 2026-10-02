@@ -18,10 +18,13 @@ public final class Calibrator {
     public double a = 1, b = 0;    // platt: p = sigmoid(a·logit(raw) + b)
     public double[] x = new double[0], y = new double[0];   // isotonic knots (raw → calibrated)
 
-    public static Calibrator fit(double[] p, int[] yy, int n) {
+    public static Calibrator fit(double[] p, int[] yy, int n) { return fit(p, yy, n, n); }
+
+    /** effective = independent observations behind the n rows (overlapping rows count less); isotonic only with plenty of them. */
+    public static Calibrator fit(double[] p, int[] yy, int n, double effective) {
         Calibrator c = new Calibrator();
         if (n < 50) return c;
-        if (n >= ISOTONIC_MIN) { c.isotonic(p, yy, n); return c; }
+        if (effective >= ISOTONIC_MIN) { c.isotonic(p, yy, n); return c; }
         c.platt(p, yy, n);
         return c;
     }

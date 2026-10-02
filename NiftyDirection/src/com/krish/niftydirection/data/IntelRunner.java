@@ -85,9 +85,14 @@ public final class IntelRunner {
             Integer[] o = new Integer[HorizonModel.G];
             for (int g = 0; g < o.length; g++) o[g] = g;
             Arrays.sort(o, (a, b) -> Double.compare(i.importance[b], i.importance[a]));
-            t.append("  weights: ");
-            for (int g = 0; g < 4; g++) t.append(g > 0 ? ", " : "").append(FeatureEngine.GROUP_NAMES[o[g]]).append(String.format(Locale.US, " %.0f%%", i.importance[o[g]]));
-            t.append('\n');
+            t.append("  groups that beat the base rate on unseen sessions (used): ").append(i.used.isEmpty() ? "—" : i.used).append('\n');
+            t.append(String.format(Locale.US, "  trust in the model's lean (shrink toward base rate, chosen on unseen sessions): %.0f%%%s%n", i.shrink * 100,
+                    hz.watchOnly() ? " · WATCH ONLY" : ""));
+            if (i.importance[o[0]] > 0) {
+                t.append("  weights: ");
+                for (int g = 0; g < 4 && i.importance[o[g]] > 0; g++) t.append(g > 0 ? ", " : "").append(FeatureEngine.GROUP_NAMES[o[g]]).append(String.format(Locale.US, " %.0f%%", i.importance[o[g]]));
+                t.append('\n');
+            }
         }
         return t.toString();
     }
@@ -357,7 +362,7 @@ public final class IntelRunner {
     /**
      * Everything behind the validation, for analysis elsewhere (Excel, Python …), as one ZIP of CSV / text files:
      * the per-horizon summary, confidence buckets, market conditions, stress days, every replay forecast and simulated trade,
-     * the 74 inputs at every replay moment, the leakage audit, the live forecast log with outcomes and paper trades,
+     * the 88 inputs at every replay moment, the leakage audit, the live forecast log with outcomes and paper trades,
      * the training report and the settings used. Returns the number of files written.
      */
     public static int export(File base, java.io.OutputStream out, Validator.Config settings) throws Exception {
@@ -452,6 +457,7 @@ public final class IntelRunner {
                     .append(num(p.takeProfit, 0)).append(',').append(num(p.stopLoss, 0)).append(',').append(num(p.exitPnl, 2)).append('\n');
         }
         n += entry(z, "my_option_positions.csv", op.toString());
+        n += entry(z, "live_market_recorder.csv", Recorder2.all(base));
         String rep = report(base);
         if (!rep.isEmpty()) n += entry(z, "training_report.txt", rep);
         if (settings != null) n += entry(z, "settings.txt", String.format(Locale.US,
@@ -470,9 +476,11 @@ public final class IntelRunner {
             + "replay_forecasts.csv     EVERY replay forecast (every 15 minutes × every horizon): probabilities, direction, confidence, signal quality, whether it\n"
             + "                         was an act signal and why not, expected range/return, regime, target time and price, actual move, right or wrong, trade P&L.\n"
             + "replay_trades.csv        EVERY simulated trade: entry/exit date and time, side, prices, stop, points, charges, net ₹ per lot, cumulative ₹.\n"
-            + "replay_features.csv      the 74 model inputs at every replay moment (scaled values as the models see them), for your own analysis.\n"
+            + "replay_features.csv      the 88 model inputs at every replay moment (scaled values as the models see them), for your own analysis.\n"
             + "leakage_audit.txt        the look-ahead and purge checks.\n"
             + "my_trades_journal.csv    the trades you marked \"I took this\": your fills, points, net ₹ after charges, and slippage vs the paper entry.\n"
+            + "live_market_recorder.csv every few minutes of each live session: option chain (PCR, ATM IV, straddle, OI build-up, walls, max pain), futures\n"
+            + "                         (basis, OI, order-book imbalance), breadth, VIX, GIFT Nifty, FII data — the app's own history of live-only data.\n"
             + "my_option_positions.csv  option ideas you saved from the strategy builder (paper or real): legs, exit plan and net ₹ after costs once closed.\n"
             + "live_forecast_log.csv    every live forecast this phone logged (every 30 min per horizon), its outcome once known, and paper trades.\n"
             + "validation.json          the raw report. training_report.txt: what the models learnt and how they tested. settings.txt: assumptions used.\n\n"

@@ -18,6 +18,7 @@ public class ValidatorTest {
         History h = IntelTest.synth(700, 1.0, 11);
         int[] sidx = h.sessionIndex();
         Validator.Config cfg = new Validator.Config();
+        cfg.sessions = 250; cfg.blocks = 4;   // short replay keeps the test quick
         History.Day day = h.days.get(400);
         Validator.Trade tNo = Validator.simulate(h, sidx, 400, 10, Horizon.of("1h"), 1, 0, cfg);
         check("trade enters at the next bar close + slippage and exits at the horizon close − slippage",

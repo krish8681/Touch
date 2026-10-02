@@ -23,7 +23,14 @@ public final class FeatureEngine {
     private FeatureEngine() {}
 
     public static final String TECH = "Technical", TREND = "Trend", SECTOR = "Sector & banks", VOL = "Volatility", GLOBAL = "Global markets",
-            FX = "Currencies", BONDS = "Bonds & rates", COMMOD = "Commodities", CAL = "Calendar", CHAINS = "Cross-market chains";
+            FX = "Currencies", BONDS = "Bonds & rates", COMMOD = "Commodities", CAL = "Calendar", CHAINS = "Cross-market chains", LEADERS = "Leaders & breadth", POSITION = "Positioning (NSE)";
+
+    /** Ten heaviest Nifty members (5-minute history key "STK:<symbol>") and their approximate index weights. */
+    public static final String[][] LEADER_STOCKS = {{"HDFCBANK", "0.13"}, {"RELIANCE", "0.09"}, {"ICICIBANK", "0.09"}, {"INFY", "0.05"}, {"BHARTIARTL", "0.05"},
+            {"LT", "0.04"}, {"ITC", "0.035"}, {"TCS", "0.03"}, {"SBIN", "0.03"}, {"AXISBANK", "0.03"}};
+    /** NSE participant-wise open interest, one value per session (key in History.global, dated by the session it describes). */
+    public static final String POI_FII_FUT = "POI:FII index futures long share", POI_FII_OPT = "POI:FII index options net",
+            POI_CLIENT_FUT = "POI:Client index futures long share", POI_PRO_FUT = "POI:Pro index futures long share", POI_DII_FUT = "POI:DII index futures long share";
 
     static final String[] EXTRA_NAMES = {
             // 29.. technical (5-minute bars, yesterday's bars used as warm-up)
@@ -47,7 +54,14 @@ public final class FeatureEngine {
             "Day of the week",
             // 70.. cross-market chains (learnt betas, see CrossMarket)
             "Oil shock chain (Brent → rupee → Nifty)", "Rates & dollar chain (US 10Y → DXY → rupee → Nifty)",
-            "US rates → tech chain (US 10Y → Nasdaq → Nifty)", "Consensus implied move from 8 drivers"};
+            "US rates → tech chain (US 10Y → Nasdaq → Nifty)", "Consensus implied move from 8 drivers",
+            // 74.. intraday extras
+            "Place vs the opening 30-min range", "Share of the opening gap filled", "India VIX change (last 30 min)", "Bank Nifty vs Nifty (last 30 min)",
+            // 78.. leaders & breadth (10 heaviest stocks)
+            "Heavyweights up today (weighted share)", "Heavyweights vs Nifty today", "Heavyweights vs Nifty (last 30 min)", "Heavyweights pulling apart",
+            // 82.. positioning (NSE participant-wise open interest, previous session)
+            "FII index futures long share", "FII futures long share 1-day change", "FII index options net (calls − puts)",
+            "Client index futures long share", "Pro futures long share 1-day change", "DII index futures long share"};
 
     static final String[] EXTRA_HIGH = {
             "RSI is high (overbought side)", "MACD is turning up", "price is near the upper Bollinger band", "price is near the top of its recent range",
@@ -60,7 +74,11 @@ public final class FeatureEngine {
             "US short rates rose", "US 5-year yield rose", "US 30-year yield rose", "the US curve is steep", "the US curve steepened", "US 10-year yield rose over 5 days",
             "WTI rose", "gold rose", "silver rose", "copper rose", "Brent rose over 5 days", "a crude shock is building",
             "later in the week",
-            "the oil chain points up", "the rates & dollar chain points up", "the US rates → tech chain points up", "world drivers imply a rise"};
+            "the oil chain points up", "the rates & dollar chain points up", "the US rates → tech chain points up", "world drivers imply a rise",
+            "price is above the opening range", "the opening gap is being filled", "India VIX rose in the last 30 min", "Bank Nifty led in the last 30 min",
+            "most heavyweights are up", "heavyweights are stronger than Nifty", "heavyweights led in the last 30 min", "heavyweights are moving apart",
+            "FIIs hold more index longs", "FIIs added index longs", "FIIs are net call-side in options", "clients hold more index longs",
+            "pros added index longs", "DIIs hold more index longs"};
 
     public static final String[] NAMES, HIGH;
     public static final int N;
@@ -71,18 +89,20 @@ public final class FeatureEngine {
     }
 
     /** Feature groups (indices into the full vector). One model per group per horizon. */
-    public static final String[] GROUP_NAMES = {TECH, TREND, SECTOR, VOL, GLOBAL, FX, BONDS, COMMOD, CAL, CHAINS};
+    public static final String[] GROUP_NAMES = {TECH, TREND, SECTOR, VOL, GLOBAL, FX, BONDS, COMMOD, CAL, CHAINS, LEADERS, POSITION};
     public static final int[][] GROUPS = {
-            {0, 1, 2, 3, 4, 5, 29, 30, 31, 32, 33, 34, 35},
+            {0, 1, 2, 3, 4, 5, 29, 30, 31, 32, 33, 34, 35, 74, 75},
             {8, 9, 10, 11, 12, 36, 37, 38},
-            {13, 14, 17, 18, 27, 28},
-            {6, 15, 16, 39, 40, 41},
+            {13, 14, 17, 18, 27, 28, 77},
+            {6, 15, 16, 39, 40, 41, 76},
             {19, 20, 21, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52},
             {23, 25, 53, 54, 55, 56},
             {24, 57, 58, 59, 60, 61, 62},
             {22, 63, 64, 65, 66, 67, 68},
             {7, 26, 69},
-            {70, 71, 72, 73}};
+            {70, 71, 72, 73},
+            {78, 79, 80, 81},
+            {82, 83, 84, 85, 86, 87}};
 
     public static int groupOf(int feature) {
         for (int g = 0; g < GROUPS.length; g++) for (int j : GROUPS[g]) if (j == feature) return g;
@@ -187,7 +207,74 @@ public final class FeatureEngine {
         // ---- cross-market chains: implied Nifty % from learnt betas, in units of Nifty's daily volatility
         double[] xm = CrossMarket.implied(h, date);
         for (int i = 0; i < 4; i++) f[70 + i] = Double.isNaN(xm[i]) ? Double.NaN : clip(xm[i] / (sig * 100), 4);
+
+        // ---- intraday extras
+        double O = day.open();
+        Map.Entry<String, double[]> pcE = h.niftyDaily.lowerEntry(date);
+        double PC = pcE == null ? Double.NaN : pcE.getValue()[3];
+        if (k >= 7) {
+            double hi = Double.NEGATIVE_INFINITY, lo = Double.POSITIVE_INFINITY;
+            for (int i = 0; i < 6; i++) if (!Float.isNaN(day.c[i])) { hi = Math.max(hi, day.h[i]); lo = Math.min(lo, day.l[i]); }
+            if (hi > lo) f[74] = clip((P - (hi + lo) / 2) / ((hi - lo) / 2), 4);
+        }
+        if (k >= 1 && O > 0 && PC > 0 && Math.abs(O - PC) > 0.1 * sig * PC) f[75] = clip((O - P) / (O - PC), 2);
+        if (k >= 7) {
+            float[] vx = day.aux.get(History.VIX);
+            if (vx != null) { double a = History.last(vx, k), b = History.last(vx, k - 6); if (a > 0 && b > 0) f[76] = clip(Math.log(a / b) * 10, 3); }
+            float[] bk = day.aux.get(History.BANK);
+            double n6 = day.closeAt(k - 6);
+            if (bk != null && n6 > 0) {
+                double a = History.last(bk, k), b = History.last(bk, k - 6);
+                if (a > 0 && b > 0) f[77] = clip((Math.log(a / b) - Math.log(P / n6)) / (sigBar * Math.sqrt(6)), 5);
+            }
+        }
+
+        // ---- leaders & breadth: the ten heaviest stocks
+        if (k >= 1) {
+            double wUp = 0, wSum = 0, wRet = 0, wRet6 = 0, w6 = 0, s1 = 0, s2 = 0;
+            int cnt = 0;
+            double nRet = PC > 0 ? Math.log(P / PC) : Double.NaN, n6 = k >= 7 ? day.closeAt(k - 6) : Double.NaN;
+            for (String[] st : LEADER_STOCKS) {
+                String key = "STK:" + st[0];
+                float[] a = day.aux.get(key);
+                if (a == null) continue;
+                double w = Double.parseDouble(st[1]), now = History.last(a, k), prev = h.prevAuxClose(d, key, sidx);
+                if (!(now > 0) || !(prev > 0)) continue;
+                double rr = Math.log(now / prev);
+                wSum += w; wRet += w * rr; if (rr > 0) wUp += w;
+                s1 += rr; s2 += rr * rr; cnt++;
+                double b6 = k >= 7 ? History.last(a, k - 6) : Double.NaN;
+                if (b6 > 0) { wRet6 += w * Math.log(now / b6); w6 += w; }
+            }
+            if (cnt >= 5 && wSum > 0) {
+                f[78] = wUp / wSum - 0.5;
+                if (!Double.isNaN(nRet)) f[79] = clip((wRet / wSum - nRet) / sig, 5);
+                if (w6 > 0 && n6 > 0) f[80] = clip((wRet6 / w6 - Math.log(P / n6)) / (sigBar * Math.sqrt(6)), 5);
+                double m = s1 / cnt;
+                f[81] = clip(Math.sqrt(Math.max(0, s2 / cnt - m * m)) / sig, 5);
+            }
+        }
+
+        // ---- positioning: NSE participant-wise OI of the previous session
+        f[82] = prevLevel(h, POI_FII_FUT, date, 0);
+        double fiiB = prevLevel(h, POI_FII_FUT, date, 1);
+        if (!Double.isNaN(f[82]) && !Double.isNaN(fiiB)) f[83] = clip((f[82] - fiiB) * 20, 5);
+        f[84] = prevLevel(h, POI_FII_OPT, date, 0);
+        f[85] = prevLevel(h, POI_CLIENT_FUT, date, 0);
+        double pa = prevLevel(h, POI_PRO_FUT, date, 0), pb = prevLevel(h, POI_PRO_FUT, date, 1);
+        if (!Double.isNaN(pa) && !Double.isNaN(pb)) f[86] = clip((pa - pb) * 20, 5);
+        f[87] = prevLevel(h, POI_DII_FUT, date, 0);
         return f;
+    }
+
+    /** Value of a once-a-day series dated before `date` (back = entries earlier), NaN when missing or stale (> 7 days). */
+    static double prevLevel(History h, String key, String date, int back) {
+        TreeMap<String, Double> m = h.global.get(key);
+        if (m == null) return Double.NaN;
+        Map.Entry<String, Double> a = m.lowerEntry(date);
+        if (a == null || days(a.getKey(), date) > 7) return Double.NaN;
+        for (int i = 0; i < back && a != null; i++) a = m.lowerEntry(a.getKey());
+        return a == null ? Double.NaN : a.getValue();
     }
 
     /** Composite of overnight equity moves (%), less a US VIX jump. Positive = risk-on. Also used by the regime engine. */
