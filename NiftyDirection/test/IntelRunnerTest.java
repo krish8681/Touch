@@ -39,6 +39,25 @@ public class IntelRunnerTest {
         IntelEngine.Forecast po = IntelRunner.live(k, dir, a[1], 8 * 60, 25000, ctx, cfg, new AtomicBoolean(), (w, d, x) -> {});
         System.out.println("pre-open: " + po.asOf + " · 1D P(up) " + po.preds.get(7).pFinal);
         ok &= po.preOpen && po.k == 0 && po.preds.get(7).has();
+        // export: one ZIP with every file, real rows, the documented columns
+        java.io.ByteArrayOutputStream bo = new java.io.ByteArrayOutputStream();
+        int files = IntelRunner.export(dir, bo, cfg);
+        java.util.Map<String, String> zip = new java.util.LinkedHashMap<>();
+        try (java.util.zip.ZipInputStream zi = new java.util.zip.ZipInputStream(new java.io.ByteArrayInputStream(bo.toByteArray()))) {
+            java.util.zip.ZipEntry ze;
+            while ((ze = zi.getNextEntry()) != null) zip.put(ze.getName(), new String(zi.readAllBytes(), "UTF-8"));
+        }
+        System.out.println("export: " + files + " files, " + bo.size() / 1024 + " KB: " + zip.keySet());
+        String[] need = {"README.txt", "summary_by_horizon.csv", "confidence_buckets.csv", "market_conditions.csv", "stress_days.csv", "leakage_audit.txt",
+                "validation.json", "replay_forecasts.csv", "replay_trades.csv", "replay_features.csv", "live_forecast_log.csv", "training_report.txt", "settings.txt"};
+        for (String nm : need) ok &= zip.containsKey(nm);
+        String[] rf = zip.getOrDefault("replay_forecasts.csv", "").split("\n");
+        String[] feats = zip.getOrDefault("replay_features.csv", "").split("\n");
+        ok &= files == need.length && rf.length > 1000 && rf[0].startsWith("date,time,block,horizon")
+                && zip.get("summary_by_horizon.csv").split("\n").length == 10
+                && feats.length > 100 && feats[0].split(",").length >= 4 + FeatureEngine.N
+                && zip.get("live_forecast_log.csv").split("\n").length >= 10;
+        System.out.println("replay_forecasts rows " + (rf.length - 1) + ", first: " + (rf.length > 1 ? rf[1] : ""));
         System.out.println("took " + (System.currentTimeMillis() - t0) / 1000 + "s");
         System.out.println(ok ? "1 passed, 0 failed" : "0 passed, 1 failed");
         if (!ok) System.exit(1);

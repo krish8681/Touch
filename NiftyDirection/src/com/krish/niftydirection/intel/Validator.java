@@ -133,11 +133,23 @@ public final class Validator {
         public final List<HReport> horizons = new ArrayList<>();
         public int lot; public double slippagePts, stopMult, threshold;
         public HReport get(String id) { for (HReport r : horizons) if (r.id.equals(id)) return r; return null; }
+        /** Row-level replay data for export; only present right after run(). */
+        transient Detail detail;
+        /** Writes the row-level replay data as gzipped CSVs into `dir` (replay_forecasts, replay_trades, replay_features). */
+        public void saveDetail(java.io.File dir) throws java.io.IOException { if (detail != null) { Validator.saveDetail(this, dir); detail = null; } }
     }
 
     static final class Rec {
-        String date; int d, k; double p, side, move, range68; int dir, y; boolean flat, tradeable; int pred3 = -1, act3;
+        String date, hz = "", tdate = "", quality = "", gate = "", regime = "", direction = ""; int d, k, block, conf; double p, side, move, range68, price, target;
+        double pUp3 = Double.NaN, pFlat = Double.NaN, pDown3 = Double.NaN, expRet = Double.NaN; int dir, y; boolean flat, tradeable; int pred3 = -1, act3;
         List<String> regimes, stress;
+        Trade trade;
+    }
+
+    /** Detail kept for export (not saved in validation.json): every replay forecast, every simulated trade, the inputs per moment. */
+    static final class Detail {
+        final List<Rec> recs = new ArrayList<>();
+        final List<Object[]> features = new ArrayList<>();   // {date, k, block, double[] features, regime label}
     }
 
     public static Report run(History h, Config cfg, Progress pr) {
@@ -159,6 +171,8 @@ public final class Validator {
         String[] win = Arrays.copyOfRange(D, D.length - nRep, D.length);
         rep.from = win[0]; rep.to = win[win.length - 1]; rep.sessions = nRep; rep.blocks = BLOCKS;
 
+        Detail detail = new Detail();
+        rep.detail = detail;
         Map<String, List<Rec>> recs = new LinkedHashMap<>();
         for (Horizon hz : Horizon.ALL) recs.put(hz.id, new ArrayList<>());
         Map<String, List<String>> stressOf = new HashMap<>();
@@ -184,6 +198,7 @@ public final class Validator {
                 IntelEngine.Forecast fc = IntelEngine.forecast(models, h, d, k, false, null, null, null, cfg.threshold);
                 List<String> rg = regimes(h, fc, cfg);
                 List<String> st = stressOf.computeIfAbsent(date, x -> stress(h, d, fc.features, cfg));
+                detail.features.add(new Object[]{date, k, b + 1, fc.features, fc.regime.label() + " · " + fc.regime.detail()});
                 for (IntelEngine.HPred p : fc.preds) {
                     if (!p.has()) continue;
                     Object[] t = Trainer.target(h, sidx, sessions, pos, ds, i, p.hz);
@@ -199,7 +214,11 @@ public final class Validator {
                     if (!Double.isNaN(p.pFlat)) r.pred3 = p.pUp3 >= p.pFlat && p.pUp3 >= p.pDown3 ? 0 : p.pFlat >= p.pDown3 ? 1 : 2;
                     r.tradeable = p.tradeable;
                     r.regimes = rg; r.stress = st;
+                    r.hz = p.hz.id; r.block = b + 1; r.price = price; r.target = tp; r.tdate = (String) t[1];
+                    r.conf = p.confidence; r.quality = p.signalQuality; r.gate = p.gate.isEmpty() ? "" : p.gate.get(0); r.regime = fc.regime.label();
+                    r.direction = p.direction; r.pUp3 = p.pUp3; r.pFlat = p.pFlat; r.pDown3 = p.pDown3; r.expRet = p.expReturn;
                     recs.get(p.hz.id).add(r);
+                    detail.recs.add(r);
                 }
             }
         }
@@ -301,7 +320,7 @@ public final class Validator {
             double stopDist = cfg.stopMult > 0 && !Double.isNaN(x.range68) ? cfg.stopMult * x.range68 * h.days.get(x.d).c[Math.min(x.k, History.BARS - 1)] : 0;
             Trade t = simulate(h, sidx, x.d, x.k, hz, x.dir, stopDist, cfg);
             if (t == null) continue;
-            trades.add(t); byRec.put(x, t);
+            trades.add(t); byRec.put(x, t); x.trade = t;
             busyDate = t.exitDate; busySlot = t.exitSlot;
         }
         double eq = 0, peak = 0, gw = 0, gl = 0; int streak = 0;
@@ -425,6 +444,57 @@ public final class Validator {
         else if (pass > 0) { rep.verdict = "PASS"; rep.summary = "Ready for a controlled small-money test on: " + String.join(", ", rep.ready) + ". Other horizons stay paper-only."; }
         else if (warn > 0) { rep.verdict = "WARN"; rep.summary = "No horizon passed every check. Use paper trading only and let the live record grow."; }
         else { rep.verdict = "FAIL"; rep.summary = "No horizon showed an edge in the replay. Do not trade on these forecasts."; }
+    }
+
+    // ================================================================== row-level export
+
+    static String hhmm(int k) { int m = History.minuteAfter(k); return String.format(Locale.US, "%d:%02d", m / 60, m % 60); }
+    static String slotEnd(int slot) { int m = History.OPEN_MIN + 5 * (slot + 1); return String.format(Locale.US, "%d:%02d", m / 60, m % 60); }
+    static String f(double v, int dp) { return Double.isNaN(v) || Double.isInfinite(v) ? "" : String.format(Locale.US, "%." + dp + "f", v); }
+    static String q(String s) { return s == null ? "" : s.indexOf(',') >= 0 || s.indexOf('"') >= 0 ? "\"" + s.replace("\"", "\"\"") + "\"" : s; }
+
+    static java.io.Writer gz(java.io.File f) throws java.io.IOException {
+        return new java.io.BufferedWriter(new java.io.OutputStreamWriter(new java.util.zip.GZIPOutputStream(new java.io.FileOutputStream(f)), "UTF-8"));
+    }
+
+    static void saveDetail(Report rep, java.io.File dir) throws java.io.IOException {
+        dir.mkdirs();
+        Detail dt = rep.detail;
+        try (java.io.Writer w = gz(new java.io.File(dir, "replay_forecasts.csv.gz"))) {
+            w.write("date,time,block,horizon,price,p_up,p_flat_up,p_flat,p_flat_down,direction,side_prob,confidence,signal_quality,act_signal,first_gate_reason,"
+                    + "expected_range68_pct,expected_return_pct,regime,conditions,stress_day,target_date,target_price,actual_move_pct,went_up,flat,direction_right,trade_net_rupees\n");
+            for (Rec r : dt.recs) {
+                boolean right = (r.p >= 0.5 ? 1 : 0) == r.y;
+                w.write(r.date + "," + hhmm(r.k) + "," + r.block + "," + r.hz + "," + f(r.price, 2) + "," + f(r.p, 4) + "," + f(r.pUp3, 4) + "," + f(r.pFlat, 4) + ","
+                        + f(r.pDown3, 4) + "," + r.direction + "," + f(r.side, 4) + "," + r.conf + "," + r.quality + "," + (r.tradeable ? 1 : 0) + "," + q(r.gate) + ","
+                        + f(r.range68 * 100, 3) + "," + f(r.expRet * 100, 3) + "," + q(r.regime) + "," + q(String.join("; ", r.regimes)) + ","
+                        + q(String.join("; ", r.stress)) + "," + r.tdate + "," + f(r.target, 2) + "," + f(r.move * 100, 3) + "," + r.y + "," + (r.flat ? 1 : 0) + ","
+                        + (right ? 1 : 0) + "," + (r.trade == null ? "" : f(r.trade.rupees, 0)) + "\n");
+            }
+        }
+        try (java.io.Writer w = gz(new java.io.File(dir, "replay_trades.csv.gz"))) {
+            w.write("horizon,entry_date,signal_time,entry_time,side,entry_price,exit_date,exit_time,exit_price,stopped,points,charges_rupees,net_rupees_per_lot,cumulative_rupees,confidence,signal_prob\n");
+            Map<String, Double> cum = new HashMap<>();
+            for (Rec r : dt.recs) {
+                Trade t = r.trade;
+                if (t == null) continue;
+                double c = cum.merge(r.hz, t.rupees, Double::sum);
+                w.write(r.hz + "," + t.date + "," + hhmm(t.k) + "," + slotEnd(t.k) + "," + (t.dir > 0 ? "LONG" : "SHORT") + "," + f(t.entry, 2) + "," + t.exitDate + ","
+                        + slotEnd(t.exitSlot) + "," + f(t.exit, 2) + "," + (t.stopped ? 1 : 0) + "," + f(t.pts, 2) + "," + f(t.charges, 2) + "," + f(t.rupees, 2) + ","
+                        + f(c, 2) + "," + r.conf + "," + f(r.side, 4) + "\n");
+            }
+        }
+        try (java.io.Writer w = gz(new java.io.File(dir, "replay_features.csv.gz"))) {
+            StringBuilder hd = new StringBuilder("date,time,block,regime");
+            for (String n : FeatureEngine.NAMES) hd.append(',').append(q(n));
+            w.write(hd.append('\n').toString());
+            for (Object[] o : dt.features) {
+                StringBuilder b = new StringBuilder();
+                b.append(o[0]).append(',').append(hhmm((Integer) o[1])).append(',').append(o[2]).append(',').append(q((String) o[4]));
+                for (double v : (double[]) o[3]) b.append(',').append(f(v, 5));
+                w.write(b.append('\n').toString());
+            }
+        }
     }
 
     // ================================================================== storage

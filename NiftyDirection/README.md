@@ -1,4 +1,4 @@
-# Nifty Direction Pure 2.3 (Android)
+# Nifty Direction Pure 2.3.1 (Android)
 
 A **Nifty 50 direction engine** on Zerodha Kite. It does not guess "up or down". It **classifies** the market the way desks do:
 which side the evidence favours right now, how strongly, and how much of the evidence agrees.
@@ -32,6 +32,14 @@ Blend (smooth by minute): before the open structure 85% / live 15%, then live 30
 Each factor's weight = base × source trust (Kite / NSE 1.0, Yahoo 0.8, Gemini 0.6, typed 0.5, word list 0.35) × freshness × learnt multiplier (needs 100 readings: about 70 sessions with the app open at 9:45 and 11:30; ±15% until 400 readings, ±40% after).
 Regime: enter a side at ±25, keep it until ±15 (hysteresis). CONFLICT when structure and live are both ≥30 and opposite (confidence halved).
 NO EDGE when evidence is weak or mixed; RANGE only with 2+ real range signs.
+
+## Pure 2.3.1 — export
+- **⬇ Export all data** (AI → Validate) saves one ZIP of CSV files wherever you choose (Downloads, Drive …), with no storage permission needed:
+  - summary by horizon, confidence buckets, market conditions, stress days;
+  - **every replay forecast** (every 15 minutes × all 9 horizons, with outcome and trade P&L);
+  - **every simulated trade** (entry/exit, charges, cumulative ₹);
+  - **the 74 model inputs at every replay moment**;
+  - leakage audit, the live forecast + paper-trade log, training report, settings, and a README describing every file.
 
 ## Pure 2.3 — pre-live validation, model governor, background AI
 - **Pre-live validation engine** (AI → Validate; runs by itself after every training):

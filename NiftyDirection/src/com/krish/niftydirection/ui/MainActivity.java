@@ -14,6 +14,7 @@ import android.widget.FrameLayout;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
 import android.widget.TextView;
+import android.widget.Toast;
 
 import com.krish.niftydirection.BuildInfo;
 import com.krish.niftydirection.data.Brain;
@@ -170,6 +171,7 @@ public class MainActivity extends Activity implements Brain.Listener {
         @Override public void update() { fcUpdate(); }
         @Override public void train() { fcTrain(); }
         @Override public void validate() { fcRunMode(2); }
+        @Override public void export() { startExport(); }
         @Override public void redraw() { scroll.scrollTo(0, 0); render(); }
     };
 
@@ -189,6 +191,37 @@ public class MainActivity extends Activity implements Brain.Listener {
         long age = l == null ? Long.MAX_VALUE : System.currentTimeMillis() - l.at;
         boolean wantPreOpen = l != null && !l.preOpen && !Double.isNaN(expectedOpen());   // GIFT just became available
         if (wantPreOpen || age > (market ? 5 : preOpenWindow() ? 15 : 60) * 60_000L) fcUpdate();
+    }
+
+    static final int REQ_EXPORT = 7;
+
+    /** Asks where to save the export ZIP (Downloads, Drive …) — no storage permission needed. */
+    private void startExport() {
+        Intent i = new Intent(Intent.ACTION_CREATE_DOCUMENT);
+        i.addCategory(Intent.CATEGORY_OPENABLE);
+        i.setType("application/zip");
+        String ts = new java.text.SimpleDateFormat("yyyyMMdd_HHmm", java.util.Locale.US).format(new java.util.Date());
+        i.putExtra(Intent.EXTRA_TITLE, "NiftyDirection_validation_" + ts + ".zip");
+        try { startActivityForResult(i, REQ_EXPORT); }
+        catch (Exception e) { Toast.makeText(this, "No file picker available: " + e.getMessage(), Toast.LENGTH_LONG).show(); }
+    }
+
+    @Override protected void onActivityResult(int req, int res, Intent data) {
+        super.onActivityResult(req, res, data);
+        if (req != REQ_EXPORT || res != RESULT_OK || data == null || data.getData() == null) return;
+        android.net.Uri uri = data.getData();
+        updateStatus("Exporting…");
+        new Thread(() -> {
+            String msg;
+            try (java.io.OutputStream out = getContentResolver().openOutputStream(uri)) {
+                int n = IntelRunner.export(getFilesDir(), out, prefs.simConfig());
+                msg = "Exported " + n + " files (ZIP).";
+            } catch (Throwable t) {
+                msg = "Export failed: " + t.getMessage();
+            }
+            final String m2 = msg;
+            ui.post(() -> { Toast.makeText(this, m2, Toast.LENGTH_LONG).show(); updateStatus(null); });
+        }, "export").start();
     }
 
     private void fcUpdate() { fcRunMode(0); }

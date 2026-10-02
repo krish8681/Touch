@@ -28,7 +28,7 @@ import java.util.Map;
 final class IntelPage {
     private IntelPage() {}
 
-    interface Actions { void update(); void train(); void redraw(); void validate(); }
+    interface Actions { void update(); void train(); void redraw(); void validate(); void export(); }
 
     static final String[] SECTIONS = {"Overview", "Insights", "Health", "Validate"};
     static int section = 0;
@@ -628,7 +628,18 @@ final class IntelPage {
         run.setEnabled(working == null && loggedIn);
         run.setAlpha(run.isEnabled() ? 1f : 0.45f);
         run.setOnClickListener(v -> act.validate());
-        k.addView(run, Ui.top(c, 12));
+        Button ex = Ui.primary(c, "⬇  Export all data");
+        ex.setEnabled(working == null);
+        ex.setAlpha(ex.isEnabled() ? 1f : 0.45f);
+        ex.setOnClickListener(v -> act.export());
+        LinearLayout br = Ui.row(c);
+        br.addView(run, Ui.weight(1));
+        br.addView(new View(c), new LinearLayout.LayoutParams(Ui.dp(c, 10), 1));
+        br.addView(ex, Ui.weight(1));
+        k.addView(br, Ui.top(c, 12));
+        k.addView(Ui.text(c, "Export = one ZIP of CSV files for Excel / Python: summary, confidence buckets, market conditions, stress days, every replay "
+                + "forecast and simulated trade (all 9 horizons), the 74 inputs at every moment, the leakage audit and the live forecast + paper-trade log.",
+                11, Ui.DIM, false), Ui.top(c, 8));
         col.addView(k, Ui.cardLp(c));
         if (r == null) return;
 

@@ -345,10 +345,134 @@ public final class IntelRunner {
             pr.step(w, a, b);
         });
         write(new File(dir(base), "validation.json"), Validator.toJson(r).toString());
+        r.saveDetail(dir(base));   // row-level replay data, for the export
         cachedValidation = r;
         cachedValidationAt = System.currentTimeMillis();
         return r;
     }
+
+    /**
+     * Everything behind the validation, for analysis elsewhere (Excel, Python …), as one ZIP of CSV / text files:
+     * the per-horizon summary, confidence buckets, market conditions, stress days, every replay forecast and simulated trade,
+     * the 74 inputs at every replay moment, the leakage audit, the live forecast log with outcomes and paper trades,
+     * the training report and the settings used. Returns the number of files written.
+     */
+    public static int export(File base, java.io.OutputStream out, Validator.Config settings) throws Exception {
+        File d = dir(base);
+        Validator.Report r = validation(base);
+        java.util.zip.ZipOutputStream z = new java.util.zip.ZipOutputStream(new java.io.BufferedOutputStream(out));
+        int n = 0;
+        String stamp = new java.text.SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.US).format(new java.util.Date());
+        StringBuilder readme = new StringBuilder("Nifty Direction — validation export, " + stamp + "\n\n");
+        if (r != null) readme.append("Replay ").append(r.from).append(" → ").append(r.to).append(", ").append(r.sessions).append(" sessions, ").append(r.blocks)
+                .append(" walk-forward blocks. Verdict: ").append(r.verdict).append(" — ").append(r.summary).append("\n\n");
+        else readme.append("No validation report yet (only the live log is included).\n\n");
+        readme.append(README);
+        n += entry(z, "README.txt", readme.toString());
+        if (r != null) {
+            StringBuilder b = new StringBuilder("horizon,label,verdict,reasons,forecasts,sessions,hit_rate,usual_side_rate,brier,base_brier,brier_skill,skill_band_low,skill_band_high,"
+                    + "up_flat_down_accuracy,up_flat_down_base,calibration_error,trades,wins,win_rate,stopped,net_points,net_rupees_per_lot,charges_rupees,avg_rupees_per_trade,"
+                    + "profit_factor,max_drawdown_rupees,worst_losing_streak\n");
+            for (Validator.HReport x : r.horizons)
+                b.append(x.id).append(',').append(x.label).append(',').append(x.verdict).append(',').append(csv(String.join("; ", x.reasons))).append(',')
+                        .append(x.n).append(',').append(x.sessions).append(',').append(num(x.hit, 4)).append(',').append(num(x.base, 4)).append(',')
+                        .append(num(x.brier, 5)).append(',').append(num(x.baseBrier, 5)).append(',').append(num(x.skill, 5)).append(',').append(num(x.skillLo, 5)).append(',')
+                        .append(num(x.skillHi, 5)).append(',').append(num(x.acc3, 4)).append(',').append(num(x.base3, 4)).append(',').append(num(x.calErr, 4)).append(',')
+                        .append(x.trades).append(',').append(x.wins).append(',').append(x.trades > 0 ? num(x.wins / (double) x.trades, 4) : "").append(',').append(x.stops).append(',')
+                        .append(num(x.netPts, 2)).append(',').append(num(x.netRupees, 2)).append(',').append(num(x.chargesRupees, 2)).append(',').append(num(x.avgRupees, 2)).append(',')
+                        .append(num(x.profitFactor, 3)).append(',').append(num(x.maxDD, 2)).append(',').append(x.worstStreak).append('\n');
+            n += entry(z, "summary_by_horizon.csv", b.toString());
+            StringBuilder bk = new StringBuilder("horizon,bucket_from,bucket_to,forecasts,mean_predicted,actual_right\n");
+            for (Validator.HReport x : r.horizons) for (double[] q : x.buckets)
+                bk.append(x.id).append(',').append(num(q[0], 2)).append(',').append(num(q[0] + 0.1, 2)).append(',').append((long) q[1]).append(',').append(num(q[2], 4)).append(',').append(num(q[3], 4)).append('\n');
+            n += entry(z, "confidence_buckets.csv", bk.toString());
+            n += entry(z, "market_conditions.csv", tableCsv(r, false));
+            n += entry(z, "stress_days.csv", tableCsv(r, true));
+            StringBuilder au = new StringBuilder(String.format(Locale.US, "Moments recomputed on a cut history: %d, differences: %d%nPurge (models learnt only before their block): %s%n",
+                    r.auditChecked, r.auditFailed, r.purgeOk ? "OK" : "FAILED"));
+            for (String s : r.audit) au.append(s).append('\n');
+            n += entry(z, "leakage_audit.txt", au.toString());
+            File vj = new File(d, "validation.json");
+            if (vj.exists()) n += entry(z, "validation.json", read(vj));
+            for (String name : new String[]{"replay_forecasts", "replay_trades", "replay_features"}) {
+                File g = new File(d, name + ".csv.gz");
+                if (!g.exists()) continue;
+                z.putNextEntry(new java.util.zip.ZipEntry(name + ".csv"));
+                try (java.io.InputStream in = new java.util.zip.GZIPInputStream(new java.io.FileInputStream(g))) {
+                    byte[] buf = new byte[65536]; int k;
+                    while ((k = in.read(buf)) > 0) z.write(buf, 0, k);
+                }
+                z.closeEntry();
+                n++;
+            }
+        }
+        // live record: every logged forecast, its outcome and paper trade
+        File[] fs = d.listFiles((x, nm) -> nm.startsWith("log_") && nm.endsWith(".jsonl"));
+        StringBuilder lv = new StringBuilder("time,date,bar,horizon,price,p_model,p_final,evidence_push,news_push,regime,resolved,target_date,went_up,move_pct,"
+                + "paper_trade_side,stop_points,paper_net_rupees,paper_points,stopped\n");
+        if (fs != null) {
+            Arrays.sort(fs);
+            java.text.SimpleDateFormat tf = new java.text.SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.US);
+            tf.setTimeZone(Collector.IST);
+            for (File f : fs) for (JSONObject e : readLog(f)) {
+                lv.append(tf.format(new java.util.Date(e.optLong("t")))).append(',').append(e.optString("date")).append(',').append(e.optInt("k")).append(',')
+                        .append(e.optString("h")).append(',').append(num(e.optDouble("price", Double.NaN), 2)).append(',').append(num(e.optDouble("pm", Double.NaN), 4)).append(',')
+                        .append(num(e.optDouble("pf", Double.NaN), 4)).append(',').append(num(e.optDouble("ev", Double.NaN), 4)).append(',').append(num(e.optDouble("nw", Double.NaN), 4)).append(',')
+                        .append(csv(e.optString("regime"))).append(',').append(e.optBoolean("done", false) ? 1 : 0).append(',').append(e.optString("target")).append(',')
+                        .append(e.has("up") ? String.valueOf(e.optInt("up")) : "").append(',').append(e.has("move") ? num(e.optDouble("move", 0) * 100, 3) : "").append(',')
+                        .append(e.has("trade") ? (e.optInt("trade") > 0 ? "LONG" : "SHORT") : "").append(',').append(e.has("stop") ? num(e.optDouble("stop", 0), 1) : "").append(',')
+                        .append(e.has("pnl") ? num(e.optDouble("pnl", 0), 2) : "").append(',').append(e.has("pts") ? num(e.optDouble("pts", 0), 2) : "").append(',')
+                        .append(e.has("stopped") ? (e.optBoolean("stopped", false) ? 1 : 0) : "").append('\n');
+            }
+        }
+        n += entry(z, "live_forecast_log.csv", lv.toString());
+        String rep = report(base);
+        if (!rep.isEmpty()) n += entry(z, "training_report.txt", rep);
+        if (settings != null) n += entry(z, "settings.txt", String.format(Locale.US,
+                "trade_threshold=%.2f%nlot_size=%d%nslippage_points_per_side=%.2f%nstop_multiple_of_68pct_range=%.2f%n", settings.threshold, settings.lot, settings.slippagePts, settings.stopMult));
+        z.finish();
+        z.flush();
+        return n;
+    }
+
+    static final String README = "FILES\n"
+            + "summary_by_horizon.csv   one row per horizon: verdict and reasons, accuracy vs always guessing the usual side, Brier skill with its 90% bootstrap band,\n"
+            + "                         up/flat/down accuracy, calibration error, simulated trades (net ₹ per lot after charges), profit factor, max drawdown.\n"
+            + "confidence_buckets.csv   for each horizon: forecasts whose side probability was 50–60%, 60–70% … and how often they were right.\n"
+            + "market_conditions.csv    accuracy and trade P&L by condition (trend up/down, sideways, high/low volatility, gaps, expiry, major event, normal day).\n"
+            + "stress_days.csv          the same for hard days (large gaps, sharp reversals, VIX spikes, global shocks, RBI/Fed/Budget, expiry).\n"
+            + "replay_forecasts.csv     EVERY replay forecast (every 15 minutes × every horizon): probabilities, direction, confidence, signal quality, whether it\n"
+            + "                         was an act signal and why not, expected range/return, regime, target time and price, actual move, right or wrong, trade P&L.\n"
+            + "replay_trades.csv        EVERY simulated trade: entry/exit date and time, side, prices, stop, points, charges, net ₹ per lot, cumulative ₹.\n"
+            + "replay_features.csv      the 74 model inputs at every replay moment (scaled values as the models see them), for your own analysis.\n"
+            + "leakage_audit.txt        the look-ahead and purge checks.\n"
+            + "live_forecast_log.csv    every live forecast this phone logged (every 30 min per horizon), its outcome once known, and paper trades.\n"
+            + "validation.json          the raw report. training_report.txt: what the models learnt and how they tested. settings.txt: assumptions used.\n\n"
+            + "NOTES\n"
+            + "- Times are IST, the forecast time is after the 5-minute bar that just closed. Probabilities are 0–1; moves are in %.\n"
+            + "- Replay forecasts come from models frozen before each block (walk-forward), through the same engine as live.\n"
+            + "- Trades: Nifty futures, entry at the next 5-minute bar close ± slippage, exit at the horizon's end or the stop, approximate Zerodha charges.\n"
+            + "- Past results do not guarantee future ones. Signals only — the app never places orders.\n";
+
+    static String tableCsv(Validator.Report r, boolean stress) {
+        StringBuilder b = new StringBuilder("horizon," + (stress ? "stress_day" : "condition") + ",forecasts,hit_rate,usual_side_rate,trades,net_rupees_per_lot\n");
+        for (Validator.HReport x : r.horizons) for (Map.Entry<String, double[]> e : (stress ? x.stress : x.regimes).entrySet()) {
+            double[] v = e.getValue();
+            b.append(x.id).append(',').append(csv(e.getKey())).append(',').append((long) v[0]).append(',').append(num(v[1], 4)).append(',').append(num(v[2], 4)).append(',')
+                    .append((long) v[3]).append(',').append(num(v[4], 2)).append('\n');
+        }
+        return b.toString();
+    }
+
+    static int entry(java.util.zip.ZipOutputStream z, String name, String text) throws Exception {
+        z.putNextEntry(new java.util.zip.ZipEntry(name));
+        z.write(text.getBytes(StandardCharsets.UTF_8));
+        z.closeEntry();
+        return 1;
+    }
+
+    static String num(double v, int dp) { return Double.isNaN(v) || Double.isInfinite(v) ? "" : String.format(Locale.US, "%." + dp + "f", v); }
+    static String csv(String s) { return s == null ? "" : s.indexOf(',') >= 0 || s.indexOf('"') >= 0 ? "\"" + s.replace("\"", "\"\"") + "\"" : s; }
 
     /** Last validation report, or null. */
     public static Validator.Report validation(File base) {
