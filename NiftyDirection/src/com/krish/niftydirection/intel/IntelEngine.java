@@ -111,6 +111,8 @@ public final class IntelEngine {
         public Map<String, double[]> scorecard = new LinkedHashMap<>();
         /** Cross-market chains as seen today (paths with learnt betas and implied Nifty moves). */
         public List<CrossMarket.Path> chains = new ArrayList<>();
+        /** Risk-guard reasons active now (empty = new trades allowed). */
+        public List<String> guard = new ArrayList<>();
         /** The pre-live validation report the gate was governed by (null = not validated yet). */
         public Validator.Report validation;
     }

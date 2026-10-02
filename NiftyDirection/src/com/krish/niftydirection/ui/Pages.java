@@ -89,6 +89,13 @@ final class Pages {
         hero.addView(Ui.text(c, r.stageName, 13, Ui.CYAN, true));
         hero.addView(Ui.text(c, r.stageTip, 12, Ui.DIM, false), Ui.top(c, 2));
         col.addView(hero, Ui.cardLp(c));
+        TextView warn = Ui.text(c, "⚠  Not a tested trading signal. This score is a summary of today's evidence. In a 6-month replay "
+                + "(Apr–Sep 2026) its calls were right about half the time and lost money after costs. For tested signals use the AI tab — "
+                + "only horizons that PASS validation are marked \"strong enough to act on\".", 12, Ui.AMBER, false);
+        warn.setBackground(Ui.round(Ui.alpha(Ui.AMBER, 0x1A), Ui.dp(c, 14), Ui.alpha(Ui.AMBER, 0x55), 1));
+        int wp = Ui.dp(c, 12);
+        warn.setPadding(wp, wp, wp, wp);
+        col.addView(warn, Ui.cardLp(c));
 
         // right now
         LinearLayout now = Ui.card(c);

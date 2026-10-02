@@ -1,4 +1,4 @@
-# Nifty Direction Pure 2.3.1 (Android)
+# Nifty Direction Pure 2.4 (Android)
 
 A **Nifty 50 direction engine** on Zerodha Kite. It does not guess "up or down". It **classifies** the market the way desks do:
 which side the evidence favours right now, how strongly, and how much of the evidence agrees.
@@ -32,6 +32,18 @@ Blend (smooth by minute): before the open structure 85% / live 15%, then live 30
 Each factor's weight = base × source trust (Kite / NSE 1.0, Yahoo 0.8, Gemini 0.6, typed 0.5, word list 0.35) × freshness × learnt multiplier (needs 100 readings: about 70 sessions with the app open at 9:45 and 11:30; ±15% until 400 readings, ±40% after).
 Regime: enter a side at ±25, keep it until ±15 (hysteresis). CONFLICT when structure and live are both ≥30 and opposite (confidence halved).
 NO EDGE when evidence is weak or mixed; RANGE only with 2+ real range signs.
+
+## Pure 2.4 — safety before money
+- **Risk guard** (Settings → Risk guard, on by default): no new "strong enough to act on" signal when any of these is hit:
+  - the daily loss limit (₹3,000);
+  - the maximum trades per day (3);
+  - the cool-down after a losing trade (30 min);
+  - the first 15 or last 30 minutes of the session.
+
+  It counts your real trades from the journal.
+- **Trade journal:** "✍ I took this trade" on any actionable signal records your fill and lots. Close it with your exit price under AI → Validate → My trades, which shows net ₹ after charges (same as the simulation), today's and all-time P&L, and slippage vs the paper entry. It is included in the export (`my_trades_journal.csv`).
+- **Stricter PASS:** a horizon must also be profitable in *both halves* of the 12-month replay, so one lucky stretch can't pass.
+- **Today tab:** a clear warning that its score is not a tested trading signal. A 6-month replay found it right about half the time and losing after costs.
 
 ## Pure 2.3.1 — export
 - **⬇ Export all data** (AI → Validate) saves one ZIP of CSV files wherever you choose (Downloads, Drive …), with no storage permission needed:

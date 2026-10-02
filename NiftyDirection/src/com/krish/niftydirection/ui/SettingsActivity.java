@@ -130,6 +130,15 @@ public class SettingsActivity extends Activity {
         text("sim_slip", "Slippage per side, Nifty points", "1", DEC);
         text("sim_stop", "Stop = this × the 68% expected range (0 = no stop)", "1", DEC);
 
+        section("🛡  Risk guard", "Protects you on a bad day. While it is on, no new \"strong enough to act on\" signal is shown when any rule is hit. "
+                + "It counts the trades you mark \"I took this\" in the AI tab (your real trades).");
+        check("guard_on", "Use the risk guard", true);
+        text("guard_loss", "Daily loss limit, ₹ (stop for the day after losing this much)", "3000", NUM);
+        text("guard_trades", "Maximum trades per day", "3", NUM);
+        text("guard_cool", "Cool-down after a losing trade, minutes", "30", NUM);
+        text("guard_first", "No new entries in the first N minutes after 9:15", "15", NUM);
+        text("guard_last", "No new entries in the last N minutes before 15:30", "30", NUM);
+
         section("ℹ️  How to read the app", "Direction Score 0–100: 50 = no side. A side starts when the signed score passes ±25 and ends when it falls back through ±15.\n"
                 + "Labels: BULLISH, BEARISH, RANGE (real range signs), NO EDGE (weak or mixed evidence), CONFLICT (positioning and price disagree).\n"
                 + "Confidence = strength × agreement × data coverage, lowered by high VIX and event risk.\n"

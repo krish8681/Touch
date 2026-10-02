@@ -6,6 +6,7 @@ import com.krish.niftydirection.intel.FeatureEngine;
 import com.krish.niftydirection.intel.Horizon;
 import com.krish.niftydirection.intel.HorizonModel;
 import com.krish.niftydirection.intel.ImpactGraph;
+import com.krish.niftydirection.intel.Journal;
 import com.krish.niftydirection.intel.IntelEngine;
 import com.krish.niftydirection.intel.Trainer;
 import com.krish.niftydirection.intel.Validator;
@@ -184,6 +185,7 @@ public final class IntelRunner {
         JSONObject fb = readJson(new File(d, "feedback.json"));
         Map<String, Feedback.Overlay> overlays = overlays(fb);
         IntelEngine.Forecast fc = IntelEngine.forecast(models, h, di, k, preOpen, ctx, prev, overlays, tradeThreshold, governor(base));
+        applyGuard(fc, base, today, ctx != null ? ctx.minute : History.minuteAfter(k), cfg);
         int m = History.minuteAfter(k);
         fc.asOf = preOpen ? "Before the open — expected open " + String.format(Locale.US, "%,.0f", fc.price) + " (from GIFT Nifty)"
                 : (td != null ? "Today " : day.date + " close, ") + String.format(Locale.US, "%d:%02d", m / 60, m % 60);
@@ -370,14 +372,14 @@ public final class IntelRunner {
         readme.append(README);
         n += entry(z, "README.txt", readme.toString());
         if (r != null) {
-            StringBuilder b = new StringBuilder("horizon,label,verdict,reasons,forecasts,sessions,hit_rate,usual_side_rate,brier,base_brier,brier_skill,skill_band_low,skill_band_high,"
+            StringBuilder b = new StringBuilder("horizon,label,verdict,reasons,forecasts,sessions,hit_rate,usual_side_rate,brier,base_brier,brier_skill,skill_band_low,skill_band_high,skill_first_half,skill_second_half,"
                     + "up_flat_down_accuracy,up_flat_down_base,calibration_error,trades,wins,win_rate,stopped,net_points,net_rupees_per_lot,charges_rupees,avg_rupees_per_trade,"
                     + "profit_factor,max_drawdown_rupees,worst_losing_streak\n");
             for (Validator.HReport x : r.horizons)
                 b.append(x.id).append(',').append(x.label).append(',').append(x.verdict).append(',').append(csv(String.join("; ", x.reasons))).append(',')
                         .append(x.n).append(',').append(x.sessions).append(',').append(num(x.hit, 4)).append(',').append(num(x.base, 4)).append(',')
                         .append(num(x.brier, 5)).append(',').append(num(x.baseBrier, 5)).append(',').append(num(x.skill, 5)).append(',').append(num(x.skillLo, 5)).append(',')
-                        .append(num(x.skillHi, 5)).append(',').append(num(x.acc3, 4)).append(',').append(num(x.base3, 4)).append(',').append(num(x.calErr, 4)).append(',')
+                        .append(num(x.skillHi, 5)).append(',').append(num(x.skill1, 5)).append(',').append(num(x.skill2, 5)).append(',').append(num(x.acc3, 4)).append(',').append(num(x.base3, 4)).append(',').append(num(x.calErr, 4)).append(',')
                         .append(x.trades).append(',').append(x.wins).append(',').append(x.trades > 0 ? num(x.wins / (double) x.trades, 4) : "").append(',').append(x.stops).append(',')
                         .append(num(x.netPts, 2)).append(',').append(num(x.netRupees, 2)).append(',').append(num(x.chargesRupees, 2)).append(',').append(num(x.avgRupees, 2)).append(',')
                         .append(num(x.profitFactor, 3)).append(',').append(num(x.maxDD, 2)).append(',').append(x.worstStreak).append('\n');
@@ -426,6 +428,16 @@ public final class IntelRunner {
             }
         }
         n += entry(z, "live_forecast_log.csv", lv.toString());
+        StringBuilder jr = new StringBuilder("date,horizon,side,lots,lot_size,entry_time,entry,exit_time,exit,points,net_rupees_after_charges,signal_prob,paper_entry,slippage_vs_paper_pts\n");
+        java.text.SimpleDateFormat jf = new java.text.SimpleDateFormat("HH:mm", Locale.US);
+        jf.setTimeZone(Collector.IST);
+        for (Journal.Entry e : journal(base))
+            jr.append(e.date).append(',').append(e.horizon).append(',').append(e.dir > 0 ? "LONG" : "SHORT").append(',').append(e.lots).append(',').append(e.lot).append(',')
+                    .append(e.entryAt > 0 ? jf.format(new java.util.Date(e.entryAt)) : "").append(',').append(num(e.entry, 2)).append(',')
+                    .append(e.exitAt > 0 ? jf.format(new java.util.Date(e.exitAt)) : "").append(',').append(num(e.exit, 2)).append(',').append(num(e.points(), 2)).append(',')
+                    .append(num(e.pnl(), 2)).append(',').append(num(e.signalProb, 4)).append(',').append(num(e.paperEntry, 2)).append(',')
+                    .append(Double.isNaN(e.paperEntry) ? "" : num(e.dir * (e.entry - e.paperEntry), 2)).append('\n');
+        n += entry(z, "my_trades_journal.csv", jr.toString());
         String rep = report(base);
         if (!rep.isEmpty()) n += entry(z, "training_report.txt", rep);
         if (settings != null) n += entry(z, "settings.txt", String.format(Locale.US,
@@ -446,6 +458,7 @@ public final class IntelRunner {
             + "replay_trades.csv        EVERY simulated trade: entry/exit date and time, side, prices, stop, points, charges, net ₹ per lot, cumulative ₹.\n"
             + "replay_features.csv      the 74 model inputs at every replay moment (scaled values as the models see them), for your own analysis.\n"
             + "leakage_audit.txt        the look-ahead and purge checks.\n"
+            + "my_trades_journal.csv    the trades you marked \"I took this\": your fills, points, net ₹ after charges, and slippage vs the paper entry.\n"
             + "live_forecast_log.csv    every live forecast this phone logged (every 30 min per horizon), its outcome once known, and paper trades.\n"
             + "validation.json          the raw report. training_report.txt: what the models learnt and how they tested. settings.txt: assumptions used.\n\n"
             + "NOTES\n"
@@ -473,6 +486,53 @@ public final class IntelRunner {
 
     static String num(double v, int dp) { return Double.isNaN(v) || Double.isInfinite(v) ? "" : String.format(Locale.US, "%." + dp + "f", v); }
     static String csv(String s) { return s == null ? "" : s.indexOf(',') >= 0 || s.indexOf('"') >= 0 ? "\"" + s.replace("\"", "\"\"") + "\"" : s; }
+
+    // ================================================================== journal + risk guard
+
+    static File journalFile(File base) { return new File(dir(base), "journal.json"); }
+
+    public static synchronized List<Journal.Entry> journal(File base) {
+        try { File f = journalFile(base); return f.exists() ? Journal.fromJson(new JSONArray(read(f))) : new ArrayList<>(); }
+        catch (Exception e) { return new ArrayList<>(); }
+    }
+
+    static synchronized void saveJournal(File base, List<Journal.Entry> l) throws Exception { write(journalFile(base), Journal.toJson(l).toString()); }
+
+    /** "I took this": records your real entry for a live signal. */
+    public static synchronized Journal.Entry takeTrade(File base, String horizon, int dir, double fill, int lots, int lot, double prob, double paperEntry) throws Exception {
+        List<Journal.Entry> l = journal(base);
+        Journal.Entry e = new Journal.Entry();
+        e.id = Long.toString(System.currentTimeMillis(), 36); e.date = Collector.day(new java.util.Date()); e.horizon = horizon; e.dir = dir;
+        e.entry = fill; e.lots = Math.max(1, lots); e.lot = lot; e.entryAt = System.currentTimeMillis(); e.signalProb = prob; e.paperEntry = paperEntry;
+        l.add(e);
+        saveJournal(base, l);
+        return e;
+    }
+
+    public static synchronized void closeTrade(File base, String id, double fill) throws Exception {
+        List<Journal.Entry> l = journal(base);
+        for (Journal.Entry e : l) if (e.id.equals(id) && e.open()) { e.exit = fill; e.exitAt = System.currentTimeMillis(); }
+        saveJournal(base, l);
+    }
+
+    public static synchronized void deleteTrade(File base, String id) throws Exception {
+        List<Journal.Entry> l = journal(base);
+        l.removeIf(e -> e.id.equals(id));
+        saveJournal(base, l);
+    }
+
+    /** Risk guard: blocks new act signals after a bad day, too many trades, right after a loss, or near the open / close. */
+    static void applyGuard(IntelEngine.Forecast fc, File base, String today, int minute, Validator.Config cfg) {
+        fc.guard = Journal.blocks(journal(base), today, minute, System.currentTimeMillis(), cfg.guard);
+        if (fc.guard.isEmpty()) return;
+        for (IntelEngine.HPred p : fc.preds) {
+            if (!p.tradeable) continue;
+            p.tradeable = false;
+            p.gate.add(0, "risk guard: " + fc.guard.get(0));
+            p.signalQuality = "LOW";
+            p.signalReason = "risk guard: " + fc.guard.get(0);
+        }
+    }
 
     /** Last validation report, or null. */
     public static Validator.Report validation(File base) {

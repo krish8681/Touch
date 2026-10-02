@@ -194,9 +194,14 @@ final class IntelPage {
 
         k.addView(Ui.text(c, summary(fc, sig, show), 13.5f, Ui.TEXT, false), Ui.top(c, 14));
         if (sig != null) {
-            if (sig.tradeable) k.addView(banner(c, "✓  Strong enough to act on — signal only, the app never trades.", Ui.GREEN), Ui.top(c, 12));
-            else k.addView(banner(c, "⏸  No trade: " + (sig.gate.isEmpty() ? "not strong enough" : sig.gate.get(0)), Ui.AMBER), Ui.top(c, 12));
+            if (sig.tradeable) {
+                k.addView(banner(c, "✓  Strong enough to act on — signal only, the app never trades.", Ui.GREEN), Ui.top(c, 12));
+                Button took = Ui.button(c, "✍  I took this trade", Ui.GREEN);
+                took.setOnClickListener(v -> tookDialog(c, sig, fc));
+                k.addView(took, Ui.top(c, 8));
+            } else k.addView(banner(c, "⏸  No trade: " + (sig.gate.isEmpty() ? "not strong enough" : sig.gate.get(0)), Ui.AMBER), Ui.top(c, 12));
         }
+        if (!fc.guard.isEmpty()) k.addView(banner(c, "🛡  Risk guard: " + String.join(" · ", fc.guard), Ui.RED), Ui.top(c, 8));
         return k;
     }
 
@@ -303,6 +308,11 @@ final class IntelPage {
             d.addView(Ui.text(c, String.format(Locale.US, "Range: half the time within ±%.0f pts · 68%% within ±%.0f · 90%% within ±%.0f",
                     p.range50 * fc.price, p.range68 * fc.price, p.range90 * fc.price), 11, Ui.DIM, false), Ui.top(c, 12));
         d.addView(Ui.text(c, p.tradeable ? "✓ Trade gate passed" : "⏸ No trade — " + String.join("; ", p.gate), 11.5f, p.tradeable ? Ui.GREEN : Ui.AMBER, false), Ui.top(c, 6));
+        if (p.tradeable) {
+            Button took = Ui.button(c, "✍  I took this trade", Ui.GREEN);
+            took.setOnClickListener(v -> tookDialog(c, p, fc));
+            d.addView(took, Ui.top(c, 6));
+        }
         if (p.info != null) d.addView(Ui.text(c, "Tested: " + IntelRunner.testLine(p.info), 10.5f, p.info.proven ? Ui.DIM : Ui.AMBER, false), Ui.top(c, 6));
         return d;
     }
@@ -641,6 +651,7 @@ final class IntelPage {
                 + "forecast and simulated trade (all 9 horizons), the 74 inputs at every moment, the leakage audit and the live forecast + paper-trade log.",
                 11, Ui.DIM, false), Ui.top(c, 8));
         col.addView(k, Ui.cardLp(c));
+        col.addView(journal(c, dir, act), Ui.cardLp(c));
         if (r == null) return;
 
         // per-horizon verdicts
@@ -768,6 +779,92 @@ final class IntelPage {
             String val = String.format(Locale.US, "%.0f%% vs %.0f%%", v[1] * 100, v[2] * 100) + (v[3] > 0 ? String.format(Locale.US, " · %.0f · ₹%,.0f", v[3], v[4]) : "");
             d.addView(Ui.kv(c, e.getKey() + String.format(Locale.US, " (%.0f)", v[0]), val, v[1] > v[2] ? (v[3] > 0 && v[4] < 0 ? Ui.AMBER : Ui.GREEN) : Ui.DIM));
         }
+    }
+
+    // ================================================================== journal
+
+    static Actions lastActions;
+
+    /** "I took this": your real fill (prefilled with the current price) and lots. */
+    static void tookDialog(Context c, IntelEngine.HPred p, IntelEngine.Forecast fc) {
+        int dir = "BEARISH".equals(p.direction) ? -1 : 1;
+        LinearLayout box = Ui.col(c);
+        int pad = Ui.dp(c, 18);
+        box.setPadding(pad, Ui.dp(c, 8), pad, 0);
+        box.addView(Ui.text(c, (dir > 0 ? "LONG" : "SHORT") + " Nifty futures · " + p.hz.label + String.format(Locale.US, " · %.0f%%", p.sideProb() * 100), 13, Ui.DIM, false));
+        android.widget.EditText price = field(c, "Your fill price", String.format(Locale.US, "%.2f", fc.price), true);
+        android.widget.EditText lots = field(c, "Lots", "1", false);
+        box.addView(price, Ui.top(c, 10));
+        box.addView(lots, Ui.top(c, 8));
+        new android.app.AlertDialog.Builder(c).setTitle("I took this trade").setView(box)
+                .setPositiveButton("Save", (dg, w) -> {
+                    try {
+                        com.krish.niftydirection.intel.Validator.Config cfg = new com.krish.niftydirection.data.Prefs(c).simConfig();
+                        IntelRunner.takeTrade(((android.app.Activity) c).getFilesDir(), p.hz.id, dir, Double.parseDouble(price.getText().toString().trim()),
+                                Integer.parseInt(lots.getText().toString().trim()), cfg.lot, p.sideProb(), fc.price);
+                        android.widget.Toast.makeText(c, "Saved in My trades (AI → Validate)", android.widget.Toast.LENGTH_SHORT).show();
+                        if (lastActions != null) lastActions.redraw();
+                    } catch (Exception e) { android.widget.Toast.makeText(c, "Not saved: " + e.getMessage(), android.widget.Toast.LENGTH_LONG).show(); }
+                })
+                .setNegativeButton("Cancel", null).show();
+    }
+
+    static android.widget.EditText field(Context c, String hint, String value, boolean decimal) {
+        android.widget.EditText e = new android.widget.EditText(c);
+        e.setHint(hint);
+        e.setText(value);
+        e.setInputType(android.text.InputType.TYPE_CLASS_NUMBER | (decimal ? android.text.InputType.TYPE_NUMBER_FLAG_DECIMAL : 0));
+        e.setSelectAllOnFocus(true);
+        return e;
+    }
+
+    static View journal(Context c, File dir, Actions act) {
+        lastActions = act;
+        List<com.krish.niftydirection.intel.Journal.Entry> l = IntelRunner.journal(dir);
+        String today = com.krish.niftydirection.data.Collector.day(new java.util.Date());
+        double[] t = com.krish.niftydirection.intel.Journal.summary(l, today), all = com.krish.niftydirection.intel.Journal.summary(l, null);
+        LinearLayout k = Ui.card(c);
+        k.addView(Ui.title(c, "My trades (journal)", "your real trades"));
+        LinearLayout st = Ui.row(c);
+        st.addView(stat(c, "Today", String.format(Locale.US, "₹%,.0f", t[2]), Ui.signColor(t[2])), Ui.weight(1));
+        st.addView(stat(c, "Trades today", String.format(Locale.US, "%.0f", t[0]), Ui.TEXT), Ui.weight(1));
+        st.addView(stat(c, "All time", String.format(Locale.US, "₹%,.0f (%.0f)", all[2], all[0]), Ui.signColor(all[2])), Ui.weight(1.3f));
+        k.addView(st);
+        IntelEngine.Forecast fc = IntelRunner.last;
+        if (fc != null && !fc.guard.isEmpty()) k.addView(banner(c, "🛡  Risk guard: " + String.join(" · ", fc.guard), Ui.RED), Ui.top(c, 10));
+        if (l.isEmpty()) k.addView(Ui.text(c, "Tap \"I took this trade\" on a signal to record your real fill. Close it here with your exit price. "
+                + "The risk guard (Settings) counts these trades.", 12, Ui.DIM, false), Ui.top(c, 10));
+        java.text.SimpleDateFormat tf = new java.text.SimpleDateFormat("dd MMM HH:mm", Locale.US);
+        tf.setTimeZone(com.krish.niftydirection.data.Collector.IST);
+        for (int i = l.size() - 1; i >= Math.max(0, l.size() - 15); i--) {
+            com.krish.niftydirection.intel.Journal.Entry e = l.get(i);
+            k.addView(thin(c), Ui.top(c, 8));
+            LinearLayout r = Ui.row(c);
+            r.setPadding(0, Ui.dp(c, 8), 0, 0);
+            LinearLayout left = Ui.col(c);
+            left.addView(Ui.text(c, (e.dir > 0 ? "LONG " : "SHORT ") + e.lots + " lot · " + com.krish.niftydirection.intel.Horizon.of(e.horizon).label, 13, Ui.TEXT, true));
+            left.addView(Ui.text(c, tf.format(new java.util.Date(e.entryAt)) + String.format(Locale.US, " @ %,.1f", e.entry)
+                    + (e.open() ? "  · open" : String.format(Locale.US, " → %,.1f (%+.1f pts)", e.exit, e.points())), 11.5f, Ui.DIM, false));
+            r.addView(left, Ui.weight(1));
+            if (e.open()) {
+                Button cl = Ui.button(c, "Close", Ui.CYAN);
+                cl.setTextSize(12);
+                cl.setOnClickListener(v -> {
+                    android.widget.EditText px = field(c, "Exit price", fc != null ? String.format(Locale.US, "%.2f", fc.price) : "", true);
+                    LinearLayout box = Ui.col(c);
+                    box.setPadding(Ui.dp(c, 18), Ui.dp(c, 8), Ui.dp(c, 18), 0);
+                    box.addView(px);
+                    new android.app.AlertDialog.Builder(c).setTitle("Close trade").setView(box).setPositiveButton("Save", (dg, w) -> {
+                        try { IntelRunner.closeTrade(dir, e.id, Double.parseDouble(px.getText().toString().trim())); act.redraw(); }
+                        catch (Exception ex) { android.widget.Toast.makeText(c, "Not saved: " + ex.getMessage(), android.widget.Toast.LENGTH_LONG).show(); }
+                    }).setNeutralButton("Delete", (dg, w) -> { try { IntelRunner.deleteTrade(dir, e.id); act.redraw(); } catch (Exception ignored) { } })
+                            .setNegativeButton("Cancel", null).show();
+                });
+                r.addView(cl, Ui.wrap());
+            } else r.addView(Ui.text(c, String.format(Locale.US, "₹%,.0f", e.pnl()), 14, Ui.signColor(e.pnl()), true), Ui.wrap());
+            k.addView(r);
+        }
+        return k;
     }
 
     // ================================================================== helpers

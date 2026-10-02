@@ -46,6 +46,12 @@ public class Prefs {
         c.lot = (int) Math.max(1, num("sim_lot", 65));
         c.slippagePts = Math.max(0, num("sim_slip", 1));
         c.stopMult = Math.max(0, num("sim_stop", 1));
+        c.guard.on = bool("guard_on", true);
+        c.guard.maxLossRupees = Math.max(0, num("guard_loss", 3000));
+        c.guard.maxTrades = (int) Math.max(1, num("guard_trades", 3));
+        c.guard.coolMin = (int) Math.max(0, num("guard_cool", 30));
+        c.guard.noFirstMin = (int) Math.max(0, num("guard_first", 15));
+        c.guard.noLastMin = (int) Math.max(0, num("guard_last", 30));
         return c;
     }
 

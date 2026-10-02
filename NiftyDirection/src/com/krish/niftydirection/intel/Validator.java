@@ -47,6 +47,8 @@ public final class Validator {
         public double stopMult = 1.0;           // stop = this × the 68% expected range (0 = no stop)
         public double threshold = 0.62;         // trade gate probability
         public Set<String> eventDates = new HashSet<>();   // RBI / Fed / Budget days, for the regime and stress tables
+        /** Risk guard applied to live act signals (not to the replay, which tests the raw engine). */
+        public Journal.Guard guard = new Journal.Guard();
     }
 
     /** Approximate Zerodha charges for one futures round trip, in ₹ (brokerage, STT, exchange, SEBI, stamp, GST). */
@@ -114,6 +116,8 @@ public final class Validator {
         public final List<String> reasons = new ArrayList<>();
         public int n, sessions;
         public double hit = Double.NaN, base = Double.NaN, brier = Double.NaN, baseBrier = Double.NaN, skill = Double.NaN, skillLo = Double.NaN, skillHi = Double.NaN;
+        /** Brier skill in the first and second half of the replay sessions (an edge must show in both). */
+        public double skill1 = Double.NaN, skill2 = Double.NaN;
         public double acc3 = Double.NaN, base3 = Double.NaN, calErr = Double.NaN;
         /** Confidence buckets of the forecast side's probability: {from, n, mean predicted, share right}. */
         public final List<double[]> buckets = new ArrayList<>();
@@ -299,6 +303,13 @@ public final class Validator {
         r.brier = br / rs.size(); r.baseBrier = bb / rs.size(); r.skill = bb > 0 ? 1 - br / bb : Double.NaN;
         double[] band = Trainer.bootstrap(new ArrayList<>(perDay.values()), hz.swing() ? Math.max(1, hz.sessions) : 1);
         r.skillLo = band[0]; r.skillHi = band[1];
+        // stability: the same skill measured separately in each half of the replay
+        List<String> dk = new ArrayList<>(perDay.keySet());
+        java.util.Collections.sort(dk);
+        double[] h1 = new double[2], h2 = new double[2];
+        for (int i = 0; i < dk.size(); i++) { double[] v = perDay.get(dk.get(i)); double[] t = i < dk.size() / 2 ? h1 : h2; t[0] += v[0]; t[1] += v[1]; }
+        r.skill1 = h1[1] > 0 ? 1 - h1[0] / h1[1] : Double.NaN;
+        r.skill2 = h2[1] > 0 ? 1 - h2[0] / h2[1] : Double.NaN;
         if (n3 > 0) { r.acc3 = right3 / (double) n3; r.base3 = Math.max(cls[0], Math.max(cls[1], cls[2])) / (double) rs.size(); }
         double ew = 0, en = 0;
         for (int b = 0; b < 5; b++) {
@@ -408,7 +419,8 @@ public final class Validator {
     // ================================================================== verdicts
 
     /**
-     * PASS: real edge on the replay (Brier-skill bootstrap band above 0 and hit rate above the usual side), confidence honest
+     * PASS: real edge on the replay (Brier-skill bootstrap band above 0, positive in BOTH halves of the replay, and hit rate above
+ *       the usual side — so one lucky horizon out of nine or one lucky stretch cannot pass), confidence honest
      *       (calibration error ≤ 8 points), and the simulated trades make money after costs (≥ 20 trades, profit factor ≥ 1.1).
      * WARN: an edge that is not yet proven, confidence off by 8–15 points, too few trades, or an edge that loses after costs.
      * FAIL: no edge, confidence off by more than 15 points, or any leakage.
@@ -424,10 +436,13 @@ public final class Validator {
             else if (!(r.skill > 0) || r.hit <= r.base) { v = "FAIL"; why.add(String.format(Locale.US, "no edge: right %.1f%% vs %.1f%% always guessing the usual side", r.hit * 100, r.base * 100)); }
             else if (r.calErr > 0.15) { v = "FAIL"; why.add(String.format(Locale.US, "confidence is misleading: off by %.0f points on average", r.calErr * 100)); }
             else {
-                boolean proven = r.skillLo > 0;
+                boolean stable = r.skill1 > 0 && r.skill2 > 0;
+                boolean proven = r.skillLo > 0 && stable;
+                if (r.skillLo > 0 && !stable)
+                    why.add(String.format(Locale.US, "edge not stable: skill %+.1f%% in the first half, %+.1f%% in the second", r.skill1 * 100, r.skill2 * 100));
                 boolean honest = Double.isNaN(r.calErr) || r.calErr <= 0.08;
                 boolean money = r.trades >= 20 && r.netRupees > 0 && r.profitFactor >= 1.1;
-                if (!proven) why.add("edge not proven (skill band includes zero)");
+                if (!(r.skillLo > 0)) why.add("edge not proven (skill band includes zero)");
                 if (!honest) why.add(String.format(Locale.US, "confidence off by %.0f points", r.calErr * 100));
                 if (r.trades < 20) why.add("only " + r.trades + " simulated trades — too few to judge P&L");
                 else if (!money) why.add(String.format(Locale.US, "simulated trades %s after costs (₹%,.0f per lot, PF %.2f)", r.netRupees > 0 ? "barely profitable" : "lose money", r.netRupees, r.profitFactor));
@@ -509,8 +524,8 @@ public final class Validator {
         for (HReport x : r.horizons) {
             JSONObject o = new JSONObject().put("id", x.id).put("label", x.label).put("verdict", x.verdict).put("reasons", strs(x.reasons))
                     .put("n", x.n).put("sessions", x.sessions).put("trades", x.trades).put("wins", x.wins).put("stops", x.stops).put("worstStreak", x.worstStreak);
-            String[] k = {"hit", "base", "brier", "baseBrier", "skill", "skillLo", "skillHi", "acc3", "base3", "calErr", "netPts", "netRupees", "chargesRupees", "maxDD", "profitFactor", "avgRupees"};
-            double[] v = {x.hit, x.base, x.brier, x.baseBrier, x.skill, x.skillLo, x.skillHi, x.acc3, x.base3, x.calErr, x.netPts, x.netRupees, x.chargesRupees, x.maxDD, x.profitFactor, x.avgRupees};
+            String[] k = {"hit", "base", "brier", "baseBrier", "skill", "skillLo", "skillHi", "skill1", "skill2", "acc3", "base3", "calErr", "netPts", "netRupees", "chargesRupees", "maxDD", "profitFactor", "avgRupees"};
+            double[] v = {x.hit, x.base, x.brier, x.baseBrier, x.skill, x.skillLo, x.skillHi, x.skill1, x.skill2, x.acc3, x.base3, x.calErr, x.netPts, x.netRupees, x.chargesRupees, x.maxDD, x.profitFactor, x.avgRupees};
             for (int i = 0; i < k.length; i++) o.put(k[i], nz(v[i]));
             JSONArray b = new JSONArray();
             for (double[] q : x.buckets) b.put(arr(q));
@@ -535,7 +550,7 @@ public final class Validator {
             x.n = o.optInt("n"); x.sessions = o.optInt("sessions"); x.trades = o.optInt("trades"); x.wins = o.optInt("wins"); x.stops = o.optInt("stops");
             x.worstStreak = o.optInt("worstStreak");
             x.hit = nan(o, "hit"); x.base = nan(o, "base"); x.brier = nan(o, "brier"); x.baseBrier = nan(o, "baseBrier"); x.skill = nan(o, "skill");
-            x.skillLo = nan(o, "skillLo"); x.skillHi = nan(o, "skillHi"); x.acc3 = nan(o, "acc3"); x.base3 = nan(o, "base3"); x.calErr = nan(o, "calErr");
+            x.skillLo = nan(o, "skillLo"); x.skillHi = nan(o, "skillHi"); x.skill1 = nan(o, "skill1"); x.skill2 = nan(o, "skill2"); x.acc3 = nan(o, "acc3"); x.base3 = nan(o, "base3"); x.calErr = nan(o, "calErr");
             x.netPts = nan(o, "netPts"); x.netRupees = nan(o, "netRupees"); x.chargesRupees = nan(o, "chargesRupees"); x.maxDD = nan(o, "maxDD");
             x.profitFactor = nan(o, "profitFactor"); x.avgRupees = nan(o, "avgRupees");
             JSONArray b = o.optJSONArray("buckets");

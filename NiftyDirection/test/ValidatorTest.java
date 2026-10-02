@@ -58,6 +58,30 @@ public class ValidatorTest {
         IntelEngine.Forecast f2 = IntelEngine.forecast(ms, live, h.days.size() - 1, 40, false, null, null, null, 0.5, new HashMap<>());
         check("governor: not validated yet never acts", !f2.preds.get(2).tradeable && String.join(";", f2.preds.get(2).gate).contains("not validated"));
 
+        // ---- stricter PASS: every PASS horizon shows its edge in both halves of the replay
+        boolean halves = true;
+        for (Validator.HReport x : r.horizons) if ("PASS".equals(x.verdict) && !(x.skill1 > 0 && x.skill2 > 0)) halves = false;
+        check("PASS needs the edge in both halves", halves && !Double.isNaN(h1.skill1));
+
+        // ---- journal + risk guard
+        List<Journal.Entry> j = new ArrayList<>();
+        Journal.Guard g = new Journal.Guard();
+        long now = 1_800_000_000_000L;
+        check("guard: first 15 minutes blocked", !Journal.blocks(j, "2026-10-05", 9 * 60 + 20, now, g).isEmpty());
+        check("guard: last 30 minutes blocked", !Journal.blocks(j, "2026-10-05", 15 * 60 + 5, now, g).isEmpty());
+        check("guard: mid-morning allowed", Journal.blocks(j, "2026-10-05", 11 * 60, now, g).isEmpty());
+        Journal.Entry loss = new Journal.Entry();
+        loss.date = "2026-10-05"; loss.dir = 1; loss.entry = 25000; loss.exit = 24950; loss.lots = 1; loss.lot = 65; loss.exitAt = now - 10 * 60_000L;
+        j.add(loss);
+        check("journal P&L = points × lot − charges", Math.abs(loss.pnl() - (-50 * 65 - Validator.charges(25000, 24950, 1, 65))) < 1e-6);
+        List<String> b = Journal.blocks(j, "2026-10-05", 11 * 60, now, g);
+        check("guard: daily loss limit + cool-down after a loss", b.size() == 2 && b.get(0).contains("loss limit") && b.get(1).contains("cool-down"));
+        check("guard: a new day starts clean", Journal.blocks(j, "2026-10-06", 11 * 60, now, g).isEmpty());
+        g.on = false;
+        check("guard can be switched off", Journal.blocks(j, "2026-10-05", 9 * 60 + 16, now, g).isEmpty());
+        List<Journal.Entry> back2 = Journal.fromJson(new org.json.JSONArray(Journal.toJson(j).toString()));
+        check("journal survives JSON", back2.size() == 1 && Math.abs(back2.get(0).pnl() - loss.pnl()) < 1e-9);
+
         System.out.println(pass + " passed, " + fail + " failed (" + (System.currentTimeMillis() - t0) / 1000 + "s)");
         if (fail > 0) System.exit(1);
     }
