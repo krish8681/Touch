@@ -33,6 +33,11 @@ Each factor's weight = base × source trust (Kite / NSE 1.0, Yahoo 0.8, Gemini 0
 Regime: enter a side at ±25, keep it until ±15 (hysteresis). CONFLICT when structure and live are both ≥30 and opposite (confidence halved).
 NO EDGE when evidence is weak or mixed; RANGE only with 2+ real range signs.
 
+## Pure 2.4.1 (fixes)
+
+- Today gauge: "Bearish" / "Bullish" no longer cut off at the screen edges.
+- AI tab: Day close shows "after close" (not "no model") once the session has ended.
+
 ## Pure 2.4 — safety before money
 - **Risk guard** (Settings → Risk guard, on by default): no new "strong enough to act on" signal when any of these is hit:
   - the daily loss limit (₹3,000);

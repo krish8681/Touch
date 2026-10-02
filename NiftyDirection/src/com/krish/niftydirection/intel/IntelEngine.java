@@ -171,8 +171,9 @@ public final class IntelEngine {
             HPred p = new HPred();
             p.hz = hz;
             fc.preds.add(p);
-            if (m == null || m.meta == null || Trainer.targetSpec(k, hz) == null) continue;
+            if (m == null || m.meta == null) continue;
             p.info = m.info;
+            if (Trainer.targetSpec(k, hz) == null) continue;   // e.g. Day close after the close: model exists, nothing to forecast
             HorizonModel.Output o = m.predict(f, reg);
             System.arraycopy(o.groupP, 0, p.groupP, 0, HorizonModel.G);
             double pm = o.p;

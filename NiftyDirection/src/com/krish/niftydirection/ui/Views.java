@@ -69,9 +69,13 @@ public final class Views {
             // end labels under the arc ends
             p.setTextSize(label);
             p.setColor(Ui.alpha(Ui.RED, 0xCC));
-            c.drawText("Bearish", cx - r, cy + stroke / 2 + label * 1.4f, p);
+            // anchored to the outer edge of the arc so the words never run off the view
+            p.setTextAlign(Paint.Align.LEFT);
+            c.drawText("Bearish", Math.max(0, cx - r - stroke / 2), cy + stroke / 2 + label * 1.4f, p);
             p.setColor(Ui.alpha(Ui.GREEN, 0xCC));
-            c.drawText("Bullish", cx + r, cy + stroke / 2 + label * 1.4f, p);
+            p.setTextAlign(Paint.Align.RIGHT);
+            c.drawText("Bullish", Math.min(w, cx + r + stroke / 2), cy + stroke / 2 + label * 1.4f, p);
+            p.setTextAlign(Paint.Align.CENTER);
         }
     }
 

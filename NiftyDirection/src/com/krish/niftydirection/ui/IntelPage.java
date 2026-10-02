@@ -247,7 +247,7 @@ final class IntelPage {
             String big = !p.has() ? "—" : arrow(p.direction) + String.format(Locale.US, " %.0f%%", p.sideProb() * 100);
             TextView bt = Ui.text(c, big, 19, col, true);
             r.addView(bt, Ui.wrap());
-            String chip = !p.has() ? "no model" : !p.validation.isEmpty() ? p.validation : !p.proven() ? "no edge" : Double.isNaN(p.range68) ? p.signalQuality : String.format(Locale.US, "±%.2f%%", p.range68 * 100);
+            String chip = !p.has() ? (p.hz != null && p.hz.eod() && p.info != null ? "after close" : "no model") : !p.validation.isEmpty() ? p.validation : !p.proven() ? "no edge" : Double.isNaN(p.range68) ? p.signalQuality : String.format(Locale.US, "±%.2f%%", p.range68 * 100);
             TextView ch = Ui.chip(c, chip, !p.has() ? Ui.GREY : !p.validation.isEmpty() ? verdictColor(p.validation) : !p.proven() ? Ui.GREY : Ui.CYAN);
             ch.setMinWidth(Ui.dp(c, 72));
             r.addView(ch, Ui.gapLeft(c, 10));
