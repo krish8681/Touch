@@ -17,7 +17,9 @@ import com.niftyengine.engine.core.Session
 import com.niftyengine.engine.model.ConfidenceLevel
 import com.niftyengine.engine.model.Decision
 import com.niftyengine.engine.model.EngineOutput
+import com.niftyengine.engine.model.EventStage
 import com.niftyengine.engine.model.FeedStatus
+import com.niftyengine.engine.model.NewsHorizon
 import com.niftyengine.engine.model.OptionCandidate
 import kotlin.math.abs
 
@@ -106,6 +108,7 @@ fun DashboardScreen(ui: UiState) {
             }
         }
     }
+    NewsSummaryCard(o, ui.analystStatus)
     DecisionCard(o)
     o.options.best?.let { Card("Option outcome model") { CandidateSummary(it) } }
     DataQualityCard(o)
@@ -274,34 +277,98 @@ fun MarketScreen(ui: UiState) {
 }
 
 @Composable
+fun NewsHorizonBars(o: EngineOutput) {
+    NewsHorizon.values().forEach { h ->
+        val v = o.newsHorizons[h] ?: 0.0
+        ScoreBar(h.label, v)
+    }
+}
+
+@Composable
+fun NewsSummaryCard(o: EngineOutput, analystStatus: String) {
+    Card("News impact by horizon") {
+        NewsHorizonBars(o)
+        Label(analystStatus, color = C.dim, size = 10.sp, mono = false)
+        val top = o.events.filter { abs(it.effectiveImpact) > 0.01 || "MARKET_DISAGREES" in it.flags }.take(3)
+        top.forEach { e ->
+            Label("• ${e.stage.label} · ${e.title.take(70)} — unpriced %.0f%%%s".format(e.unpriced * 100,
+                if ("MARKET_DISAGREES" in e.flags) " · market disagrees" else ""), color = C.text, size = 10.sp, mono = false)
+        }
+    }
+}
+
+private fun stageColor(st: EventStage) = when (st) {
+    EventStage.RUMOUR, EventStage.POSSIBLE -> C.dim
+    EventStage.LIKELY, EventStage.EXPECTED -> C.amber
+    EventStage.CONFIRMED, EventStage.DEVELOPING -> C.blue
+    EventStage.ESCALATING -> C.red
+    EventStage.RESOLVING, EventStage.RESOLVED -> C.green
+}
+
+@Composable
 fun NewsScreen(ui: UiState) {
     val o = ui.output ?: return EmptyState(ui)
-    o.signals["News"]?.let { SignalCard(it) }
-    if (o.events.isEmpty()) Card { Label("No recent news events.", color = C.dim) }
+    Card("Event intelligence") {
+        NewsHorizonBars(o)
+        Spacer(Modifier.height(4.dp))
+        KV("Analyst", ui.analystStatus.ifBlank { "–" })
+        KV("Decision horizon uses", NewsHorizon.forMinutes(o.expectedMove.horizonMinutes).label)
+        Label("Effective impact = event impact × unpriced × surprise × confidence. The AI describes events; it never issues buy/sell or call/put signals, and the market's reaction can overrule it.",
+            color = C.dim, size = 10.sp, mono = false)
+    }
+    if (o.events.isEmpty()) Card { Label("No tracked events.", color = C.dim) }
     o.events.forEach { e ->
+        val a = e.analysis
         Card {
             Row(verticalAlignment = Alignment.CenterVertically) {
+                Chip(e.stage.label.uppercase(), stageColor(e.stage))
                 Chip(e.type.label, C.blue)
-                if (e.divergence) Chip("DIVERGENCE", C.red)
+                if (a?.source?.startsWith("gemini") == true) Chip("AI", C.violet) else Chip("RULES", C.dim)
                 Spacer(Modifier.weight(1f))
                 Label("%+.2f".format(e.effectiveImpact), color = C.signed(e.effectiveImpact, 0.01), weight = FontWeight.Bold)
             }
-            Label(e.headline, color = C.white, size = 12.sp, mono = false)
+            Label(e.title, color = C.white, size = 12.sp, mono = false)
+            Label("${e.id} · ${e.articleIds.size} articles · ${e.sources.size} sources · first ${Session.hhmm(e.firstSeen)} · last info ${Session.hhmm(e.lastInfoAt)}",
+                color = C.dim, size = 10.sp)
+            Label(e.stageHistory.joinToString(" → ") { "${it.stage.label} ${Session.hhmm(it.t)}" }, color = C.text, size = 10.sp)
             Spacer(Modifier.height(4.dp))
-            Label("${Session.hhmm(e.firstSeen)} · ${e.sources.size} source(s): ${e.sources.take(4).joinToString()}", color = C.dim, size = 10.sp)
-            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                Label("dir %+.2f".format(e.direction), color = C.signed(e.direction), size = 10.sp)
-                Label("mag %.2f".format(e.magnitude), color = C.text, size = 10.sp)
-                Label("conf %.2f".format(e.confidence), color = C.text, size = 10.sp)
-                Label("decay %.2f".format(e.decay), color = C.text, size = 10.sp)
+            if (a != null) {
+                KV("Severity / direction", "%.2f / %+.2f".format(a.severity, a.direction))
+                if (a.expectedOutcome.isNotBlank() || e.expectations.any { !it.probability.isNaN() })
+                    KV("Expected", a.expectedOutcome.ifBlank { "–" } + e.expectations.filter { !it.probability.isNaN() }
+                        .joinToString(prefix = "  [", postfix = "]") { "%.0f%%".format(it.probability * 100) })
+                if (a.actualOutcome.isNotBlank()) KV("Actual", a.actualOutcome + when (a.actualMatchesExpectation) {
+                    true -> " (as expected)"; false -> " (differs)"; null -> "" })
             }
-            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                Label("reaction %+.2f".format(e.marketReaction), color = C.signed(e.marketReaction), size = 10.sp)
-                Label("persist %.2f".format(e.reactionPersistence), color = C.text, size = 10.sp)
-                Label(e.duration.name.lowercase(), color = C.text, size = 10.sp)
-                if (e.expected != "–") Label("exp ${e.expected} act ${e.actual}", color = C.amber, size = 10.sp)
+            KV("Surprise (new info)", "%+.2f".format(e.surprise), C.signed(e.surprise))
+            KV("Priced in (whole event)", "%.0f%%".format(e.pricedIn * 100))
+            KV("Unpriced (of the new info)", "%.0f%%".format(e.unpriced * 100),
+                if (e.unpriced < 0.3) C.dim else C.white)
+            KV("Market reaction", "%+.2f%s".format(e.reaction.agreement,
+                when { e.reaction.contradicted -> " · DISAGREES"; e.reaction.confirmed -> " · confirms"; else -> "" }),
+                when { e.reaction.contradicted -> C.red; e.reaction.confirmed -> C.green; else -> C.text })
+            KV("News confidence", "%.2f".format(e.newsConfidence))
+            Row(Modifier.fillMaxWidth().padding(top = 4.dp)) {
+                NewsHorizon.values().forEach { h ->
+                    val v = e.horizonImpacts[h] ?: 0.0
+                    Column(Modifier.weight(1f), horizontalAlignment = Alignment.CenterHorizontally) {
+                        Label(h.label, color = C.dim, size = 8.sp, maxLines = 1)
+                        Label("%+.2f".format(v), color = C.signed(v, 0.005), size = 10.sp)
+                    }
+                }
             }
-            if (e.sectors.isNotEmpty()) Label("Sectors: " + e.sectors.joinToString { it.label }, color = C.dim, size = 10.sp)
+            e.pricingNotes.forEach { Label("· $it", color = C.dim, size = 9.sp, mono = false) }
+            if (a != null) {
+                val extra = listOfNotNull(
+                    a.channels.takeIf { it.isNotEmpty() }?.joinToString(prefix = "Channels: ") { it.name.lowercase() },
+                    a.affectedSectors.takeIf { it.isNotEmpty() }?.joinToString(prefix = "Sectors: ") { it.label },
+                    a.affectedStocks.takeIf { it.isNotEmpty() }?.joinToString(prefix = "Stocks: "),
+                    "Duration ${a.duration.name.lowercase()} · persistence %.1f · escalation risk %.1f".format(a.persistence, a.escalationRisk),
+                    a.rationale.takeIf { it.isNotBlank() && a.source.startsWith("gemini") }?.let { "AI: $it" },
+                )
+                extra.forEach { Label(it, color = C.dim, size = 10.sp, mono = false) }
+            }
+            if (e.flags.isNotEmpty()) FlowChips(e.flags.map { it.replace('_', ' ') to tagColor(it) })
         }
     }
 }

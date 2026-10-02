@@ -158,6 +158,12 @@ private fun AuditDetail(r: com.niftyengine.engine.engines.PredictionRecord) {
             "${o.minutes}m %+.0f (%s)%s".format(o.move, when (o.realized) { 1 -> "bull"; -1 -> "bear"; else -> "range" },
                 if (o.optionPrice.isNaN()) "" else " opt %.1f".format(o.optionPrice))
         }, color = C.text, size = 10.sp)
+        if (r.newsHorizons.isNotEmpty()) Label("News by horizon: " + r.newsHorizons.entries.joinToString { "${it.key} %+.2f".format(it.value) }, color = C.text, size = 10.sp)
+        r.events.forEach { e ->
+            Label("  event ${e.id} [${e.stage}/${e.source}] sev %.2f surprise %+.2f unpriced %.0f%% reaction %+.2f conf %.2f → %+.3f %s · ${e.title.take(60)}"
+                .format(e.severity, e.surprise, e.unpriced * 100, e.reactionAgreement, e.confidence, e.effectiveImpact, e.flags.joinToString(" ")),
+                color = C.text, size = 9.sp)
+        }
         if (r.config.isNotEmpty()) Label("Config: " + r.config.entries.joinToString(" ") { "${it.key}=${it.value}" }, color = C.dim, size = 9.sp)
     }
 }
@@ -300,6 +306,11 @@ fun SettingsScreen(current: AppSettings, onSave: (AppSettings) -> Unit, onKiteLo
     var slip by remember(current) { mutableStateOf(current.slippageTicks.toString()) }
     var lotSize by remember(current) { mutableStateOf(current.lotSize.toString()) }
     var lots by remember(current) { mutableStateOf(current.lots.toString()) }
+    var gemOn by remember(current) { mutableStateOf(current.geminiEnabled) }
+    var gemKey by remember(current) { mutableStateOf(current.geminiApiKey) }
+    var gemModel by remember(current) { mutableStateOf(current.geminiModel) }
+    var gemBudget by remember(current) { mutableStateOf(current.geminiDailyBudget.toString()) }
+    var gemInterval by remember(current) { mutableStateOf(current.geminiMinIntervalSec.toString()) }
 
     fun build() = current.copy(
         mode = mode, refreshSeconds = num(refresh, 30.0).toInt().coerceIn(5, 600),
@@ -320,6 +331,9 @@ fun SettingsScreen(current: AppSettings, onSave: (AppSettings) -> Unit, onKiteLo
         minDataQuality = (num(minDq, 70.0) / 100).coerceIn(0.0, 1.0),
         brokeragePerOrder = num(brok, 20.0), sttSellPct = num(stt, 0.1), slippageTicks = num(slip, 1.0),
         lotSize = num(lotSize, 65.0).toInt().coerceAtLeast(1), lots = num(lots, 1.0).toInt().coerceAtLeast(1),
+        geminiEnabled = gemOn, geminiApiKey = gemKey.trim(), geminiModel = gemModel.trim().ifBlank { "gemini-2.5-flash" },
+        geminiDailyBudget = num(gemBudget, 200.0).toInt().coerceIn(0, 5000),
+        geminiMinIntervalSec = num(gemInterval, 60.0).toInt().coerceIn(10, 3600),
     )
 
     Card("Data source") {
@@ -348,6 +362,18 @@ fun SettingsScreen(current: AppSettings, onSave: (AppSettings) -> Unit, onKiteLo
         if (current.kiteTokenDate.isNotBlank()) Label("Token issued: ${current.kiteTokenDate} (expires daily)", color = C.dim, size = 10.sp)
         Button(onClick = { onKiteLogin(build()) }, enabled = kKey.isNotBlank() && kSecret.isNotBlank(), modifier = Modifier.fillMaxWidth(),
             colors = ButtonDefaults.buttonColors(containerColor = C.blue)) { Text("Login to Kite (switches to Kite mode)", fontSize = 12.sp) }
+    }
+    Card("Event intelligence (Gemini)") {
+        Label("Gemini reads important news and describes each event: stage, expectation vs actual, surprise, severity, sectors, channels, duration. " +
+            "It never produces buy/sell or call/put signals; the engine checks its reading against the market's reaction. Without a key the rule engine is used.",
+            color = C.dim, size = 10.sp, mono = false)
+        Toggle("Use Gemini for event understanding", gemOn) { gemOn = it }
+        Field("Gemini API key (aistudio.google.com)", gemKey, KeyboardType.Password, secret = true) { gemKey = it }
+        Field("Model", gemModel, KeyboardType.Text) { gemModel = it }
+        Row { Column(Modifier.weight(1f).padding(end = 4.dp)) { Field("Max calls / day", gemBudget, KeyboardType.Number) { gemBudget = it } }
+            Column(Modifier.weight(1f)) { Field("Min seconds between calls", gemInterval, KeyboardType.Number) { gemInterval = it } } }
+        Label("Free-tier limits change; keep calls/day below your quota. Each call batches up to 8 events. The key stays in this app's private storage.",
+            color = C.dim, size = 10.sp, mono = false)
     }
     Card("Prediction & trade filter") {
         Field("Prediction horizon (minutes)", horizon, KeyboardType.Number) { horizon = it }

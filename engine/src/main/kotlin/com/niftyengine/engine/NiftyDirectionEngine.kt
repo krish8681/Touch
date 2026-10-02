@@ -18,7 +18,8 @@ import com.niftyengine.engine.engines.GlobalRiskEngine
 import com.niftyengine.engine.engines.IndiaMacroEngine
 import com.niftyengine.engine.engines.MarketRegimeEngine
 import com.niftyengine.engine.engines.MarketStructureEngine
-import com.niftyengine.engine.engines.NewsEventEngine
+import com.niftyengine.engine.engines.EventIntelligenceEngine
+import com.niftyengine.engine.model.NewsHorizon
 import com.niftyengine.engine.engines.NiftyWeightEngine
 import com.niftyengine.engine.engines.OptionSelectionEngine
 import com.niftyengine.engine.engines.OptionsPositionEngine
@@ -49,7 +50,7 @@ data class EngineConfig(
     val requireCalibration: Boolean = true,
 )
 
-const val ENGINE_VERSION = "3.2.0"
+const val ENGINE_VERSION = "4.0.0"
 
 /**
  * NIFTY Direction Engine v3 — orchestrates modules 02–16 for one snapshot.
@@ -73,7 +74,8 @@ class NiftyDirectionEngine(val config: EngineConfig = EngineConfig()) {
     private val global = GlobalRiskEngine(norm)
     private val macro = IndiaMacroEngine(norm)
     private val flows = FlowEngine()
-    private val news = NewsEventEngine()
+    /** 20 — event intelligence (lifecycle, expectations, pricing-in, reaction, horizons). State persisted by the app. */
+    val eventIntel = EventIntelligenceEngine()
     private val regime = MarketRegimeEngine(state)
     private val direction = DirectionProbabilityEngine(state)
     private val move = ExpectedMoveEngine()
@@ -120,7 +122,12 @@ class NiftyDirectionEngine(val config: EngineConfig = EngineConfig()) {
         val gl = global.analyze(s, now, sessionStart)
         val mc = macro.analyze(s, now, sessionStart)
         val fl = quality.gate(flows.analyze(s), dq)
-        val nw = news.analyze(s.news, now, st.series, s.nifty.prevClose, s.nifty.last)
+        val nw = eventIntel.process(
+            s.news, s.eventAnalyses, now,
+            market = EventIntelligenceEngine.baselineFrom(s, now, usePrevClose = false),
+            prevCloseBaseline = EventIntelligenceEngine.baselineFrom(s, sessionStart, usePrevClose = true),
+            niftySeries = st.series, decisionHorizon = NewsHorizon.forMinutes(config.horizonMinutes),
+        )
         // Stale/invalid inputs stop acting as live drivers; degraded ones are down-weighted.
         val stSig = quality.gate(st.signal, dq); val hwSig = quality.gate(hw.signal, dq); val secSig = quality.gate(sec.signal, dq)
         val fuSig = quality.gate(fu.signal, dq); val opSig = quality.gate(op.signal, dq); val vxSig = quality.gate(vx.signal, dq)
@@ -141,7 +148,9 @@ class NiftyDirectionEngine(val config: EngineConfig = EngineConfig()) {
         )
         val prelim = direction.preliminary(inputs)
         val rg = regime.classify(MarketRegimeEngine.Inputs(prelim, st, fu, op, vx, br.score, derivatives.score,
-            hw.report.fakeBreadth, nw), now)
+            hw.report.fakeBreadth,
+            newsShock = nw.shock?.let { "Fresh unpriced ${it.type.label} event (${it.stage.label}): ${it.title.take(50)}" },
+            newsContradicted = nw.contradicted.isNotEmpty()), now)
         val insideOr = !st.orHigh.isNaN() && s.nifty.last <= st.orHigh && s.nifty.last >= st.orLow
         val hwr = hw.report
         val prevClose = s.nifty.prevClose.takeIf { it > 0 } ?: s.nifty.last
@@ -164,13 +173,18 @@ class NiftyDirectionEngine(val config: EngineConfig = EngineConfig()) {
             spot = s.nifty.last, horizonMinutes = horizon, vix = vx.level, atmIv = op.atmIv,
             realizedVol = st.realizedVolAnnual, histVol = st.histVolAnnual,
             eventShock = rg.regime == com.niftyengine.engine.model.Regime.EVENT_SHOCK, vixState = vx.state,
-            freshMajorEvent = nw.events.any { it.magnitude >= 0.6 && it.decay > 0.5 },
+            freshMajorEvent = nw.events.any { (it.analysis?.severity ?: 0.0) >= 0.6 && now - it.lastInfoAt <= 90 * 60_000L && it.surpriseMagnitude * it.unpriced >= 0.2 },
             globalStress = gl.globalVolStress, momentum = st.pressure,
         ), dir)
         val oa = optionSelect.analyze(s.optionChain, s.optionChain?.underlying?.takeIf { it > 0 } ?: s.nifty.last, wall, dir, em, op.atmIv,
             dir.decisionProbs(em.horizonMinutes))
-        val shockAge = nw.shock?.let { (now - it.firstSeen) / 60_000.0 }
-        val majorEvent = nw.events.any { it.magnitude >= 0.7 && now - it.firstSeen <= 120 * 60_000L && it.confidence >= 0.4 }
+        val shockAge = nw.shock?.let { (now - it.lastInfoAt) / 60_000.0 }
+        // Event-risk regime: a fresh major event, or a scheduled high-severity event still ahead (outcome unknown).
+        val majorEvent = nw.events.any { e ->
+            val sev = e.analysis?.severity ?: 0.0
+            (sev >= 0.7 && now - e.lastInfoAt <= 120 * 60_000L && e.newsConfidence >= 0.3) ||
+                (sev >= 0.7 && e.stage == com.niftyengine.engine.model.EventStage.EXPECTED && now - e.lastInfoAt <= 86_400_000L)
+        }
         val td = decision.decide(dir, rg, em, oa, Session.isOpen(wall), shockAge, dq, majorEvent)
 
         val signals = linkedMapOf(
@@ -185,6 +199,7 @@ class NiftyDirectionEngine(val config: EngineConfig = EngineConfig()) {
             signals = signals, regime = rg, direction = dir, expectedMove = em, options = oa, decision = td,
             heavyweights = hw.report, sectors = sec.rows, events = nw.events,
             dataSource = s.source, feedStatus = feed, dataQuality = dq, engineVersion = ENGINE_VERSION,
+            newsHorizons = nw.horizons, pendingEventAnalysis = nw.pending,
         )
     }
 

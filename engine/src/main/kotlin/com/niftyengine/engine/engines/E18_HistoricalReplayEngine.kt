@@ -108,6 +108,8 @@ class HistoricalReplayEngine(private val config: EngineConfig = EngineConfig()) 
             sectors = s.sectors.mapValues { clip(it.value) },
             global = s.global.mapValues { clip(it.value) },
             news = news,
+            // Mode A has no news at all; Mode B keeps only AI/rule readings that existed by t.
+            eventAnalyses = if (mode == ReplayMode.MARKET_ONLY) emptyList() else s.eventAnalyses.filter { it.analyzedAt <= t },
             source = "replay:${mode.name.lowercase()}",
         )
     }

@@ -48,7 +48,15 @@ data class AppSettings(
     val slippageTicks: Double = 1.0,
     val lotSize: Int = 65,
     val lots: Int = 1,
+    // ---- v4 event intelligence (Gemini reads news; it never produces trade signals)
+    val geminiEnabled: Boolean = true,
+    val geminiApiKey: String = "",
+    val geminiModel: String = "gemini-2.5-flash",
+    val geminiDailyBudget: Int = 200,
+    val geminiMinIntervalSec: Int = 60,
 ) {
+    val geminiActive get() = geminiEnabled && geminiApiKey.isNotBlank() && mode != DataMode.SIMULATED
+
     fun macroInputs(): MacroInputs = macro.copy(
         source = "manual (Setup)",
         releasedAt = macroDates.mapNotNull { (k, v) ->
@@ -84,6 +92,7 @@ data class AppSettings(
         "eventBump" to "$eventThresholdBump", "minDataQuality" to "$minDataQuality", "confirmCycles" to "$confirmCycles",
         "requireCalibration" to "$requireCalibration", "lotSize" to "$lotSize", "lots" to "$lots",
         "brokerage" to "$brokeragePerOrder", "stt" to "$sttSellPct", "slippageTicks" to "$slippageTicks",
+        "eventAnalyst" to if (geminiActive) "gemini:$geminiModel" else "rules",
     )
 }
 
@@ -124,6 +133,11 @@ class SettingsStore(context: Context) {
             slippageTicks = d("slip", def.slippageTicks),
             lotSize = p.getInt("lotSize", def.lotSize),
             lots = p.getInt("lots", def.lots),
+            geminiEnabled = p.getBoolean("gemOn", def.geminiEnabled),
+            geminiApiKey = p.getString("gemKey", "")!!,
+            geminiModel = p.getString("gemModel", def.geminiModel)!!.ifBlank { def.geminiModel },
+            geminiDailyBudget = p.getInt("gemBudget", def.geminiDailyBudget),
+            geminiMinIntervalSec = p.getInt("gemInterval", def.geminiMinIntervalSec),
             macro = MacroInputs(
                 repoRate = d("m_repo", def.macro.repoRate),
                 lastPolicyChangeBps = d("m_policy", def.macro.lastPolicyChangeBps),
@@ -156,6 +170,8 @@ class SettingsStore(context: Context) {
             .putString("minDQ", s.minDataQuality.toString()).putString("brok", s.brokeragePerOrder.toString())
             .putString("stt", s.sttSellPct.toString()).putString("slip", s.slippageTicks.toString())
             .putInt("lotSize", s.lotSize).putInt("lots", s.lots)
+            .putBoolean("gemOn", s.geminiEnabled).putString("gemKey", s.geminiApiKey.trim()).putString("gemModel", s.geminiModel.trim())
+            .putInt("gemBudget", s.geminiDailyBudget).putInt("gemInterval", s.geminiMinIntervalSec)
             .also { e -> MACRO_DATE_KEYS.forEach { k -> e.putString("md_$k", s.macroDates[k] ?: "") } }
             .apply()
     }

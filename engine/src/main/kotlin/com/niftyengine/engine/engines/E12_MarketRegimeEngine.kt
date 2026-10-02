@@ -25,7 +25,10 @@ class MarketRegimeEngine(private val state: EngineState) {
         val breadthScore: Double,
         val derivativesScore: Double,
         val fakeBreadth: Boolean,
-        val news: NewsEventEngine.Result,
+        /** Reason text when a fresh, unpriced, high-severity event is in play. */
+        val newsShock: String? = null,
+        /** A major event whose interpretation the market is contradicting. */
+        val newsContradicted: Boolean = false,
     )
 
     fun classify(i: Inputs, now: Long): RegimeResult {
@@ -38,9 +41,9 @@ class MarketRegimeEngine(private val state: EngineState) {
 
         // R8 — event shock
         val bigMove = abs(st.c15m) > 0.6
-        val shock = i.vix.state == VixState.SPIKING || i.news.shock != null || bigMove
+        val shock = i.vix.state == VixState.SPIKING || i.newsShock != null || bigMove
         if (i.vix.state == VixState.SPIKING) reasons += "India VIX spiking"
-        i.news.shock?.let { reasons += "Fresh high-impact event: ${it.type.label}" }
+        i.newsShock?.let { reasons += it }
         if (bigMove) reasons += "Abrupt %.2f%% move in 15m".format(st.c15m)
 
         // R9 — divergence between price and the drivers that should confirm it
@@ -50,8 +53,7 @@ class MarketRegimeEngine(private val state: EngineState) {
         if (i.fakeBreadth) divReasons += "Index move carried by heavyweights against breadth"
         if (abs(priceDir) > 0.3 && abs(i.breadthScore) > 0.3 && sign(priceDir) != sign(i.breadthScore))
             divReasons += "Price and breadth disagree"
-        if (i.news.events.any { it.divergence && it.magnitude >= 0.5 && it.decay > 0.3 })
-            divReasons += "Market reaction contradicts major news"
+        if (i.newsContradicted) divReasons += "Market reaction contradicts major news"
 
         val fs = i.futures
         val shortCovering = fs.dayState == FuturesState.SHORT_COVERING || fs.intradayState == FuturesState.SHORT_COVERING

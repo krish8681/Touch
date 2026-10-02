@@ -72,6 +72,24 @@ class SimulatedMarket(seed: Long = 7L, startDate: LocalDate = LocalDate.now(Sess
     private val news = mutableListOf<NewsItem>()
     private var flows = FlowData()
     private var dayBias = 0.0
+    private val bullStories = listOf(
+        "RBI cuts repo rate by 50 bps vs 25 bps expected, signals liquidity support",
+        "US inflation cools more than expected, Wall Street rallies to record high",
+        "Crude oil prices fall sharply as OPEC signals output increase",
+        "FPIs turn net buyers, inflows surge on strong earnings optimism",
+        "HDFC Bank Q2 net profit beats estimates, asset quality improves",
+    )
+    private val bearStories = listOf(
+        "Missile attack escalates Middle East conflict, crude surges",
+        "US Fed signals hawkish stance, Treasury yields jump",
+        "India CPI inflation rises to 6.2% against estimate of 5.6%",
+        "FPIs pull out ₹8,000 crore as rupee hits record low",
+        "Reliance Q2 results miss estimates, margins under pressure",
+    )
+    private val outlets = listOf("Reuters", "Economic Times", "Moneycontrol", "Livemint", "Business Standard", "CNBC-TV18")
+    /** Scheduled story beats: (minute, headline, copies, hidden regime forced from that minute, for how long). */
+    private data class Beat(val minute: Int, val title: String, val copies: Int, val force: Hidden? = null, val forMinutes: Int = 0)
+    private val beats = ArrayList<Beat>()
 
     init {
         // 250 days of history ending at the start level.
@@ -154,23 +172,37 @@ class SimulatedMarket(seed: Long = 7L, startDate: LocalDate = LocalDate.now(Sess
             basePutOi[k] = if (i <= 4) (60_000 + 90_000 * exp(-((i + 6) * (i + 6)) / 40.0)) * round100 * round500 * (0.8 + rnd.nextDouble() * 0.4) else 20_000.0
         }
         if (abs(dayBias) > 0.7) addNews(0, if (dayBias > 0) bullStories.random(rnd) else bearStories.random(rnd), 3, t(0) - 3_600_000L)
+        planStorylines()
     }
 
-    private val bullStories = listOf(
-        "RBI cuts repo rate by 50 bps vs 25 bps expected, signals liquidity support",
-        "US inflation cools more than expected, Wall Street rallies to record high",
-        "Crude oil prices fall sharply as OPEC signals output increase",
-        "FPIs turn net buyers, inflows surge on strong earnings optimism",
-        "HDFC Bank Q2 net profit beats estimates, asset quality improves",
-    )
-    private val bearStories = listOf(
-        "Missile attack escalates Middle East conflict, crude surges",
-        "US Fed signals hawkish stance, Treasury yields jump",
-        "India CPI inflation rises to 6.2% against estimate of 5.6%",
-        "FPIs pull out ₹8,000 crore as rupee hits record low",
-        "Reliance Q2 results miss estimates, margins under pressure",
-    )
-    private val outlets = listOf("Reuters", "Economic Times", "Moneycontrol", "Livemint", "Business Standard", "CNBC-TV18")
+
+
+    /**
+     * Lifecycle storylines so expectation/pricing logic can be exercised:
+     *  • a scheduled RBI decision that is EXPECTED at the open and confirmed "in line" mid-morning (little new info);
+     *  • on some days a geopolitical rumour → likely → confirmed sequence where the market sells off at the
+     *    rumour stage (so the confirmation is largely priced in).
+     */
+    private fun planStorylines() {
+        beats.clear()
+        if (rnd.nextDouble() < 0.5) {
+            beats += Beat(1, "RBI expected to cut repo rate by 25 bps today, economists poll shows", 3)
+            beats += Beat(46, "RBI cuts repo rate by 25 bps, in line with expectations", 4)
+        }
+        if (rnd.nextDouble() < 0.5) {
+            val r = 80 + rnd.nextInt(80)
+            beats += Beat(r, "Border clash reportedly under way, sources said, as tensions flare", 2, Hidden.EVENT_DOWN, 25)
+            beats += Beat(r + 20, "Military escalation likely as border clash widens, officials say", 3, Hidden.BEAR, 20)
+            beats += Beat(r + 50, "Government confirms border clash; troops attacked", 4, Hidden.RANGE, 40)
+        }
+    }
+
+    private fun playBeats() {
+        beats.filter { it.minute == minute }.forEach { b ->
+            addNews(minute, b.title, b.copies)
+            b.force?.let { hidden = it; hiddenLeft = b.forMinutes }
+        }
+    }
 
     private fun addNews(min: Int, story: String, copies: Int, at: Long = t(min)) {
         repeat(copies) { i ->
@@ -211,6 +243,7 @@ class SimulatedMarket(seed: Long = 7L, startDate: LocalDate = LocalDate.now(Sess
         }
         if (hiddenLeft-- <= 0) switchHidden()
         minute++
+        playBeats()
         val market = hidden.driftPerMin + rnd.nextGaussian() * hidden.volPerMin
         Sector.values().forEach { sectorFactor[it] = sectorFactor.getValue(it) * 0.98 + rnd.nextGaussian() * 0.006 }
         var idxRet = 0.0; var wsum = 0.0

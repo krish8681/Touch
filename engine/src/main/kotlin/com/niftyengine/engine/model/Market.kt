@@ -174,6 +174,8 @@ data class MarketSnapshot(
     val flows: FlowData? = null,
     val news: List<NewsItem> = emptyList(),
     val source: String = "unknown",
+    /** Event analyses (Gemini or rules) delivered up to this snapshot — recorded so replays stay point-in-time. */
+    val eventAnalyses: List<EventAnalysis> = emptyList(),
     /** Per-feed health messages from the collector (feed -> status). */
     val feedStatus: Map<String, String> = emptyMap(),
 )

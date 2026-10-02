@@ -33,6 +33,15 @@ data class Outcome(
 @Serializable
 data class SignalAudit(val score: Double, val confidence: Double, val tags: List<String> = emptyList())
 
+/** Snapshot of one tracked event as it stood when the prediction was made. */
+@Serializable
+data class EventAudit(
+    val id: String, val title: String, val stage: String, val source: String, val severity: Double,
+    val expectedProbability: Double, val surprise: Double, val pricedIn: Double, val unpriced: Double,
+    val reactionAgreement: Double, val confidence: Double, val effectiveImpact: Double,
+    val horizonImpacts: Map<String, Double>, val flags: List<String>,
+)
+
 @Serializable
 data class PredictionRecord(
     val id: String,
@@ -85,6 +94,9 @@ data class PredictionRecord(
     val optionCost: Double = Double.NaN,
     val optionSpreadPct: Double = Double.NaN,
     val config: Map<String, String> = emptyMap(),
+    // ---- v4 event intelligence
+    val newsHorizons: Map<String, Double> = emptyMap(),
+    val events: List<EventAudit> = emptyList(),
 ) {
     val predictedClass: Int get() = when {
         pBull >= pBear && pBull >= pRange -> 1
@@ -147,6 +159,12 @@ class PredictionLogger(private val store: PredictionStore, val horizons: List<In
             optionCost = best?.costPerUnit ?: Double.NaN,
             optionSpreadPct = best?.spreadPct ?: Double.NaN,
             config = config,
+            newsHorizons = o.newsHorizons.mapKeys { it.key.name },
+            events = o.events.filter { kotlin.math.abs(it.effectiveImpact) > 0.005 || (it.analysis?.severity ?: 0.0) >= 0.5 }.take(10).map { e ->
+                EventAudit(e.id, e.title.take(120), e.stage.name, e.analysis?.source ?: "", e.analysis?.severity ?: 0.0,
+                    e.expectations.lastOrNull()?.probability ?: Double.NaN, e.surprise, e.pricedIn, e.unpriced,
+                    e.reaction.agreement, e.newsConfidence, e.effectiveImpact, e.horizonImpacts.mapKeys { it.key.name }, e.flags)
+            },
         )
         store.append(r)
         return r

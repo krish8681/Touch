@@ -1,4 +1,4 @@
-# NIFTY Direction Engine v3.2 — Android
+# NIFTY Direction Engine v4.0 — Android
 
 A **NIFTY market-intelligence and probability engine** for Android. It answers four questions in order:
 
@@ -10,8 +10,22 @@ A **NIFTY market-intelligence and probability engine** for Android. It answers f
 > Decision support only — not investment advice. Weights are starting engineering values, not validated
 > optima; use the prediction log and replay tools to measure before risking capital.
 
-**Install:** `release/NiftyDirectionEngine-v3.2.0.apk` (Android 8.0+, sideload / "install unknown apps").
+**Install:** `release/NiftyDirectionEngine-v4.0.0.apk` (Android 8.0+, sideload / "install unknown apps").
 It opens in **Simulator** mode (synthetic data, works offline/after hours). Switch to live data in **Setup**.
+
+## v4.0 — event intelligence (what was expected → what was priced → what changed → how the market repriced)
+
+| # | Component | What it does |
+|---|-----------|--------------|
+| 1 | **Gemini event intelligence** (`app/data/GeminiEventAnalyst`) | Reads important news and returns a strict JSON description per event: type, stage, severity, direction, affected sectors/stocks, channels, expected outcome + probability, actual outcome, surprise, duration, persistence, escalation risk, confidence, horizon relevance. **No trade fields exist in the schema**, the prompt forbids advice, and extra fields are dropped. Budgeted (calls/day, min interval, 429 back-off). Without a key the rule analyst produces the same schema. |
+| 2 | **Expectation state** (`E20_EventIntelligenceEngine`) | Per event: expected outcome and probability over time, actual outcome, expectation change. Surprise = the share of information not already expected (e.g. 25 bps cut at 80 % expected → surprise ≈ 0.2; a consensus event first seen carries ~no new information). |
+| 3 | **Pricing-in / unpriced** | Measures how much of the new information the market has already absorbed since it arrived, on NIFTY, Bank Nifty, affected sectors, affected heavyweights, breadth, futures, options PCR, India VIX and USDINR, plus pre-information drift. **Effective impact = event impact × unpriced × surprise × confidence.** |
+| 4 | **Lifecycle + clustering** | One `EVENT_ID` per real-world event across outlets, rewrites and days (token + shared-phrase similarity, plus Gemini `mergeWith`). Stages RUMOUR → POSSIBLE → LIKELY → EXPECTED → CONFIRMED → DEVELOPING/ESCALATING → RESOLVING → RESOLVED with history. Event memory persists across app restarts. |
+| 5 | **Reaction confirmation** | Expected vs actual reaction per channel; if the market contradicts the reading, news confidence is cut (flag `MARKET_DISAGREES`) — the market is never forced to agree with the AI. |
+| 6 | **Multi-horizon impact** | Separate impact for 5–15 min, 30–120 min, EOD, 1–3 days, 1–2 weeks (duration, persistence, stage, AI hint, per-horizon decay). The news driver uses the bucket that matches the prediction horizon. |
+| 7 | **Kept from v3.2** | Probability calibration, walk-forward validation, point-in-time news filtering (AI readings are timestamped and recorded in session snapshots so replays only see what existed then; Mode A strips them), stale/missing-data detection, circuit breaker, transaction costs, prediction audit log (now with per-event audit). |
+
+Nothing else was added: no new indicators, scoring rules or prediction models.
 
 ## v3.2 — data integrity + calibration
 
@@ -61,6 +75,7 @@ release/  prebuilt APK
 | 17 | `PredictionLogger` | logs each prediction, attaches 15/30/60-min outcomes (incl. option price), accuracy, Brier score, calibration buckets, per-driver hit rates |
 | 18 | `HistoricalReplayEngine` | Mode A market-only / Mode B full information, strict point-in-time (no future bars/news); walk-forward over many sessions |
 | 01b | `DataQualityEngine` | per-feed freshness/validity, quality score, circuit breaker |
+| 20 | `EventIntelligenceEngine` | event lifecycle/clustering, expectation state, pricing-in, reaction confirmation, multi-horizon news impact |
 | 19 | `ProbabilityCalibrator` | isotonic calibration per horizon/class + option-outcome calibration, walk-forward hold-out check |
 
 `NiftyDirectionEngine` orchestrates one cycle; `sim/SimulatedMarket` generates a consistent synthetic market for demo/tests.
@@ -121,6 +136,7 @@ Requires JDK 17+ and the Android SDK (platform 35).
 ```bash
 ./gradlew :engine:test            # engine unit tests (simulated session, replay no-look-ahead, news dedup, BS parity…)
 ./gradlew :app:assembleDebug      # APK → app/build/outputs/apk/debug/app-debug.apk
+./gradlew :app:testDebugUnitTest --tests '*GeminiAnalystTest*'   # Gemini client vs mock server (schema, no trade fields, 429)
 ./gradlew :app:testDebugUnitTest --tests '*KiteDataTest*'   # Kite client vs mock server + real NFO instrument dump
 ./gradlew :app:testDebugUnitTest -DliveNetwork=true --tests '*LiveFeedTest*'   # hits real NSE endpoints
 ```

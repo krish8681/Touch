@@ -239,11 +239,15 @@ data class EngineOutput(
     val decision: TradeDecision,
     val heavyweights: HeavyweightReport,
     val sectors: List<SectorRow>,
-    val events: List<NewsEvent>,
+    val events: List<TrackedEvent>,
     val dataSource: String,
     val feedStatus: Map<String, String>,
     val dataQuality: DataQualityReport = DataQualityReport(),
     val engineVersion: String = "",
+    /** Aggregate news impact per horizon (−1..1). */
+    val newsHorizons: Map<NewsHorizon, Double> = emptyMap(),
+    /** Events waiting for (re-)analysis by the AI analyst. */
+    val pendingEventAnalysis: List<AnalysisRequest> = emptyList(),
 )
 
 @Serializable

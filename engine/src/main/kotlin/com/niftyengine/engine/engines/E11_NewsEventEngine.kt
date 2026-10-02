@@ -15,7 +15,12 @@ import kotlin.math.ln
 import kotlin.math.min
 
 /**
- * 11 — News / Event Engine.
+ * 11 — News / Event Engine (rule layer).
+ *
+ * In v4 the per-cycle scoring here is superseded by [EventIntelligenceEngine] (lifecycle, expectations,
+ * pricing-in, reaction, multi-horizon). This class remains the deterministic rule analyst: keyword typing,
+ * direction semantics, number extraction and source quality — used when Gemini is unavailable and as a
+ * cross-check of Gemini's reading.
  *
  *  1. Only items published at or before `now` are visible (no look-ahead; required for replay).
  *  2. Duplicate stories from many outlets are clustered into ONE event; extra sources raise confidence,
@@ -121,7 +126,7 @@ class NewsEventEngine {
         Sector.TELECOM to Regex("telecom|airtel|tariff hike|spectrum"),
     )
 
-    private fun sourceQuality(src: String): Double {
+    fun sourceQuality(src: String): Double {
         val s = src.lowercase()
         return when {
             listOf("nse", "bse", "rbi", "sebi", "pib", "government").any { s.contains(it) } -> 1.0
@@ -148,7 +153,8 @@ class NewsEventEngine {
         return Numbers(expected, if (expected.isNaN()) Double.NaN else actual)
     }
 
-    private fun buildEvent(items: List<NewsItem>, now: Long, series: List<Candle>, prevClose: Double, last: Double): NewsEvent {
+    /** Rule-based reading of one article cluster (also the fallback analyst for the v4 event-intelligence engine). */
+    fun buildEvent(items: List<NewsItem>, now: Long, series: List<Candle>, prevClose: Double, last: Double): NewsEvent {
         val text = items.joinToString(" ") { it.title + " " + it.summary }.lowercase()
         val headline = items.maxBy { sourceQuality(it.source) }.title
         val type = typeRules.firstOrNull { it.second.containsMatchIn(text) }?.first ?: EventType.OTHER

@@ -13,7 +13,12 @@ import com.niftyengine.app.store.SessionRecorder
 import com.niftyengine.app.store.SettingsStore
 import com.niftyengine.engine.NiftyDirectionEngine
 import com.niftyengine.engine.core.Session
+import com.niftyengine.app.data.GeminiEventAnalyst
+import com.niftyengine.app.data.GeminiException
+import com.niftyengine.app.store.AppJson
 import com.niftyengine.engine.engines.CalibrationModel
+import com.niftyengine.engine.engines.EventTrackerState
+import com.niftyengine.engine.model.EventAnalysis
 import com.niftyengine.engine.engines.HistoricalReplayEngine
 import com.niftyengine.engine.engines.ProbabilityCalibrator
 import com.niftyengine.engine.model.CalibrationInfo
@@ -64,6 +69,8 @@ data class UiState(
     val replay: ReplayState = ReplayState(),
     val calibration: CalibrationInfo = CalibrationInfo(),
     val optionCalibrationSamples: Int = 0,
+    /** Event-analyst status line (Gemini or rules fallback). */
+    val analystStatus: String = "",
 )
 
 class MainViewModel(app: Application) : AndroidViewModel(app) {
@@ -82,6 +89,16 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     private var engine = NiftyDirectionEngine(_settings.value.engineConfig())
     private var calibration = CalibrationModel()
     private var lastFit = 0L
+
+    // ---- v4 event intelligence: Gemini runs off the cycle; results enter the NEXT snapshot (recorded ⇒ replayable)
+    private val analysesQueue = java.util.concurrent.ConcurrentLinkedQueue<EventAnalysis>()
+    @Volatile private var analystBusy = false
+    private var analystNextAllowed = 0L
+    private var analystLastOk = 0L
+    private var analystLastError: String? = null
+    private val budgetPrefs = app.getSharedPreferences("gemini_budget", android.content.Context.MODE_PRIVATE)
+    private val eventStateFile = File(app.filesDir, "events-live.json")
+    private var cyclesSinceSave = 0
     private var provider: SnapshotProvider = makeProvider()
     private var loop: Job? = null
     private var lastLoggedBucket = -1L
@@ -90,6 +107,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     private val path = ArrayDeque<Triple<Long, Double, OptionChain?>>()
 
     init {
+        loadEventState()
         refitCalibration()
         refreshStats()
         start()
@@ -124,9 +142,12 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         _ui.update { it.copy(busy = true) }
         try {
             val out = withContext(Dispatchers.Default) {
-                val snap = withContext(Dispatchers.IO) { provider.collect(System.currentTimeMillis()) }
+                val raw = withContext(Dispatchers.IO) { provider.collect(System.currentTimeMillis()) }
+                val delivered = generateSequence { analysesQueue.poll() }.toList()
+                val snap = if (delivered.isEmpty()) raw else raw.copy(eventAnalyses = delivered)
                 val o = engine.process(snap)
                 afterCycle(snap, o)
+                maybeAnalyzeEvents(o)
                 o
             }
             _ui.update { s ->
@@ -164,6 +185,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         val alert = o.decision.decision == Decision.TRADE || o.decision.decision == Decision.PAPER_TRADE
         if (s.notifyOnTrade && alert && lastDecision != o.decision.decision) notifier.trade(o)
         lastDecision = o.decision.decision
+        saveEventState()
         refreshStats()
     }
 
@@ -175,6 +197,72 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         val sim = _settings.value.mode == DataMode.SIMULATED
         return predictionStore.all().filter { it.source.startsWith("SIMULATED") == sim }
     }
+
+    private fun todayKey() = Session.zdt(System.currentTimeMillis()).toLocalDate().toString()
+    private fun callsToday() = if (budgetPrefs.getString("day", "") == todayKey()) budgetPrefs.getInt("n", 0) else 0
+    private fun countCall() { budgetPrefs.edit().putString("day", todayKey()).putInt("n", callsToday() + 1).apply() }
+
+    private fun updateAnalystStatus() {
+        val s = _settings.value
+        val txt = when {
+            s.mode == DataMode.SIMULATED -> "Rules (simulator)"
+            !s.geminiEnabled -> "Rules only (Gemini off)"
+            s.geminiApiKey.isBlank() -> "Rules only — add a Gemini API key in Setup"
+            else -> "Gemini ${s.geminiModel} · ${callsToday()}/${s.geminiDailyBudget} calls today" +
+                (if (analystLastOk > 0) " · last ok ${Session.hhmm(analystLastOk)}" else "") +
+                (analystLastError?.let { " · ✗ $it" } ?: "") + if (analystBusy) " · reading…" else ""
+        }
+        _ui.update { it.copy(analystStatus = txt) }
+    }
+
+    /** 20 — send events whose articles changed to Gemini (budgeted, rate-limited); rules cover everything meanwhile. */
+    private fun maybeAnalyzeEvents(o: EngineOutput) {
+        val s = _settings.value
+        val now = System.currentTimeMillis()
+        val reqs = o.pendingEventAnalysis
+        if (!s.geminiActive || reqs.isEmpty() || analystBusy || now < analystNextAllowed || callsToday() >= s.geminiDailyBudget) {
+            updateAnalystStatus(); return
+        }
+        val briefs = engine.eventIntel.activeBriefs(o.timestamp) // read on the engine's thread
+        analystBusy = true
+        analystNextAllowed = now + s.geminiMinIntervalSec * 1000L
+        updateAnalystStatus()
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                countCall()
+                val res = GeminiEventAnalyst(s.geminiApiKey, s.geminiModel).analyze(reqs, briefs, System.currentTimeMillis())
+                analysesQueue.addAll(res)
+                analystLastOk = System.currentTimeMillis(); analystLastError = null
+            } catch (e: GeminiException) {
+                analystLastError = e.message
+                if (e.retryAfterSec > 0) analystNextAllowed = System.currentTimeMillis() + e.retryAfterSec * 1000L
+            } catch (e: Exception) {
+                analystLastError = e.message ?: e.javaClass.simpleName
+            } finally {
+                analystBusy = false
+                updateAnalystStatus()
+            }
+        }
+    }
+
+    /** Event memory (EVENT_IDs, lifecycle, expectations, baselines) survives restarts — live modes only. */
+    private fun loadEventState() {
+        if (_settings.value.mode == DataMode.SIMULATED || !eventStateFile.exists()) return
+        runCatching { engine.eventIntel.importState(AppJson.decodeFromString<EventTrackerState>(eventStateFile.readText())) }
+    }
+
+    private fun saveEventState(force: Boolean = false) {
+        if (_settings.value.mode == DataMode.SIMULATED) return
+        if (!force && ++cyclesSinceSave < 5) return
+        cyclesSinceSave = 0
+        runCatching {
+            val tmp = File(eventStateFile.parentFile, eventStateFile.name + ".tmp")
+            tmp.writeText(AppJson.encodeToString(EventTrackerState.serializer(), engine.eventIntel.exportState()))
+            tmp.renameTo(eventStateFile)
+        }
+    }
+
+    override fun onCleared() { saveEventState(force = true); super.onCleared() }
 
     /** 19 — refit the probability calibrator from logged outcomes and hand it to the engine. */
     fun refitCalibration() {
@@ -208,7 +296,11 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         _settings.value = new
         if (old.kiteAccessToken != new.kiteAccessToken && new.mode == DataMode.LIVE_KITE) refreshNow()
         if (old.mode != new.mode || old.engineConfig() != new.engineConfig() || old.minCalibrationSamples != new.minCalibrationSamples) {
+            // Keep the event memory when only thresholds change; start clean when switching data family.
+            val keep = if (old.mode != new.mode) null else engine.eventIntel.exportState()
+            if (old.mode != new.mode) saveEventState(force = true)
             engine = NiftyDirectionEngine(new.engineConfig())
+            if (keep != null) engine.eventIntel.importState(keep) else if (new.mode != DataMode.SIMULATED) loadEventState()
             if (old.mode != new.mode) { provider = makeProvider(); path.clear(); _ui.update { it.copy(chart = emptyList(), output = null) } }
             refitCalibration()
             refreshStats()
