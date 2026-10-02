@@ -542,7 +542,14 @@ final class Pages {
         col.addView(ev, Ui.cardLp(c));
 
         if (s.news.isEmpty()) col.addView(empty(c, "No headlines loaded yet."));
+        // one card per story: copies of the same story are folded under it (they are not counted again anyway)
+        java.util.Map<Integer, java.util.List<NewsItem>> dups = new java.util.HashMap<>();
+        for (NewsItem n : s.news) if (!n.lead && n.cluster >= 0) dups.computeIfAbsent(n.cluster, k -> new java.util.ArrayList<>()).add(n);
+        int folded = 0;
+        for (NewsItem n : s.news) if (!n.lead && n.cluster >= 0) folded++;
+        if (folded > 0) col.addView(Ui.text(c, s.news.size() - folded + " stories · " + folded + " copies folded under them", 11.5f, Ui.DIM, false), Ui.cardLp(c));
         for (NewsItem n : s.news) {
+            if (!n.lead && n.cluster >= 0) continue;
             LinearLayout card = Ui.card(c);
             LinearLayout top2 = Ui.row(c);
             int ic = Ui.signColor(Math.abs(n.niftyImpact) < 0.1 ? 0 : n.niftyImpact);
@@ -561,6 +568,17 @@ final class Pages {
             if (!flags.isEmpty()) card.addView(Ui.text(c, flags.trim(), 11, n.lead ? Ui.TEXT : Ui.GREY, false), Ui.top(c, 2));
             card.addView(Ui.text(c, "Rated by " + (n.model.isEmpty() ? n.by : n.model) + (n.promptVersion.isEmpty() ? "" : " · prompt " + n.promptVersion)
                     + (n.ratedAt > 0 ? " · at " + time(n.ratedAt).substring(0, 5) : ""), 10, Ui.GREY, false), Ui.top(c, 2));
+            java.util.List<NewsItem> same = n.cluster >= 0 ? dups.get(n.cluster) : null;
+            if (same != null && !same.isEmpty()) {
+                LinearLayout more = Ui.col(c);
+                more.setVisibility(View.GONE);
+                for (NewsItem d : same) more.addView(Ui.text(c, "• " + d.source + " · " + ago(s.time, d.time) + " — " + d.title, 11.5f, Ui.DIM, false), Ui.top(c, 4));
+                TextView tg = Ui.text(c, "+" + same.size() + " similar headline" + (same.size() == 1 ? "" : "s") + " (counted once) ▾", 12, Ui.CYAN, true);
+                tg.setOnClickListener(v -> { boolean sh = more.getVisibility() != View.VISIBLE; more.setVisibility(sh ? View.VISIBLE : View.GONE);
+                    tg.setText("+" + same.size() + " similar headline" + (same.size() == 1 ? "" : "s") + " (counted once) " + (sh ? "▴" : "▾")); });
+                card.addView(tg, Ui.top(c, 8));
+                card.addView(more);
+            }
             if (!n.link.isEmpty()) card.setOnClickListener(v -> {
                 try { c.startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse(n.link))); } catch (Exception ignored) {}
             });

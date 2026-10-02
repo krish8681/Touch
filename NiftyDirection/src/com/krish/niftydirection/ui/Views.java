@@ -24,47 +24,54 @@ public final class Views {
 
         @Override protected void onMeasure(int w, int h) {
             int width = MeasureSpec.getSize(w);
-            setMeasuredDimension(width, (int) (width * 0.56f));
+            setMeasuredDimension(width, (int) (width * 0.62f));
         }
 
+        /** Arc with five soft zones, the score filled in colour and a marker dot; text sits inside the arc, labels under its ends. */
         @Override protected void onDraw(Canvas c) {
             float w = getWidth(), h = getHeight();
-            float stroke = w * 0.06f, r = Math.min(w / 2f - stroke, h - stroke * 1.2f), cx = w / 2f, cy = h - stroke * 0.4f;
+            float label = w * 0.045f;                                   // room under the arc for "Bearish" / "Bullish"
+            float stroke = w * 0.055f, r = Math.min(w / 2f - stroke, h - stroke - label * 1.8f), cx = w / 2f, cy = stroke / 2 + r + stroke * 0.2f;
             RectF oval = new RectF(cx - r, cy - r, cx + r, cy + r);
             p.setStyle(Paint.Style.STROKE);
             p.setStrokeWidth(stroke);
-            p.setStrokeCap(Paint.Cap.BUTT);
+            p.setStrokeCap(Paint.Cap.ROUND);
             int[] cols = {Ui.RED, 0xFFE3794B, Ui.AMBER, 0xFF9BBF4A, Ui.GREEN};
             float[] cuts = {0, 25, 40, 60, 75, 100};
+            p.setStrokeCap(Paint.Cap.BUTT);
             for (int i = 0; i < 5; i++) {
-                p.setColor((cols[i] & 0x00FFFFFF) | 0x55000000);
-                c.drawArc(oval, 180 + cuts[i] * 1.8f, (cuts[i + 1] - cuts[i]) * 1.8f - 0.8f, false, p);
+                p.setColor((cols[i] & 0x00FFFFFF) | 0x33000000);
+                c.drawArc(oval, 180 + cuts[i] * 1.8f, (cuts[i + 1] - cuts[i]) * 1.8f - 1.2f, false, p);
             }
-            p.setColor(color);
-            c.drawArc(oval, 180, score * 1.8f, false, p);
-            // needle
-            double a = Math.toRadians(180 + score * 1.8);
-            p.setStrokeWidth(stroke * 0.18f);
             p.setStrokeCap(Paint.Cap.ROUND);
-            p.setColor(Ui.TEXT);
-            c.drawLine(cx, cy, cx + (float) Math.cos(a) * r * 0.78f, cy + (float) Math.sin(a) * r * 0.78f, p);
+            p.setColor(color);
+            if (score > 0) c.drawArc(oval, 180, Math.max(1, score * 1.8f), false, p);
+            // marker on the arc instead of a needle (keeps the centre free for the number)
+            double a = Math.toRadians(180 + score * 1.8);
+            float mx = cx + (float) Math.cos(a) * r, my = cy + (float) Math.sin(a) * r;
             p.setStyle(Paint.Style.FILL);
-            c.drawCircle(cx, cy, stroke * 0.32f, p);
-            // numbers
+            p.setColor(Ui.BG);
+            c.drawCircle(mx, my, stroke * 0.78f, p);
+            p.setColor(Ui.TEXT);
+            c.drawCircle(mx, my, stroke * 0.5f, p);
+            p.setColor(color);
+            c.drawCircle(mx, my, stroke * 0.3f, p);
+            // number + caption inside the arc
             p.setTextAlign(Paint.Align.CENTER);
             p.setColor(Ui.TEXT);
-            p.setFakeBoldText(true);
-            p.setTextSize(r * 0.36f);
-            c.drawText(String.valueOf(score), cx, cy - r * 0.30f, p);
-            p.setFakeBoldText(false);
-            p.setTextSize(r * 0.11f);
-            p.setColor(Ui.DIM);
-            c.drawText(sub, cx, cy - r * 0.12f, p);
+            p.setTypeface(android.graphics.Typeface.create("sans-serif-medium", android.graphics.Typeface.BOLD));
+            p.setTextSize(r * 0.42f);
+            c.drawText(String.valueOf(score), cx, cy - r * 0.18f, p);
+            p.setTypeface(android.graphics.Typeface.create("sans-serif", android.graphics.Typeface.NORMAL));
             p.setTextSize(r * 0.1f);
-            p.setTextAlign(Paint.Align.LEFT);
-            c.drawText("Bearish", cx - r - stroke / 2, cy + stroke * 0.05f - r * 0.02f, p);
-            p.setTextAlign(Paint.Align.RIGHT);
-            c.drawText("Bullish", cx + r + stroke / 2, cy + stroke * 0.05f - r * 0.02f, p);
+            p.setColor(Ui.DIM);
+            c.drawText(sub, cx, cy + r * 0.0f, p);
+            // end labels under the arc ends
+            p.setTextSize(label);
+            p.setColor(Ui.alpha(Ui.RED, 0xCC));
+            c.drawText("Bearish", cx - r, cy + stroke / 2 + label * 1.4f, p);
+            p.setColor(Ui.alpha(Ui.GREEN, 0xCC));
+            c.drawText("Bullish", cx + r, cy + stroke / 2 + label * 1.4f, p);
         }
     }
 

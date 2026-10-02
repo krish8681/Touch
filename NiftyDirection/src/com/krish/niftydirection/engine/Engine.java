@@ -130,7 +130,7 @@ public final class Engine {
         boolean monthly = s.futExpiries.contains(s.today);
         boolean bigEvent = false;
         for (com.krish.niftydirection.model.EventItem e : s.events)
-            if (e.importance >= 3 && e.date.equals(s.today) && !e.name.toLowerCase(Locale.US).contains("expiry")) bigEvent = true;
+            if (e.importance >= 3 && e.date.equals(s.today) && !e.name.toLowerCase(Locale.US).contains("expiry") && !e.name.toLowerCase(Locale.US).contains("holiday")) bigEvent = true;
         if ((weekly || monthly) && bigEvent) r.dayType = "EVENT + EXPIRY";
         else if (monthly) r.dayType = "MONTHLY EXPIRY";
         else if (weekly) r.dayType = "WEEKLY EXPIRY";
@@ -1244,6 +1244,7 @@ public final class Engine {
         // event risk from the calendar
         String risk = "LOW", why = "";
         for (EventItem e : s.events) {
+            if (e.name.toLowerCase(Locale.US).contains("holiday")) continue;   // no session, no event risk
             int d = daysBetween(s.today, e.date);
             boolean nextSession = d == 0 || d == 1 || (d <= 3 && isWeekendBetween(s.today, e.date));
             if (e.importance >= 3 && nextSession) { risk = "HIGH"; why = e.name + (d == 0 ? " today" : " next session"); break; }

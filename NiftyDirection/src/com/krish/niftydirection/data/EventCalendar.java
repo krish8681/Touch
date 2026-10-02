@@ -58,9 +58,29 @@ public final class EventCalendar {
             if (d < 0 || d > days) continue;
             String key = e.date + "|" + e.name.toLowerCase(Locale.US);
             if (!seen.add(key)) continue;
+            if (e.source.startsWith("news") && similarSameDay(out, e)) continue;   // "Gandhi Jayanti market holiday" ≈ "… bank holiday"
             out.add(e);
         }
         out.sort((a, b) -> a.date.equals(b.date) ? Integer.compare(b.importance, a.importance) : a.date.compareTo(b.date));
+        return out;
+    }
+
+    /** True when an event on the same date already shares at least 40% of its words with `e` (news readers name one event many ways). */
+    static boolean similarSameDay(List<EventItem> have, EventItem e) {
+        Set<String> w = words(e.name);
+        for (EventItem o : have) {
+            if (!o.date.equals(e.date)) continue;
+            Set<String> v = words(o.name);
+            int both = 0;
+            for (String x : w) if (v.contains(x)) both++;
+            if (both > 0 && both >= 0.4 * Math.min(w.size(), v.size())) return true;
+        }
+        return false;
+    }
+
+    static Set<String> words(String s) {
+        Set<String> out = new HashSet<>();
+        for (String x : s.toLowerCase(Locale.US).replaceAll("[^a-z0-9 ]", " ").split("\\s+")) if (x.length() > 2) out.add(x);
         return out;
     }
 

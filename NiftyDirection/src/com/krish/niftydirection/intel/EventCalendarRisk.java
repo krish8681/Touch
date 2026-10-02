@@ -40,7 +40,7 @@ public final class EventCalendarRisk {
         Matcher m = TIME.matcher(e.name);
         if (m.find()) return Integer.parseInt(m.group(1)) * 60 + Integer.parseInt(m.group(2));
         String n = e.name.toLowerCase(Locale.US);
-        if (n.contains("expiry")) return -2;
+        if (n.contains("expiry") || n.contains("holiday")) return -2;   // expiry is a regime; a holiday has no session to risk
         if (n.contains("rbi")) return 10 * 60;
         if (n.contains("fed")) return 0;                       // decided overnight, hits India at the open
         if (n.contains("budget")) return 11 * 60;

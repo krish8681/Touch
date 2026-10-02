@@ -86,7 +86,7 @@ public class SettingsActivity extends Activity {
         check("global_on", "Load global markets (US, US futures, Asia, crude, rupee) from Yahoo Finance", true);
         check("nse_on", "Load FII / DII and FII index-futures positions from NSE", true);
 
-        section("📰  News reader", "Headlines come from Google News, ET Markets, Moneycontrol and Mint. A free Gemini API key (aistudio.google.com) lets Gemini rate "
+        section("📰  News reader", "Headlines come from Google News, ET Markets, Moneycontrol, Mint, official feeds (RBI, SEBI, Fed, ECB, BoE, BoJ, PIB, US BEA), NSE filings of Nifty 50 companies and searches for the 15 biggest Nifty companies. A free Gemini API key (aistudio.google.com) lets Gemini rate "
                 + "each headline's impact; without it a simple word list is used. Gemini never says buy or sell — the app decides how much news counts (±15 at most).");
         check("news_on", "Load market news", true);
         text("gemini_key", "Gemini API key (kept only on this phone)", "", SECRET);
@@ -139,13 +139,28 @@ public class SettingsActivity extends Activity {
     private void add(View v) { root.addView(v, Ui.top(this, 8)); }
 
     private void text(String key, String label, String def, int type) {
-        root.addView(Ui.text(this, label, 12, Ui.DIM, false), Ui.top(this, 10));
+        boolean secret = type == SECRET;
+        LinearLayout lr = Ui.row(this);
+        lr.addView(Ui.text(this, label, 12, Ui.DIM, false), Ui.weight(1));
+        TextView eye = secret ? Ui.text(this, "Show", 12, Ui.CYAN, true) : null;
+        if (eye != null) lr.addView(eye, Ui.wrap());
+        root.addView(lr, Ui.top(this, 10));
         EditText e = new EditText(this);
         e.setInputType(type);
         e.setText(prefs.str(key, def));
         e.setTextColor(Ui.TEXT);
         e.setHintTextColor(Ui.GREY);
         e.setSingleLine(true);
+        if (secret) {
+            // setSingleLine() replaces the password mask, so it must be set again afterwards
+            e.setTransformationMethod(android.text.method.PasswordTransformationMethod.getInstance());
+            eye.setOnClickListener(v -> {
+                boolean hidden = e.getTransformationMethod() instanceof android.text.method.PasswordTransformationMethod;
+                e.setTransformationMethod(hidden ? null : android.text.method.PasswordTransformationMethod.getInstance());
+                e.setSelection(e.getText().length());
+                eye.setText(hidden ? "Hide" : "Show");
+            });
+        }
         e.setBackground(Ui.round(Ui.CARD, Ui.dp(this, 8), Ui.LINE, 1));
         e.setPadding(Ui.dp(this, 12), Ui.dp(this, 10), Ui.dp(this, 12), Ui.dp(this, 10));
         root.addView(e, Ui.top(this, 4));
