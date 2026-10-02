@@ -8,3 +8,4 @@ local.properties
 captures/
 *.keystore
 !app/debug-release.keystore
+dist/
