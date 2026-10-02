@@ -8,6 +8,7 @@ import com.krish.niftydirection.intel.HorizonModel;
 import com.krish.niftydirection.intel.ImpactGraph;
 import com.krish.niftydirection.intel.IntelEngine;
 import com.krish.niftydirection.intel.Trainer;
+import com.krish.niftydirection.intel.Validator;
 import com.krish.niftydirection.model.Snapshot;
 
 import org.json.JSONArray;
@@ -158,7 +159,8 @@ public final class IntelRunner {
     }
 
     public static IntelEngine.Forecast live(Kite kite, File base, String today, int minute, double expectedOpen, IntelEngine.LiveContext ctx,
-                                            double tradeThreshold, AtomicBoolean cancel, HistoryLoader.Progress pr) throws Exception {
+                                            Validator.Config cfg, AtomicBoolean cancel, HistoryLoader.Progress pr) throws Exception {
+        double tradeThreshold = cfg.threshold;
         List<HorizonModel> models = models(base);
         if (models.isEmpty()) throw new Exception("No models yet — tap “Train models”.");
         File d = dir(base);
@@ -181,7 +183,7 @@ public final class IntelRunner {
         JSONObject prev = readJson(new File(d, "state.json"));
         JSONObject fb = readJson(new File(d, "feedback.json"));
         Map<String, Feedback.Overlay> overlays = overlays(fb);
-        IntelEngine.Forecast fc = IntelEngine.forecast(models, h, di, k, preOpen, ctx, prev, overlays, tradeThreshold);
+        IntelEngine.Forecast fc = IntelEngine.forecast(models, h, di, k, preOpen, ctx, prev, overlays, tradeThreshold, governor(base));
         int m = History.minuteAfter(k);
         fc.asOf = preOpen ? "Before the open — expected open " + String.format(Locale.US, "%,.0f", fc.price) + " (from GIFT Nifty)"
                 : (td != null ? "Today " : day.date + " close, ") + String.format(Locale.US, "%d:%02d", m / 60, m % 60);
@@ -193,10 +195,11 @@ public final class IntelRunner {
         // log intraday and pre-open forecasts, and one forecast from each session's close (not the same one every 30 min all evening)
         boolean closeOnce = td != null && k == History.BARS && !fc.date.equals(lastLog.optString("closeDay"));
         if (fc.intraday || preOpen || closeOnce) {
-            lastLog = logForecast(d, fc, lastLog);
+            lastLog = logForecast(d, fc, lastLog, cfg);
             if (closeOnce) lastLog.put("closeDay", fc.date);
         }
         resolve(d, h, today);
+        fc.validation = validation(base);
         refreshFeedback(base, false);
         fc.scorecard = scorecard(readJson(new File(d, "feedback.json")));
 
@@ -213,12 +216,18 @@ public final class IntelRunner {
     }
 
     /** One log line per horizon at most every 30 minutes (the record should not be dominated by overlapping copies). */
-    static JSONObject logForecast(File d, IntelEngine.Forecast fc, JSONObject ll) throws Exception {
+    static JSONObject logForecast(File d, IntelEngine.Forecast fc, JSONObject ll, Validator.Config cfg) throws Exception {
         StringBuilder add = new StringBuilder();
         for (IntelEngine.HPred p : fc.preds) {
             if (!p.has()) continue;
             if (fc.at - ll.optLong(p.hz.id, 0) < LOG_EVERY_MIN * 60_000L) continue;
-            add.append(Feedback.entry(fc.at, fc.date, fc.k, p.hz, fc.price, p.pModel, p.pFinal, p.evPush, p.newsPush, fc.regime.label()).toString()).append('\n');
+            JSONObject en = Feedback.entry(fc.at, fc.date, fc.k, p.hz, fc.price, p.pModel, p.pFinal, p.evPush, p.newsPush, fc.regime.label());
+            if (en == null) continue;
+            if (p.tradeable && fc.k > 0 && fc.k < History.BARS) {   // live paper trade, simulated with the replay's rules once the time has passed
+                double stop = cfg.stopMult > 0 && !Double.isNaN(p.range68) ? cfg.stopMult * p.range68 * fc.price : 0;
+                en.put("trade", "BULLISH".equals(p.direction) ? 1 : -1).put("stop", stop).put("lot", cfg.lot).put("slip", cfg.slippagePts);
+            }
+            add.append(en.toString()).append('\n');
             ll.put(p.hz.id, fc.at);
         }
         if (add.length() == 0) return ll;
@@ -234,7 +243,8 @@ public final class IntelRunner {
             File f = new File(d, "log_" + mon + ".jsonl");
             if (!f.exists()) continue;
             List<JSONObject> log = readLog(f);
-            if (Feedback.resolve(log, h) > 0) writeLog(f, log);
+            int n = Feedback.resolve(log, h) + resolvePaper(log, h);
+            if (n > 0) writeLog(f, log);
         }
     }
 
@@ -255,6 +265,13 @@ public final class IntelRunner {
         JSONObject sc = new JSONObject();
         for (Map.Entry<String, double[]> e : Feedback.scorecard(all, null).entrySet()) sc.put(e.getKey(), arr(e.getValue()));
         fb.put("scorecard", sc);
+        JSONObject paper = new JSONObject();
+        for (Horizon hz : Horizon.ALL) {
+            int n = 0, w = 0; double net = 0;
+            for (JSONObject e : all) if (hz.id.equals(e.optString("h")) && e.has("pnl")) { n++; double v = e.optDouble("pnl", 0); net += v; if (v > 0) w++; }
+            if (n > 0) paper.put(hz.id, new JSONArray().put(n).put(w).put(net));
+        }
+        fb.put("paper", paper);
         JSONObject ov = new JSONObject();
         for (String band : new String[]{Horizon.SHORT, Horizon.INTRADAY, Horizon.SWING}) {
             Feedback.Overlay o = Feedback.learnOverlay(all, band);
@@ -312,6 +329,102 @@ public final class IntelRunner {
             try { out.put(hz.id, darr(a)); } catch (Exception ignored) { }
         }
         return out;
+    }
+
+    // ================================================================== pre-live validation + governor
+
+    private static volatile Validator.Report cachedValidation;
+    private static volatile long cachedValidationAt;
+
+    /** Replays the last ~12 months through the same engine, simulates trades and writes intel/validation.json. */
+    public static Validator.Report validate(Kite kite, File base, String today, Validator.Config cfg, AtomicBoolean cancel, HistoryLoader.Progress pr) throws Exception {
+        History h = ForecastRunner.history(kite, base, today, cancel, pr);
+        cfg.eventDates.addAll(eventDates());
+        Validator.Report r = Validator.run(h, cfg, (w, a, b) -> {
+            if (cancel != null && cancel.get()) throw new RuntimeException("Cancelled");
+            pr.step(w, a, b);
+        });
+        write(new File(dir(base), "validation.json"), Validator.toJson(r).toString());
+        cachedValidation = r;
+        cachedValidationAt = System.currentTimeMillis();
+        return r;
+    }
+
+    /** Last validation report, or null. */
+    public static Validator.Report validation(File base) {
+        File f = new File(dir(base), "validation.json");
+        if (!f.exists()) return null;
+        if (cachedValidation != null && cachedValidationAt >= f.lastModified()) return cachedValidation;
+        try {
+            Validator.Report r = Validator.fromJson(new JSONObject(read(f)));
+            cachedValidation = r; cachedValidationAt = f.lastModified();
+            return r;
+        } catch (Exception e) { return null; }
+    }
+
+    /** True when there is no report yet, or the models were retrained after it. */
+    public static boolean needsValidation(File base) {
+        Validator.Report r = validation(base);
+        if (r == null) return true;
+        for (HorizonModel m : models(base)) if (m.at > r.at) return true;
+        return false;
+    }
+
+    /** Verdict per horizon for the live trade gate: {verdict, first reason}. Empty map = not validated (nothing may act). */
+    public static Map<String, String[]> governor(File base) {
+        Map<String, String[]> g = new LinkedHashMap<>();
+        Validator.Report r = validation(base);
+        if (r == null) return g;
+        for (Validator.HReport x : r.horizons) g.put(x.id, new String[]{x.verdict, x.reasons.isEmpty() ? "" : x.reasons.get(0)});
+        return g;
+    }
+
+    /** RBI, Fed and Budget days known to the calendar (for the replay's regime and stress tables). */
+    static java.util.Set<String> eventDates() {
+        java.util.Set<String> s = new java.util.HashSet<>(Arrays.asList(EventCalendar.RBI));
+        s.addAll(Arrays.asList(EventCalendar.FED));
+        for (int y = 2018; y <= 2027; y++) s.add(y + "-02-01");
+        return s;
+    }
+
+    /** Paper trades logged live: once their path is in the history, simulate them with the replay's rules. */
+    static int resolvePaper(List<JSONObject> log, History h) throws Exception {
+        int[] sidx = h.sessionIndex();
+        Map<String, Integer> idx = new LinkedHashMap<>();
+        for (int i = 0; i < h.days.size(); i++) idx.put(h.days.get(i).date, i);
+        int n = 0;
+        for (JSONObject e : log) {
+            if (!e.has("trade") || e.has("pnl")) continue;
+            Integer d = idx.get(e.optString("date"));
+            Horizon hz = Horizon.of(e.optString("h"));
+            if (d == null || hz == null) continue;
+            Validator.Config c = new Validator.Config();
+            c.lot = e.optInt("lot", 65); c.slippagePts = e.optDouble("slip", 1);
+            Validator.Trade t = Validator.simulate(h, sidx, d, e.optInt("k"), hz, e.optInt("trade"), e.optDouble("stop", 0), c);
+            if (t == null) continue;
+            e.put("pnl", t.rupees).put("pts", t.pts).put("stopped", t.stopped);
+            n++;
+        }
+        return n;
+    }
+
+    /** Live paper-trade results per horizon: {trades, wins, net ₹}. */
+    public static Map<String, double[]> paper(File base) {
+        Map<String, double[]> out = new LinkedHashMap<>();
+        JSONObject fb = readJson(new File(dir(base), "feedback.json"));
+        JSONObject p = fb == null ? null : fb.optJSONObject("paper");
+        if (p == null) return out;
+        for (Horizon hz : Horizon.ALL) { JSONArray a = p.optJSONArray(hz.id); if (a != null) try { out.put(hz.id, darr(a)); } catch (Exception ignored) { } }
+        return out;
+    }
+
+    /** Before 9:15 on a weekday: the open GIFT Nifty points to (Nifty × GIFT ÷ near futures). NaN otherwise. */
+    public static double expectedOpen(Snapshot s) {
+        Calendar c = Calendar.getInstance(Collector.IST);
+        int d = c.get(Calendar.DAY_OF_WEEK), m = c.get(Calendar.HOUR_OF_DAY) * 60 + c.get(Calendar.MINUTE);
+        boolean pre = d != Calendar.SATURDAY && d != Calendar.SUNDAY && m >= 6 * 60 && m < 9 * 60 + 15;
+        if (s == null || !pre || s.live || Double.isNaN(s.giftNifty) || s.nifty == null || !s.nifty.ok() || s.fut == null || !s.fut.ok()) return Double.NaN;
+        return s.nifty.last * s.giftNifty / s.fut.last;
     }
 
     // ================================================================== io

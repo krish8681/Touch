@@ -39,6 +39,16 @@ public class Prefs {
         return at > six.getTimeInMillis();
     }
 
+    /** Trade gate and simulation assumptions for the pre-live replay and paper trades. */
+    public com.krish.niftydirection.intel.Validator.Config simConfig() {
+        com.krish.niftydirection.intel.Validator.Config c = new com.krish.niftydirection.intel.Validator.Config();
+        c.threshold = Math.max(0.5, Math.min(0.95, num("trade_threshold", 62) / 100.0));
+        c.lot = (int) Math.max(1, num("sim_lot", 65));
+        c.slippagePts = Math.max(0, num("sim_slip", 1));
+        c.stopMult = Math.max(0, num("sim_stop", 1));
+        return c;
+    }
+
     public Collector.Config config() {
         if (!bool("mig13", false)) {   // v1.3: chain width default 10 → 15 (outer flow layer)
             if (str("strikes", "").trim().equals("10")) put("strikes", "15");

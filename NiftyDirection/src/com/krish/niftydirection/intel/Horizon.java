@@ -1,9 +1,10 @@
 package com.krish.niftydirection.intel;
 
 /**
- * The seven forecast horizons. Each one gets its OWN group models, meta model, calibration and range table —
+ * The nine forecast horizons. Each one gets its OWN group models, meta model, calibration and range table —
  * no single model is shared across horizons.
  *
+ * Day close (EOD) targets today's 15:25 bar close from any moment of the session.
  * Intraday horizons count trading time only (5-minute bars; nights and weekends are skipped, so 1H at 15:00 means 9:50 next session).
  * Swing horizons are measured to a session close: 1D = next session's close (today's close when made at the open),
  * 1W = the close five sessions later.
@@ -27,12 +28,20 @@ public final class Horizon {
 
     public boolean swing() { return sessions > 0; }
 
+    /** "Day close": to today's close from wherever the forecast is made (only defined while the session is running). */
+    public boolean eod() { return "EOD".equals(id); }
+
+    /** Trading minutes covered when made after k bars (fixed, except Day close, which shrinks through the day). */
+    public int minutesAt(int k) { return eod() ? Math.max(5, (75 - k) * 5) : minutes; }
+
     public static final Horizon[] ALL = {
             new Horizon("15m", "15 min", SHORT, 3, 0, 15, 60),
             new Horizon("30m", "30 min", SHORT, 6, 0, 30, 120),
             new Horizon("1h", "1 hour", INTRADAY, 12, 0, 60, 180),
+            new Horizon("2h", "2 hours", INTRADAY, 24, 0, 120, 240),
             new Horizon("3h", "3 hours", INTRADAY, 36, 0, 180, 360),
             new Horizon("6h", "6 hours", INTRADAY, 72, 0, 360, 720),
+            new Horizon("EOD", "Day close", INTRADAY, 0, 0, 190, 480),
             new Horizon("1D", "1 day", SWING, 0, 1, 375, 1440),
             new Horizon("1W", "1 week", SWING, 0, 5, 5 * 375, 4320)};
 

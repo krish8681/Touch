@@ -17,6 +17,9 @@ import android.os.PowerManager;
 
 import com.krish.niftydirection.data.Brain;
 import com.krish.niftydirection.data.Collector;
+import com.krish.niftydirection.data.IntelRunner;
+import com.krish.niftydirection.data.Kite;
+import com.krish.niftydirection.intel.IntelEngine;
 import com.krish.niftydirection.data.Prefs;
 import com.krish.niftydirection.engine.Result;
 import com.krish.niftydirection.ui.MainActivity;
@@ -24,8 +27,9 @@ import com.krish.niftydirection.ui.MainActivity;
 import java.util.Calendar;
 
 /**
- * Live watch: keeps the score updating in the background on market days (8:30–15:35 IST)
- * and alerts when the regime changes. Read-only — it never trades.
+ * Live watch: keeps the score and the AI forecast updating in the background on market days (8:30–15:35 IST),
+ * alerts when the regime changes or a validated horizon becomes actionable, and keeps the paper-trade record growing.
+ * Read-only — it never trades.
  */
 public class WatchService extends Service {
     static final String CH_WATCH = "watch", CH_ALERT = "alerts";
@@ -34,10 +38,7 @@ public class WatchService extends Service {
     private HandlerThread thread;
     private Handler h;
     private String lastRegime = "";
-    /**
-     * Held for the whole market window while watching. Handler delays count only while the CPU is awake, so without it
-     * a screen-off phone in Doze would delay the next refresh (and regime alerts) by an unbounded time.
-     */
+    /** Held only while one pass runs; passes are booked with alarms, which wake the phone even in Doze. */
     private PowerManager.WakeLock windowLock;
 
     public static void start(Context c) {
@@ -63,7 +64,7 @@ public class WatchService extends Service {
     }
 
     @Override public int onStartCommand(Intent i, int flags, int id) {
-        if (i != null && ACTION_WAKE.equals(i.getAction()) && h != null) { h.removeCallbacks(loop); h.post(loop); }   // window opening
+        if (i != null && ACTION_WAKE.equals(i.getAction()) && h != null) { h.removeCallbacks(loop); h.post(loop); }   // alarm: next pass or window opening
         return START_STICKY;
     }
 
@@ -78,35 +79,79 @@ public class WatchService extends Service {
 
     @Override public IBinder onBind(Intent i) { return null; }
 
+    /**
+     * One pass: refresh the evidence score and (if trained) the AI forecast, then book the next pass with an alarm.
+     * The CPU is kept awake only while a pass runs (not the whole market window), so the phone can sleep in between.
+     */
     private final Runnable loop = new Runnable() {
         @Override public void run() {
             Prefs p = new Prefs(WatchService.this);
             if (!p.bool("watch_on", false)) { releaseWindowLock(); stopSelf(); return; }
-            long next;
             if (window()) {
-                if (!p.hasValidSession()) {
-                    releaseWindowLock();
-                    update("Log in to Kite to keep watching", true);
-                    next = 10 * 60_000L;
-                } else {
-                    holdWindowLock();
-                    try {
-                        Brain.Output o = Brain.refresh(getApplicationContext(), null);
-                        onResult(p, o.result);
-                    } catch (Throwable t) {
-                        update("Update failed: " + t.getMessage(), false);
+                holdWindowLock();
+                try {
+                    if (!p.hasValidSession()) update("Log in to Kite to keep watching", true);
+                    else {
+                        try {
+                            Brain.Output o = Brain.refresh(getApplicationContext(), null);
+                            onResult(p, o.result);
+                            intel(p, o);
+                        } catch (Throwable t) {
+                            update("Update failed: " + t.getMessage(), false);
+                        }
                     }
-                    next = p.refreshMin() * 60_000L;
+                } finally {
+                    releaseWindowLock();
                 }
+                scheduleNext(p.hasValidSession() ? p.refreshMin() * 60_000L : 10 * 60_000L);
             } else {
                 releaseWindowLock();
                 scheduleWindowStart();
                 update("Waiting for the market (8:30–15:35 on weekdays)", false);
-                next = 10 * 60_000L;
             }
-            h.postDelayed(this, next);
         }
     };
+
+    private long lastIntel;
+
+    /** AI forecast in the background (every 5 minutes at most), with an alert when a validated horizon becomes actionable. */
+    private void intel(Prefs p, Brain.Output o) {
+        java.io.File dir = getFilesDir();
+        if (!IntelRunner.hasModels(dir) || System.currentTimeMillis() - lastIntel < 5 * 60_000L) return;
+        lastIntel = System.currentTimeMillis();
+        try {
+            Calendar c = Calendar.getInstance(Collector.IST);
+            String today = Collector.day(c.getTime());
+            int minute = c.get(Calendar.HOUR_OF_DAY) * 60 + c.get(Calendar.MINUTE);
+            IntelEngine.Forecast fc = IntelRunner.live(new Kite(p.apiKey(), p.token()), dir, today, minute, IntelRunner.expectedOpen(o.snap),
+                    IntelRunner.context(o.snap, o.result, p.str("user_events", "")), p.simConfig(), null, (w, a, b) -> {});
+            StringBuilder now = new StringBuilder();
+            String before = p.str("act_set", "");
+            for (IntelEngine.HPred h : fc.preds) {
+                if (!h.has() || !h.tradeable) continue;
+                now.append(h.hz.id).append(h.direction.charAt(0)).append(',');
+                String key = h.hz.id + h.direction.charAt(0) + ",";
+                if (!before.contains(key) && p.bool("notify_flip", true))
+                    alert("Nifty " + h.hz.label + ": " + h.direction + String.format(java.util.Locale.US, " %.0f%%", h.sideProb() * 100),
+                            "Strong enough to act on (validated " + h.validation + "). Signal only — the app never trades.");
+            }
+            p.put("act_set", now.toString());
+        } catch (Throwable ignored) { }
+    }
+
+    /** Next pass: an exact alarm when the phone allows it, otherwise an inexact one (Android may stretch it a few minutes in deep sleep). */
+    private void scheduleNext(long delayMs) {
+        Intent i = new Intent(this, WatchService.class).setAction(ACTION_WAKE);
+        PendingIntent pi = PendingIntent.getService(this, 2, i, PendingIntent.FLAG_IMMUTABLE | PendingIntent.FLAG_UPDATE_CURRENT);
+        AlarmManager am = (AlarmManager) getSystemService(ALARM_SERVICE);
+        long at = System.currentTimeMillis() + delayMs;
+        try {
+            if (Build.VERSION.SDK_INT < 31 || am.canScheduleExactAlarms()) am.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, at, pi);
+            else am.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, at, pi);
+        } catch (Exception e) {
+            h.postDelayed(loop, delayMs);   // last resort
+        }
+    }
 
     private void onResult(Prefs p, Result r) {
         String line = r.label() + " · " + r.directionScore + "/100 · conf " + r.confidence + " · " + r.state;
@@ -124,16 +169,13 @@ public class WatchService extends Service {
 
     static boolean isQuiet(String regime) { return Result.RANGE.equals(regime) || Result.NO_EDGE.equals(regime); }
 
-    /** Keeps the CPU awake until the end of today's window (the timeout is a safety net if the service is killed). */
+    /** Keeps the CPU awake for one pass only (the timeout is a safety net). */
     private void holdWindowLock() {
         if (windowLock != null && windowLock.isHeld()) return;
-        Calendar end = Calendar.getInstance(Collector.IST);
-        end.set(Calendar.HOUR_OF_DAY, 15); end.set(Calendar.MINUTE, 40); end.set(Calendar.SECOND, 0); end.set(Calendar.MILLISECOND, 0);
-        long ms = Math.max(60_000L, end.getTimeInMillis() - System.currentTimeMillis());
         PowerManager pm = (PowerManager) getSystemService(POWER_SERVICE);
-        windowLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "niftydirection:window");
+        windowLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "niftydirection:pass");
         windowLock.setReferenceCounted(false);
-        windowLock.acquire(ms);
+        windowLock.acquire(4 * 60_000L);
     }
 
     /** Handler delays stall in Doze, so an idle-allowed alarm makes sure the loop runs when the next window opens. */

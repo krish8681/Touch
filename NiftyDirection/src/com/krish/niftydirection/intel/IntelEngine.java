@@ -77,6 +77,8 @@ public final class IntelEngine {
         public double pUp3 = Double.NaN, pFlat = Double.NaN, pDown3 = Double.NaN, expReturn = Double.NaN, expHigh = Double.NaN, expLow = Double.NaN;
         /** HIGH / MEDIUM / LOW: how usable this forecast is as a trading signal, and the main reason. */
         public String signalQuality = "LOW", signalReason = "";
+        /** Pre-live validation verdict of this horizon (PASS / WARN / FAIL), "" when not governed. */
+        public String validation = "";
         public final List<String> gate = new ArrayList<>();
         public final List<Line> why = new ArrayList<>();
         public final List<String> changed = new ArrayList<>();
@@ -109,10 +111,21 @@ public final class IntelEngine {
         public Map<String, double[]> scorecard = new LinkedHashMap<>();
         /** Cross-market chains as seen today (paths with learnt betas and implied Nifty moves). */
         public List<CrossMarket.Path> chains = new ArrayList<>();
+        /** The pre-live validation report the gate was governed by (null = not validated yet). */
+        public Validator.Report validation;
     }
 
     public static Forecast forecast(List<HorizonModel> models, History h, int d, int k, boolean preOpen, LiveContext ctx, JSONObject prev,
                                     Map<String, Feedback.Overlay> overlays, double tradeThreshold) {
+        return forecast(models, h, d, k, preOpen, ctx, prev, overlays, tradeThreshold, null);
+    }
+
+    /**
+     * governor: the pre-live validation verdict per horizon ({verdict, reason}); null = not governed (used by the replay itself).
+     * Only PASS horizons may show "strong enough to act on"; WARN is paper-only; FAIL or not yet validated never acts.
+     */
+    public static Forecast forecast(List<HorizonModel> models, History h, int d, int k, boolean preOpen, LiveContext ctx, JSONObject prev,
+                                    Map<String, Feedback.Overlay> overlays, double tradeThreshold, Map<String, String[]> governor) {
         Forecast fc = new Forecast();
         int[] sidx = h.sessionIndex();
         History.Day day = h.days.get(d);
@@ -156,7 +169,7 @@ public final class IntelEngine {
             HPred p = new HPred();
             p.hz = hz;
             fc.preds.add(p);
-            if (m == null || m.meta == null) continue;
+            if (m == null || m.meta == null || Trainer.targetSpec(k, hz) == null) continue;
             p.info = m.info;
             HorizonModel.Output o = m.predict(f, reg);
             System.arraycopy(o.groupP, 0, p.groupP, 0, HorizonModel.G);
@@ -206,9 +219,9 @@ public final class IntelEngine {
             p.confLabel = p.confidence >= 65 ? "High" : p.confidence >= 40 ? "Medium" : "Low";
 
             // ---- expected range
-            double[] rg = m.expectedRange(sigma, reg.volBucket(), hz);
+            double[] rg = m.expectedRange(sigma, reg.volBucket(), hz, k);
             p.range50 = rg[0]; p.range68 = rg[1]; p.range90 = rg[2];
-            double[] ol = m.outlook(p.pFinal, sigma, reg.volBucket(), hz);
+            double[] ol = m.outlook(p.pFinal, sigma, reg.volBucket(), hz, k);
             p.pUp3 = ol[0]; p.pFlat = ol[1]; p.pDown3 = ol[2]; p.expReturn = ol[3]; p.expHigh = ol[4]; p.expLow = ol[5];
 
             // ---- trade gate: is the forecast strong enough to act on? (signals only — the app never trades)
@@ -219,6 +232,13 @@ public final class IntelEngine {
             if (fc.quality.score < 0.6) p.gate.add("data quality is low");
             if (!Double.isNaN(p.range68) && p.range68 * 100 < 0.1) p.gate.add("expected move is too small to cover costs");
             if ("NEUTRAL".equals(p.direction)) p.gate.add("no side");
+            if (governor != null) {
+                String[] v = governor.get(hz.id);
+                if (v == null) p.gate.add("not validated yet — the pre-live replay has not run");
+                else if ("FAIL".equals(v[0])) p.gate.add("failed pre-live validation (" + v[1] + ")");
+                else if ("WARN".equals(v[0])) p.gate.add("paper only — validation WARN (" + v[1] + ")");
+                p.validation = v == null ? "" : v[0];
+            }
             p.tradeable = p.gate.isEmpty();
             // signal quality: separate from the forecast itself — "67% bullish" is not "BUY"
             if (p.tradeable && p.confidence >= 65 && (hz.swing() || fc.quality.conflicts.isEmpty())) { p.signalQuality = "HIGH"; p.signalReason = "passes every check"; }

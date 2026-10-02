@@ -68,6 +68,7 @@ public final class Feedback {
     public static JSONObject entry(long t, String date, int k, Horizon hz, double price, double pModel, double pFinal, double ev, double nw, String regime)
             throws Exception {
         int[] spec = Trainer.targetSpec(k, hz);
+        if (spec == null) return null;   // e.g. Day close after the close
         return new JSONObject().put("t", t).put("date", date).put("k", k).put("h", hz.id).put("price", price)
                 .put("pm", pModel).put("pf", pFinal).put("ev", ev).put("nw", nw).put("regime", regime)
                 .put("ahead", spec[0]).put("slot", spec[1]).put("done", false);

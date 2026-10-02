@@ -1,4 +1,4 @@
-# Nifty Direction Pure 2.2 (Android)
+# Nifty Direction Pure 2.3 (Android)
 
 A **Nifty 50 direction engine** on Zerodha Kite. It does not guess "up or down". It **classifies** the market the way desks do:
 which side the evidence favours right now, how strongly, and how much of the evidence agrees.
@@ -32,6 +32,23 @@ Blend (smooth by minute): before the open structure 85% / live 15%, then live 30
 Each factor's weight = base × source trust (Kite / NSE 1.0, Yahoo 0.8, Gemini 0.6, typed 0.5, word list 0.35) × freshness × learnt multiplier (needs 100 readings: about 70 sessions with the app open at 9:45 and 11:30; ±15% until 400 readings, ±40% after).
 Regime: enter a side at ±25, keep it until ±15 (hysteresis). CONFLICT when structure and live are both ≥30 and opposite (confidence halved).
 NO EDGE when evidence is weak or mixed; RANGE only with 2+ real range signs.
+
+## Pure 2.3 — pre-live validation, model governor, background AI
+- **Pre-live validation engine** (AI → Validate; runs by itself after every training):
+  - **Replay:** the last ~12 months (250 sessions) go through the **same live engine** in 4 walk-forward blocks. Each block is predicted by models frozen on its first morning: they learnt only from samples made earlier whose targets had also ended earlier.
+  - **Scoring:** every 15 minutes is scored on direction, up/flat/down, **confidence buckets** (said 70–80% → was right x%), **market conditions** (trend up/down, sideways, high/low volatility, gap up/down, expiry, major event, normal) and **stress days** (large gaps, sharp reversals, VIX spikes, global shocks, RBI/Fed/Budget days, expiry).
+  - **Trade simulation:** Nifty futures, entry at the next 5-minute bar, exit at the horizon's end or a stop at 1× the expected range, slippage, and approximate Zerodha charges (≈ ₹475 per lot round trip). Shows net ₹ per lot, win rate, profit factor, max drawdown and worst losing streak.
+  - **Leakage audit:** features are recomputed on a history cut at the forecast moment, the purge is checked, and intraday hit rates that look too good are flagged.
+  - **PASS / WARN / FAIL** per horizon, plus an overall verdict.
+- **Model governor:** live, only PASS horizons can show "strong enough to act on". WARN is paper-only; FAIL or not-yet-validated never acts.
+- **Live paper trading:** every live "act" signal is paper-traded with the replay's rules and scored when its time is up (AI → Validate → Live paper trading).
+- **New horizons:** **2 hours** and **Day close** (to today's 15:25 close), giving 9 in total.
+- **Automatic:** once you are logged in, the first training and validation start by themselves. Weekly retrains are each followed by a new replay.
+- **Background watch:**
+  - No longer holds the phone awake all day: an alarm books each refresh and the CPU stays awake only for that pass.
+  - Runs the AI forecast in the background.
+  - Alerts when a validated horizon becomes actionable.
+- **Settings:** lot size (default 65 — check your broker), slippage, stop multiple.
 
 ## Pure 2.2 — new look
 - **New theme across the app:** deep-navy background, glass cards with soft gradients, blue→violet accents, rounded 20dp corners, modern type. Bottom tabs highlight the selected tab with a pill.

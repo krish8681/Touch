@@ -13,7 +13,7 @@ import java.util.Map;
  * the calibration map, the expected-range table and the walk-forward test results.
  */
 public final class HorizonModel {
-    public static final int VERSION = 2;   // 2: cross-market chain group, three-way outlook, excursions
+    public static final int VERSION = 3;   // 3: 2-hour and Day-close horizons (2: chains, three-way outlook)
     public static final int G = FeatureEngine.GROUPS.length;
 
     public String id;
@@ -112,10 +112,12 @@ public final class HorizonModel {
     }
 
     /** Expected 68% / 90% move as a fraction of price, given the daily volatility and the volatility bucket. */
-    public double[] expectedRange(double sigmaDaily, int volBucket, Horizon hz) {
+    public double[] expectedRange(double sigmaDaily, int volBucket, Horizon hz) { return expectedRange(sigmaDaily, volBucket, hz, 0); }
+
+    public double[] expectedRange(double sigmaDaily, int volBucket, Horizon hz, int k) {
         double[] q = info.range[volBucket] != null ? info.range[volBucket] : info.range[1];
         if (q == null || Double.isNaN(sigmaDaily)) return new double[]{Double.NaN, Double.NaN, Double.NaN};
-        double sh = sigmaDaily * Math.sqrt(hz.minutes / 375.0);
+        double sh = sigmaDaily * Math.sqrt(hz.minutesAt(k) / 375.0);
         return new double[]{q[0] * sh, q[1] * sh, q[2] * sh};
     }
 
@@ -192,8 +194,10 @@ public final class HorizonModel {
      * {P(up), P(flat), P(down), expected return (fraction), typical high, typical low (fractions vs price)}.
      * The high/low excursions are tilted toward the forecast side: at P(up) 0.7 the up-excursion grows ×1.2 and the down one shrinks ×0.8.
      */
-    public double[] outlook(double pUp, double sigmaDaily, int bucket, Horizon hz) {
-        double sh = sigmaDaily * Math.sqrt(hz.minutes / 375.0);
+    public double[] outlook(double pUp, double sigmaDaily, int bucket, Horizon hz) { return outlook(pUp, sigmaDaily, bucket, hz, 0); }
+
+    public double[] outlook(double pUp, double sigmaDaily, int bucket, Horizon hz, int k) {
+        double sh = sigmaDaily * Math.sqrt(hz.minutesAt(k) / 375.0);
         double fl = pick(info.flat, bucket), ma = pick(info.meanAbs, bucket), eu = pick(info.excUp, bucket), ed = pick(info.excDn, bucket);
         double[] o = new double[6];
         java.util.Arrays.fill(o, Double.NaN);

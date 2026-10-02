@@ -47,6 +47,7 @@ public final class Trainer {
 
     /** Where a forecast made after k bars of session d resolves: sessions ahead and the slot (-1 = the session's close). */
     public static int[] targetSpec(int k, Horizon hz) {
+        if (hz.eod()) return k >= History.BARS ? null : new int[]{0, History.BARS - 1};
         if (hz.swing()) return new int[]{k == 0 ? hz.sessions - 1 : hz.sessions, -1};
         int idx = k - 1 + hz.bars;
         return new int[]{idx / History.BARS, idx % History.BARS};
@@ -74,6 +75,7 @@ public final class Trainer {
     static Object[] target(History h, int[] sidx, List<String> sessions, Map<String, Integer> pos, Dataset s, int i, Horizon hz) {
         int d = s.d.get(i), k = s.k.get(i);
         int[] spec = targetSpec(k, hz);
+        if (spec == null) return null;
         if (hz.swing()) {
             Integer p = pos.get(s.date.get(i));
             if (p == null || p + spec[0] >= sessions.size()) return null;
@@ -100,7 +102,13 @@ public final class Trainer {
         return out;
     }
 
-    public static HorizonModel train(History h, Dataset s, Horizon hz) {
+    public static HorizonModel train(History h, Dataset s, Horizon hz) { return train(h, s, hz, null); }
+
+    /**
+     * cutoff (yyyy-MM-dd, or null): learn only from samples made before that date whose targets also ended before it —
+     * what a model frozen on that morning could have known. Used by the pre-live replay.
+     */
+    public static HorizonModel train(History h, Dataset s, Horizon hz, String cutoff) {
         int[] sidx = h.sessionIndex();
         List<String> sessions = new ArrayList<>(h.niftyDaily.keySet());
         Map<String, Integer> pos = new HashMap<>();
@@ -113,8 +121,10 @@ public final class Trainer {
         List<Double> mvL = new ArrayList<>();
         List<double[]> exL = new ArrayList<>();
         for (int i = 0; i < s.size(); i++) {
+            if (cutoff != null && s.date.get(i).compareTo(cutoff) >= 0) continue;
             Object[] t = target(h, sidx, sessions, pos, s, i, hz);
             if (t == null) continue;
+            if (cutoff != null && ((String) t[1]).compareTo(cutoff) >= 0) continue;
             double tp = (Double) t[0], p = s.price.get(i);
             if (tp == p) continue;
             rowsL.add(i); yL.add(tp > p ? 1 : 0); tdL.add((String) t[1]); mvL.add(Math.log(tp / p));
@@ -144,7 +154,7 @@ public final class Trainer {
         List<List<Double>> zb = new ArrayList<>();
         for (int b = 0; b < 3; b++) zb.add(new ArrayList<>());
         for (int r = 0; r < n; r++) {
-            double sh = s.sigma.get(src[r]) * Math.sqrt(hz.minutes / 375.0);
+            double sh = s.sigma.get(src[r]) * Math.sqrt(hz.minutesAt(s.k.get(src[r])) / 375.0);
             if (sh > 0) zb.get(reg[r].volBucket()).add(Math.abs(mvL.get(r)) / sh);
         }
         List<Double> all = new ArrayList<>();
@@ -155,7 +165,7 @@ public final class Trainer {
         List<List<Double>> eu = new ArrayList<>(), ed = new ArrayList<>();
         for (int b = 0; b < 4; b++) { eu.add(new ArrayList<>()); ed.add(new ArrayList<>()); }
         for (int r = 0; r < n; r++) {
-            double sh = s.sigma.get(src[r]) * Math.sqrt(hz.minutes / 375.0);
+            double sh = s.sigma.get(src[r]) * Math.sqrt(hz.minutesAt(s.k.get(src[r])) / 375.0);
             if (sh <= 0) continue;
             double z = Math.abs(mvL.get(r)) / sh;
             for (int b : new int[]{reg[r].volBucket(), 3}) {
@@ -342,6 +352,7 @@ public final class Trainer {
             for (int j = ps + 1; j <= ps + spec[0]; j++) { double[] v = h.niftyDaily.get(sessions.get(j)); hi = Math.max(hi, v[1]); lo = Math.min(lo, v[2]); }
         } else {
             int[] spec = targetSpec(k, hz);
+            if (spec == null) return null;
             int dd = d + spec[0];
             if (dd >= h.days.size() || sidx[dd] - sidx[d] != dd - d) return null;
             for (int x = d; x <= dd; x++) {

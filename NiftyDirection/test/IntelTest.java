@@ -94,7 +94,7 @@ public class IntelTest {
         double[] fh = FeatureEngine.compute(sig, dl, kl, sidx);
         IntelEngine.HPred p1 = fc.preds.get(2);
         check("live forecast = history forecast", Math.abs(m1.predict(fh, Regime.of(fh)).p - p1.pModel) < 1e-12 && Math.abs(p1.pFinal - p1.pModel) < 1e-12);
-        check("seven horizon slots, only trained ones filled", fc.preds.size() == 7 && p1.has() && !fc.preds.get(0).has());
+        check("nine horizon slots, only trained ones filled", fc.preds.size() == 9 && p1.has() && !fc.preds.get(0).has());
         check("why: group lines + starting point", !p1.why.isEmpty() && p1.why0.contains("went up"));
         check("expected range ordered", p1.range50 < p1.range68 && p1.range68 < p1.range90 && p1.range68 > 0);
         check("confidence in 0..100 with a label", p1.confidence >= 0 && p1.confidence <= 100 && !p1.confLabel.isEmpty());
@@ -167,7 +167,7 @@ public class IntelTest {
         check("'Sensex Daily' is not NSE", EventImpact.tier("Sensex Daily", false) == 3);
         NewsItem old = item("Inflation fears grip markets", "Mint", -0.5, "HIGH", now - 6 * 3600000L, true, false);
         EventImpact.Event oe = EventImpact.build(Collections.singletonList(old), null, w, sec, now, "2026-10-01", 600).get(0);
-        check("older news decays faster at short horizons", Math.abs(oe.impact[0]) < Math.abs(oe.impact[6]));
+        check("older news decays faster at short horizons", Math.abs(oe.impact[0]) < Math.abs(oe.impact[8]));
         NewsItem rum = item("Inflation fears grip markets", "Mint", -0.5, "HIGH", now - 6 * 3600000L, true, false);
         rum.speculative = true;
         EventImpact.Event re = EventImpact.build(Collections.singletonList(rum), null, w, sec, now, "2026-10-01", 600).get(0);
@@ -207,7 +207,7 @@ public class IntelTest {
         check("15 min before RBI → PRE-EVENT, short horizons halved", rk.mode.equals(EventCalendarRisk.PRE_EVENT) && rk.mult[0] == 0.5 && rk.eventDriven());
         check("after the release → POST-EVENT", EventCalendarRisk.assess(cal, "2026-10-07", 10 * 60 + 30).mode.equals(EventCalendarRisk.POST_EVENT));
         EventCalendarRisk.Risk wk = EventCalendarRisk.assess(cal, "2026-10-02", 11 * 60);
-        check("RBI next week lowers only the 1-week confidence", wk.mult[6] < 1 && wk.mult[2] == 1 && wk.mult[5] == 1);
+        check("RBI next week lowers only the 1-week confidence", wk.mult[8] < 1 && wk.mult[2] == 1 && wk.mult[7] == 1);
         check("expiry is not an event", EventCalendarRisk.minuteOf(new EventItem("2026-10-06", "Nifty weekly expiry", 1, "x")) == -2);
 
         // ---- 11. feedback: log, resolve, scorecard, overlays

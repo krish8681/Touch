@@ -28,9 +28,9 @@ import java.util.Map;
 final class IntelPage {
     private IntelPage() {}
 
-    interface Actions { void update(); void train(); void redraw(); }
+    interface Actions { void update(); void train(); void redraw(); void validate(); }
 
-    static final String[] SECTIONS = {"Overview", "Insights", "Health"};
+    static final String[] SECTIONS = {"Overview", "Insights", "Health", "Validate"};
     static int section = 0;
 
     static LinearLayout build(Context c, File dir, String working, boolean loggedIn, Actions act) {
@@ -60,6 +60,8 @@ final class IntelPage {
             if (!fc.movers.isEmpty()) col.addView(movers(c, fc), Ui.cardLp(c));
             List<ImpactGraph.Edge> g = !fc.graph.isEmpty() ? fc.graph : IntelRunner.graph(dir);
             if (!g.isEmpty()) col.addView(graph(c, g), Ui.cardLp(c));
+        } else if (section == 3) {
+            validateSection(c, col, dir, working, loggedIn, act);
         } else {
             col.addView(quality(c, fc), Ui.cardLp(c));
             col.addView(record(c, fc, dir), Ui.cardLp(c));
@@ -240,8 +242,8 @@ final class IntelPage {
             String big = !p.has() ? "—" : arrow(p.direction) + String.format(Locale.US, " %.0f%%", p.sideProb() * 100);
             TextView bt = Ui.text(c, big, 19, col, true);
             r.addView(bt, Ui.wrap());
-            String chip = !p.has() ? "no model" : !p.proven() ? "no edge" : Double.isNaN(p.range68) ? p.signalQuality : String.format(Locale.US, "±%.2f%%", p.range68 * 100);
-            TextView ch = Ui.chip(c, chip, !p.has() || !p.proven() ? Ui.GREY : Ui.CYAN);
+            String chip = !p.has() ? "no model" : !p.validation.isEmpty() ? p.validation : !p.proven() ? "no edge" : Double.isNaN(p.range68) ? p.signalQuality : String.format(Locale.US, "±%.2f%%", p.range68 * 100);
+            TextView ch = Ui.chip(c, chip, !p.has() ? Ui.GREY : !p.validation.isEmpty() ? verdictColor(p.validation) : !p.proven() ? Ui.GREY : Ui.CYAN);
             ch.setMinWidth(Ui.dp(c, 72));
             r.addView(ch, Ui.gapLeft(c, 10));
             rowBox.addView(r);
@@ -602,6 +604,161 @@ final class IntelPage {
         return info;
     }
 
+    // ================================================================== validate
+
+    static void validateSection(Context c, LinearLayout col, File dir, String working, boolean loggedIn, Actions act) {
+        com.krish.niftydirection.intel.Validator.Report r = IntelRunner.validation(dir);
+        int vc = r == null ? Ui.GREY : verdictColor(r.verdict);
+        LinearLayout k = Ui.hero(c, vc);
+        k.addView(Ui.text(c, "PRE-LIVE VALIDATION", 11, Ui.DIM, true));
+        if (r == null) {
+            k.addView(Ui.text(c, "Not validated yet", 24, Ui.TEXT, true), Ui.top(c, 4));
+            k.addView(Ui.text(c, "The app replays the last ~12 months through the same engine, scores every forecast and simulates the trades. "
+                    + "It runs by itself after training. Until then no forecast is marked \"strong enough to act on\".", 12.5f, Ui.DIM, false), Ui.top(c, 6));
+        } else {
+            LinearLayout r1 = Ui.row(c);
+            r1.addView(Ui.text(c, r.verdict, 30, vc, true), Ui.wrap());
+            r1.addView(Ui.text(c, "   " + r.sessions + " sessions · " + r.from + " → " + r.to, 11.5f, Ui.DIM, false), Ui.weight(1));
+            k.addView(r1, Ui.top(c, 2));
+            k.addView(Ui.text(c, r.summary, 13.5f, Ui.TEXT, false), Ui.top(c, 6));
+            k.addView(Ui.text(c, "Run " + Pages.time(r.at).substring(0, 5) + " · " + r.blocks + " walk-forward blocks, each predicted by models frozen before it",
+                    11, Ui.DIM, false), Ui.top(c, 6));
+        }
+        Button run = Ui.button(c, working != null && working.startsWith("Validating") ? working : r == null ? "Run validation now" : "Run again", Ui.CYAN);
+        run.setEnabled(working == null && loggedIn);
+        run.setAlpha(run.isEnabled() ? 1f : 0.45f);
+        run.setOnClickListener(v -> act.validate());
+        k.addView(run, Ui.top(c, 12));
+        col.addView(k, Ui.cardLp(c));
+        if (r == null) return;
+
+        // per-horizon verdicts
+        LinearLayout hz = Ui.card(c);
+        hz.addView(Ui.title(c, "Verdict by horizon", "tap for details"));
+        boolean first = true;
+        for (com.krish.niftydirection.intel.Validator.HReport x : r.horizons) {
+            if (!first) hz.addView(thin(c));
+            first = false;
+            LinearLayout box = Ui.col(c);
+            box.setPadding(0, Ui.dp(c, 10), 0, Ui.dp(c, 10));
+            LinearLayout row = Ui.row(c);
+            LinearLayout left = Ui.col(c);
+            left.addView(Ui.text(c, x.label, 14, Ui.TEXT, true));
+            left.addView(Ui.text(c, Double.isNaN(x.hit) ? "no forecasts" : String.format(Locale.US, "right %.1f%% vs %.1f%% usual side", x.hit * 100, x.base * 100), 11.5f, Ui.DIM, false));
+            row.addView(left, Ui.weight(1));
+            LinearLayout right = Ui.col(c);
+            right.setGravity(Gravity.END);
+            TextView pnl = Ui.text(c, x.trades == 0 ? "no trades" : String.format(Locale.US, "₹%,.0f", x.netRupees), 14, x.trades == 0 ? Ui.DIM : Ui.signColor(x.netRupees), true);
+            pnl.setGravity(Gravity.END);
+            right.addView(pnl);
+            TextView tr = Ui.text(c, x.trades == 0 ? "per lot" : x.trades + " trades · per lot", 10.5f, Ui.DIM, false);
+            tr.setGravity(Gravity.END);
+            right.addView(tr);
+            row.addView(right, Ui.wrap());
+            TextView chip = Ui.chip(c, x.verdict, verdictColor(x.verdict));
+            chip.setMinWidth(Ui.dp(c, 56));
+            row.addView(chip, Ui.gapLeft(c, 10));
+            box.addView(row);
+            LinearLayout det = valDetail(c, x);
+            det.setVisibility(View.GONE);
+            box.setOnClickListener(v -> det.setVisibility(det.getVisibility() == View.VISIBLE ? View.GONE : View.VISIBLE));
+            box.addView(det);
+            hz.addView(box);
+        }
+        col.addView(hz, Ui.cardLp(c));
+
+        // leakage audit
+        LinearLayout au = Ui.card(c);
+        boolean leak = r.auditFailed > 0 || !r.purgeOk;
+        LinearLayout at = Ui.row(c);
+        at.addView(Ui.text(c, "Leakage audit", 15, Ui.TEXT, true), Ui.weight(1));
+        at.addView(Ui.chip(c, leak ? "FAILED" : "CLEAN", leak ? Ui.RED : Ui.GREEN), Ui.wrap());
+        au.addView(at);
+        au.addView(Ui.text(c, String.format(Locale.US, "• %d random moments recomputed on a history cut at that moment: %d differed.", r.auditChecked, r.auditFailed), 12, Ui.DIM, false), Ui.top(c, 8));
+        au.addView(Ui.text(c, "• Every block's models learnt only from before the block: " + (r.purgeOk ? "yes" : "NO"), 12, Ui.DIM, false), Ui.top(c, 3));
+        au.addView(Ui.text(c, "• Only finished 5-minute bars and daily data dated before each day are used (no future prices).", 12, Ui.DIM, false), Ui.top(c, 3));
+        for (String s : r.audit) au.addView(Ui.text(c, "⚠ " + s, 12, Ui.RED, false), Ui.top(c, 3));
+        col.addView(au, Ui.cardLp(c));
+
+        // live paper record
+        Map<String, double[]> paper = IntelRunner.paper(dir);
+        LinearLayout pp = Ui.card(c);
+        pp.addView(Ui.title(c, "Live paper trading", "same rules, real time"));
+        if (paper.isEmpty()) pp.addView(Ui.text(c, "No paper trades closed yet. Every live \"strong enough\" signal is paper-traded automatically and scored when its time is up.", 12, Ui.DIM, false));
+        for (Map.Entry<String, double[]> e : paper.entrySet()) {
+            double[] v = e.getValue();
+            pp.addView(Ui.kv(c, com.krish.niftydirection.intel.Horizon.of(e.getKey()).label + String.format(Locale.US, "  (%.0f trades, %.0f won)", v[0], v[1]),
+                    String.format(Locale.US, "₹%,.0f per lot", v[2]), Ui.signColor(v[2])));
+        }
+        col.addView(pp, Ui.cardLp(c));
+
+        // assumptions
+        LinearLayout as = Ui.card(c);
+        as.addView(Ui.title(c, "Simulation rules", "change in Settings"));
+        as.addView(Ui.kv(c, "Instrument", "Nifty futures, " + r.lot + " per lot", Ui.TEXT));
+        as.addView(Ui.kv(c, "Signal", String.format(Locale.US, "trade gate passed (≥ %.0f%%)", r.threshold * 100), Ui.TEXT));
+        as.addView(Ui.kv(c, "Entry", "next 5-min bar close (delay)", Ui.TEXT));
+        as.addView(Ui.kv(c, "Exit", "horizon end" + (r.stopMult > 0 ? String.format(Locale.US, " or stop at %.1f× range", r.stopMult) : ""), Ui.TEXT));
+        as.addView(Ui.kv(c, "Slippage", String.format(Locale.US, "%.1f pts per side", r.slippagePts), Ui.TEXT));
+        as.addView(Ui.kv(c, "Charges", "approx. Zerodha futures: brokerage, STT, exchange, SEBI, stamp, GST", Ui.TEXT));
+        as.addView(Ui.text(c, "One position per horizon at a time. Past results do not guarantee future ones — start small and keep the live paper record growing.",
+                11, Ui.DIM, false), Ui.top(c, 8));
+        col.addView(as, Ui.cardLp(c));
+    }
+
+    static LinearLayout valDetail(Context c, com.krish.niftydirection.intel.Validator.HReport x) {
+        LinearLayout d = Ui.col(c);
+        d.setBackground(Ui.round(0x0DFFFFFF, Ui.dp(c, 14), 0, 0));
+        int pad = Ui.dp(c, 12);
+        d.setPadding(pad, pad, pad, pad);
+        d.setLayoutParams(Ui.top(c, 10));
+        for (String s : x.reasons) d.addView(Ui.text(c, "• " + s, 12, Ui.TEXT, false), Ui.top(c, 2));
+        LinearLayout st = Ui.row(c);
+        st.setPadding(0, Ui.dp(c, 10), 0, 0);
+        st.addView(stat(c, "Brier skill", Double.isNaN(x.skill) ? "—" : String.format(Locale.US, "%+.1f%%", x.skill * 100), Ui.signColor(x.skill)), Ui.weight(1));
+        st.addView(stat(c, "90% band", Double.isNaN(x.skillLo) ? "—" : String.format(Locale.US, "%+.1f…%+.1f", x.skillLo * 100, x.skillHi * 100), Ui.TEXT), Ui.weight(1.3f));
+        st.addView(stat(c, "Up/flat/down", Double.isNaN(x.acc3) ? "—" : String.format(Locale.US, "%.0f%% vs %.0f%%", x.acc3 * 100, x.base3 * 100), Ui.TEXT), Ui.weight(1.2f));
+        d.addView(st);
+        if (x.trades > 0) {
+            LinearLayout s2 = Ui.row(c);
+            s2.setPadding(0, Ui.dp(c, 8), 0, 0);
+            s2.addView(stat(c, "Win rate", String.format(Locale.US, "%.0f%%", 100.0 * x.wins / x.trades), Ui.TEXT), Ui.weight(1));
+            s2.addView(stat(c, "Profit factor", Double.isNaN(x.profitFactor) ? "—" : String.format(Locale.US, "%.2f", x.profitFactor), x.profitFactor >= 1.1 ? Ui.GREEN : Ui.AMBER), Ui.weight(1));
+            s2.addView(stat(c, "Max drawdown", String.format(Locale.US, "₹%,.0f", x.maxDD), Ui.RED), Ui.weight(1.2f));
+            d.addView(s2);
+            d.addView(Ui.text(c, String.format(Locale.US, "Avg ₹%,.0f per trade · %d stopped out · worst losing streak %d · charges ₹%,.0f · %+.0f Nifty points",
+                    x.avgRupees, x.stops, x.worstStreak, x.chargesRupees, x.netPts), 11, Ui.DIM, false), Ui.top(c, 6));
+        }
+        if (!x.buckets.isEmpty()) {
+            d.addView(Ui.text(c, "CONFIDENCE CHECK: SAID → WAS RIGHT", 10.5f, Ui.DIM, true), Ui.top(c, 12));
+            for (double[] b : x.buckets) {
+                LinearLayout r = Ui.row(c);
+                r.setPadding(0, Ui.dp(c, 3), 0, Ui.dp(c, 3));
+                TextView l = Ui.text(c, String.format(Locale.US, "%.0f–%.0f%%: %.0f → %.0f%%", b[0] * 100, b[0] * 100 + 10, b[2] * 100, b[3] * 100), 11.5f, Ui.TEXT, false);
+                l.setMinWidth(Ui.dp(c, 150));
+                r.addView(l, Ui.wrap());
+                Fx.Progress pr = new Fx.Progress(c);
+                pr.set(b[3], Math.abs(b[3] - b[2]) <= 0.08 ? Ui.GREEN : Ui.AMBER);
+                r.addView(pr, Ui.weight(1));
+                r.addView(Ui.text(c, String.format(Locale.US, "  %.0f", b[1]), 10.5f, Ui.DIM, false), Ui.wrap());
+                d.addView(r);
+            }
+        }
+        table(c, d, "BY MARKET CONDITION", x.regimes);
+        table(c, d, "STRESS DAYS", x.stress);
+        return d;
+    }
+
+    static void table(Context c, LinearLayout d, String title, Map<String, double[]> m) {
+        if (m.isEmpty()) return;
+        d.addView(Ui.text(c, title + " — right vs usual · trades ₹", 10.5f, Ui.DIM, true), Ui.top(c, 12));
+        for (Map.Entry<String, double[]> e : m.entrySet()) {
+            double[] v = e.getValue();
+            String val = String.format(Locale.US, "%.0f%% vs %.0f%%", v[1] * 100, v[2] * 100) + (v[3] > 0 ? String.format(Locale.US, " · %.0f · ₹%,.0f", v[3], v[4]) : "");
+            d.addView(Ui.kv(c, e.getKey() + String.format(Locale.US, " (%.0f)", v[0]), val, v[1] > v[2] ? (v[3] > 0 && v[4] < 0 ? Ui.AMBER : Ui.GREEN) : Ui.DIM));
+        }
+    }
+
     // ================================================================== helpers
 
     static View banner(Context c, String s, int color) {
@@ -677,6 +834,7 @@ final class IntelPage {
     static String arrow(String dir) { return "BULLISH".equals(dir) ? "↑" : "BEARISH".equals(dir) ? "↓" : "→"; }
     static int dirColor(String dir) { return "BULLISH".equals(dir) ? Ui.GREEN : "BEARISH".equals(dir) ? Ui.RED : Ui.GREY; }
     static int confColor(String l) { return "High".equals(l) ? Ui.GREEN : "Medium".equals(l) ? Ui.AMBER : Ui.GREY; }
+    static int verdictColor(String v) { return "PASS".equals(v) ? Ui.GREEN : "WARN".equals(v) ? Ui.AMBER : Ui.RED; }
     static int qualityColor(String q) { return "HIGH".equals(q) ? Ui.GREEN : "MEDIUM".equals(q) ? Ui.AMBER : Ui.GREY; }
     static int regimeColor(String l) {
         if (l.contains("BULL")) return Ui.GREEN;

@@ -13,7 +13,10 @@ public class IntelRunnerTest {
         long t0 = System.currentTimeMillis();
         String rep = IntelRunner.train(k, dir, a[1], new AtomicBoolean(), (w, d, n) -> {});
         System.out.println(rep);
-        boolean ok = IntelRunner.models(dir).size() == 7 && !IntelRunner.needsTraining(dir) && !IntelRunner.graph(dir).isEmpty();
+        boolean ok = IntelRunner.models(dir).size() == 9 && !IntelRunner.needsTraining(dir) && !IntelRunner.graph(dir).isEmpty();
+        Validator.Report vr = IntelRunner.validate(k, dir, a[1], new Validator.Config(), new AtomicBoolean(), (w, d, n) -> {});
+        System.out.println("validation: " + vr.verdict + " — " + vr.summary + " · audit " + vr.auditChecked + "/" + vr.auditFailed);
+        ok &= vr.sessions > 0 && vr.auditFailed == 0 && !IntelRunner.needsValidation(dir) && IntelRunner.governor(dir).size() == 9;
         Snapshot s = new Snapshot();
         s.time = System.currentTimeMillis();
         NewsItem n = new NewsItem();
@@ -21,20 +24,21 @@ public class IntelRunnerTest {
         n.niftyImpact = -0.7; n.severity = "HIGH"; n.time = System.currentTimeMillis() - 20 * 60000; n.verification = "VERIFIED";
         s.news.add(n);
         IntelEngine.LiveContext ctx = IntelRunner.context(s, null, "");
-        IntelEngine.Forecast fc = IntelRunner.live(k, dir, a[1], 11 * 60 + 2, Double.NaN, ctx, 0.62, new AtomicBoolean(), (w, d, x) -> {});
+        Validator.Config cfg = new Validator.Config();
+        IntelEngine.Forecast fc = IntelRunner.live(k, dir, a[1], 11 * 60 + 2, Double.NaN, ctx, cfg, new AtomicBoolean(), (w, d, x) -> {});
         int filled = 0;
         for (IntelEngine.HPred p : fc.preds) { if (p.has()) filled++; System.out.printf("%-4s %-8s P(up) %.3f conf %3d %-6s range68 ±%.2f%% %s%n", p.hz.id, p.direction, p.pFinal, p.confidence, p.confLabel, p.range68 * 100, p.tradeable ? "TRADEABLE" : "no trade: " + p.gate); }
         System.out.println("regime " + fc.regime.label() + " · " + fc.regime.detail() + " · quality " + fc.quality.score + " · events " + fc.events.size() + " · memory " + fc.memory);
-        ok &= fc.intraday && filled == 7 && fc.events.size() == 1 && fc.events.get(0).tier == 1 && fc.news[2] < 0 && !fc.memory.isEmpty();
+        ok &= fc.intraday && filled == 9 && fc.events.size() == 1 && fc.events.get(0).tier == 1 && fc.news[2] < 0 && !fc.memory.isEmpty();
         File logF = new File(dir, "intel/log_" + a[1].substring(0, 7) + ".jsonl");
-        ok &= logF.exists() && java.nio.file.Files.readAllLines(logF.toPath()).size() == 7;
+        ok &= logF.exists() && java.nio.file.Files.readAllLines(logF.toPath()).size() == 9;
         // a second update minutes later: no extra log lines (30-min spacing), state used for What changed
-        IntelEngine.Forecast fc2 = IntelRunner.live(k, dir, a[1], 11 * 60 + 7, Double.NaN, ctx, 0.62, new AtomicBoolean(), (w, d, x) -> {});
-        ok &= java.nio.file.Files.readAllLines(logF.toPath()).size() == 7 && fc2.preds.size() == 7;
+        IntelEngine.Forecast fc2 = IntelRunner.live(k, dir, a[1], 11 * 60 + 7, Double.NaN, ctx, cfg, new AtomicBoolean(), (w, d, x) -> {});
+        ok &= java.nio.file.Files.readAllLines(logF.toPath()).size() == 9 && fc2.preds.size() == 9;
         // pre-open, from a GIFT-implied open
-        IntelEngine.Forecast po = IntelRunner.live(k, dir, a[1], 8 * 60, 25000, ctx, 0.62, new AtomicBoolean(), (w, d, x) -> {});
-        System.out.println("pre-open: " + po.asOf + " · 1D P(up) " + po.preds.get(5).pFinal);
-        ok &= po.preOpen && po.k == 0 && po.preds.get(5).has();
+        IntelEngine.Forecast po = IntelRunner.live(k, dir, a[1], 8 * 60, 25000, ctx, cfg, new AtomicBoolean(), (w, d, x) -> {});
+        System.out.println("pre-open: " + po.asOf + " · 1D P(up) " + po.preds.get(7).pFinal);
+        ok &= po.preOpen && po.k == 0 && po.preds.get(7).has();
         System.out.println("took " + (System.currentTimeMillis() - t0) / 1000 + "s");
         System.out.println(ok ? "1 passed, 0 failed" : "0 passed, 1 failed");
         if (!ok) System.exit(1);

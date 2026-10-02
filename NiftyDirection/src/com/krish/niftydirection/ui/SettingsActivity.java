@@ -123,6 +123,13 @@ public class SettingsActivity extends Activity {
                 + "it has a proven edge, confidence is at least medium, data quality is fine and no event is minutes away. Signals only — the app never trades.");
         text("trade_threshold", "Probability needed before a forecast counts as strong enough (55–90, %)", "62", NUM);
 
+        section("🧪  Pre-live validation (simulated trading)", "After every training the app replays the last ~12 months through the same engine and trades every "
+                + "\"strong enough\" signal in Nifty futures: entry at the next 5-minute bar, exit at the horizon's end or the stop, with slippage and "
+                + "approximate Zerodha charges (brokerage, STT, exchange, SEBI, stamp, GST). Only horizons that PASS may show \"strong enough to act on\" live.");
+        text("sim_lot", "Nifty futures lot size (check the current lot with your broker)", "65", NUM);
+        text("sim_slip", "Slippage per side, Nifty points", "1", DEC);
+        text("sim_stop", "Stop = this × the 68% expected range (0 = no stop)", "1", DEC);
+
         section("ℹ️  How to read the app", "Direction Score 0–100: 50 = no side. A side starts when the signed score passes ±25 and ends when it falls back through ±15.\n"
                 + "Labels: BULLISH, BEARISH, RANGE (real range signs), NO EDGE (weak or mixed evidence), CONFLICT (positioning and price disagree).\n"
                 + "Confidence = strength × agreement × data coverage, lowered by high VIX and event risk.\n"

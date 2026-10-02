@@ -1,4 +1,4 @@
-# Nifty Direction Pure 2.1 — Prediction Engine Architecture
+# Nifty Direction Pure 2.3 — Prediction Engine Architecture
 
 This is the architecture as built (code in `src/com/krish/niftydirection/intel`, wired in by `data/IntelRunner` and `ui/IntelPage`).
 It runs entirely on the phone: Kite Connect + NSE + Yahoo + public news feeds in, calibrated probabilities out. **Signals only — the app never places orders.**
@@ -61,6 +61,33 @@ It runs entirely on the phone: Kite Connect + NSE + Yahoo + public news feeds in
 | 12 | Feedback | `Feedback`, `IntelRunner` | Prediction log, outcome resolution, live scorecard by horizon and regime, controlled re-learning of the overlay weights. |
 
 Also built: **Impact graph** (`ImpactGraph`, learnt driver → Nifty and driver → driver links), **Event memory** (today's sequence), **What changed?**, **Why?**, **Data quality** (`IntelEngine.quality`) and the **trade gate**.
+
+## 2.3: pre-live validation and the model governor (`intel/Validator`)
+
+```text
+history (Kite 5-min + daily + 29 Yahoo series)
+   ↓  replay window = last 250 sessions, 4 blocks
+   ↓  block b: Trainer.train(..., cutoff = block start)  → models frozen for the block
+   ↓  every 15 min (k = 3…72): IntelEngine.forecast(models, h, d, k) — the live engine, only data known at that moment
+   ↓  outcome at the horizon's target (+ up/flat/down)
+   ↓  act signals → Validator.simulate (next-bar entry ± slippage, stop = stopMult × 68% range, exit at target, Zerodha charges)
+   ↓  accuracy · Brier skill + session block bootstrap · confidence buckets · regimes · stress days · P&L · drawdown
+   ↓  leakage audit (truncated-history recompute, purge check, too-good flag)
+   ↓  PASS / WARN / FAIL per horizon  →  intel/validation.json  →  governor in the live trade gate
+live: act signals logged as paper trades → resolved with the same simulate() → AI → Validate → Live paper trading
+```
+
+- **PASS** needs all three:
+  - the Brier skill's 90% band is above 0, and the hit rate beats the usual side;
+  - the calibration error is ≤ 8 points;
+  - at least 20 simulated trades, with net ₹ > 0 and a profit factor ≥ 1.1.
+- **FAIL:** no edge, calibration error > 15 points, or any leakage.
+- **WARN:** everything else, including an intraday hit rate above 75% (too good to be true).
+- **Governor:** only PASS horizons may be "tradeable" live; WARN is paper-only; FAIL or not validated never acts.
+- **Tested:**
+  - a market with a planted pattern passes horizons with clean leakage audits;
+  - pure noise fails every horizon, with zero simulated trades.
+- **Horizons:** 9, after adding 2h and Day close. Day close's range and outlook use the minutes left in the session (`Horizon.minutesAt`).
 
 ## 2.1 additions
 

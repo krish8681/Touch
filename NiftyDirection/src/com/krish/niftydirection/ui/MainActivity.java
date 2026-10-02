@@ -23,6 +23,7 @@ import com.krish.niftydirection.data.Kite;
 import com.krish.niftydirection.data.HistoryLoader;
 import com.krish.niftydirection.data.IntelRunner;
 import com.krish.niftydirection.intel.IntelEngine;
+import com.krish.niftydirection.intel.Validator;
 import com.krish.niftydirection.data.Prefs;
 import com.krish.niftydirection.data.Store;
 import com.krish.niftydirection.service.WatchService;
@@ -44,7 +45,7 @@ public class MainActivity extends Activity implements Brain.Listener {
     private volatile boolean busy;
     private long lastRun;
     private volatile String fcWorking;
-    private volatile boolean fcTriedTrain;
+    private volatile boolean fcTriedTrain, fcTriedValidate;
 
     private final Runnable ticker = new Runnable() {
         @Override public void run() {
@@ -168,6 +169,7 @@ public class MainActivity extends Activity implements Brain.Listener {
     private final IntelPage.Actions fcActions = new IntelPage.Actions() {
         @Override public void update() { fcUpdate(); }
         @Override public void train() { fcTrain(); }
+        @Override public void validate() { fcRunMode(2); }
         @Override public void redraw() { scroll.scrollTo(0, 0); render(); }
     };
 
@@ -177,22 +179,29 @@ public class MainActivity extends Activity implements Brain.Listener {
         java.io.File dir = getFilesDir();
         boolean has = IntelRunner.hasModels(dir);
         boolean market = inSession();
-        // first training is the user's choice (big download); after that, weekly retrains (and model-version upgrades) run outside market hours
-        if (!market && !fcTriedTrain && (has || IntelRunner.hasModelFiles(dir) || ForecastRunner.hasModelFiles(dir)) && IntelRunner.needsTraining(dir)) { fcTriedTrain = true; fcTrain(); return; }
+        // automatic: the first training (and validation) starts as soon as you are logged in; weekly retrains and
+        // model-version upgrades run outside market hours; every retrain is followed by the pre-live replay
+        if (!fcTriedTrain && !has) { fcTriedTrain = true; fcTrain(); return; }
+        if (!market && !fcTriedTrain && IntelRunner.needsTraining(dir)) { fcTriedTrain = true; fcTrain(); return; }
         if (!has) return;
+        if (!fcTriedValidate && IntelRunner.needsValidation(dir)) { fcTriedValidate = true; fcRunMode(2); return; }
         IntelEngine.Forecast l = IntelRunner.last;
         long age = l == null ? Long.MAX_VALUE : System.currentTimeMillis() - l.at;
         boolean wantPreOpen = l != null && !l.preOpen && !Double.isNaN(expectedOpen());   // GIFT just became available
         if (wantPreOpen || age > (market ? 5 : preOpenWindow() ? 15 : 60) * 60_000L) fcUpdate();
     }
 
-    private void fcUpdate() { fcRun(false); }
-    private void fcTrain() { fcRun(true); }
+    private void fcUpdate() { fcRunMode(0); }
+    private void fcTrain() { fcRunMode(1); }
 
-    private void fcRun(boolean train) {
+    Validator.Config simConfig() { return prefs.simConfig(); }
+
+    /** mode 0 = update forecast, 1 = train → validate → update, 2 = validate → update. */
+    private void fcRunMode(int mode) {
+        boolean train = mode == 1;
         if (fcWorking != null) return;
         if (!prefs.hasValidSession()) { onLoginPill(); return; }
-        fcWorking = train ? "Training…" : "Updating forecast…";
+        fcWorking = train ? "Training…" : mode == 2 ? "Validating…" : "Updating forecast…";
         render();
         final Kite kite = new Kite(prefs.apiKey(), prefs.token());
         final java.io.File dir = getFilesDir();
@@ -202,15 +211,18 @@ public class MainActivity extends Activity implements Brain.Listener {
                 Calendar c = Calendar.getInstance(Collector.IST);
                 String today = Collector.day(c.getTime());
                 int minute = c.get(Calendar.HOUR_OF_DAY) * 60 + c.get(Calendar.MINUTE);
-                HistoryLoader.Progress pr = (w, d, t) -> { fcWorking = (train ? "Training: " : "Forecast: ") + w + (t > 1 ? " (" + d + "/" + t + ")" : ""); ui.post(this::renderIfForecast); };
+                final String[] stage = {train ? "Training: " : mode == 2 ? "Validating: " : "Forecast: "};
+                HistoryLoader.Progress pr = (w, d, t) -> { fcWorking = stage[0] + w + (t > 1 ? " (" + d + "/" + t + ")" : ""); ui.post(this::renderIfForecast); };
+                Validator.Config cfg = simConfig();
                 if (train) IntelRunner.train(kite, dir, today, null, pr);
-                double thr = Math.max(0.5, Math.min(0.95, prefs.num("trade_threshold", 62) / 100.0));
-                IntelRunner.live(kite, dir, today, minute, expectedOpen(), liveContext(), thr, null, pr);
+                if (train || mode == 2 || IntelRunner.needsValidation(dir)) { stage[0] = "Validating (replaying 12 months): "; IntelRunner.validate(kite, dir, today, simConfig(), null, pr); }
+                stage[0] = "Forecast: ";
+                IntelRunner.live(kite, dir, today, minute, expectedOpen(), liveContext(), cfg, null, pr);
             } catch (Kite.TokenExpired e) {
                 prefs.clearSession();
                 err = "Kite login expired — log in again.";
             } catch (Throwable t) {
-                err = (train ? "Training failed: " : "Forecast failed: ") + t.getMessage();
+                err = (train ? "Training failed: " : mode == 2 ? "Validation failed: " : "Forecast failed: ") + t.getMessage();
             }
             final String e2 = err;
             fcWorking = null;
@@ -223,13 +235,10 @@ public class MainActivity extends Activity implements Brain.Listener {
         return IntelRunner.context(o == null ? null : o.snap, o == null ? null : o.result, prefs.str("user_events", ""));
     }
 
-    /** Before 9:15 on a weekday: the open GIFT Nifty points to (Nifty × GIFT ÷ near futures). NaN otherwise. */
+    /** Before 9:15 on a weekday: the open GIFT Nifty points to. NaN otherwise. */
     static double expectedOpen() {
         Brain.Output o = Brain.last;
-        if (o == null || o.snap == null || !preOpenWindow()) return Double.NaN;
-        com.krish.niftydirection.model.Snapshot s = o.snap;
-        if (s.live || Double.isNaN(s.giftNifty) || s.nifty == null || !s.nifty.ok() || s.fut == null || !s.fut.ok()) return Double.NaN;
-        return s.nifty.last * s.giftNifty / s.fut.last;
+        return IntelRunner.expectedOpen(o == null ? null : o.snap);
     }
 
     static boolean preOpenWindow() {
