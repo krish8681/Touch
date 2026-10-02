@@ -19,7 +19,7 @@ The full design is in **[docs/SPEC.md](docs/SPEC.md)**: data schema, features, f
 cd nifty-engine
 python -m venv .venv && . .venv/bin/activate
 pip install -e ".[dev]"
-pytest -q                                   # 67 tests
+pytest -q                                   # 75 tests
 
 python -m nifty_engine signal               # one full decision on synthetic data, printed as JSON
 python -m nifty_engine backtest --days 20   # replay the synthetic market with paper trades + metrics
@@ -33,6 +33,32 @@ With `DATA_SOURCE=synthetic`, the server runs on a simulated market that advance
 and test the Android app before connecting Kite.
 
 Synthetic backtests only prove that the pipeline works. They say nothing about real-market profitability.
+
+## Real historical data (DhanHQ)
+
+Kite does not serve expired option contracts, so history comes from DhanHQ's expired-options API:
+- 1-minute bars for ATM±10 NIFTY strikes, about 5 years back.
+- Fields: OHLC, volume, OI, IV and spot.
+- Access needs a Dhan account with the Data API: free with 25+ trades in 30 days, otherwise a paid monthly plan. One month
+  is enough to download everything.
+
+```bash
+# .env: DHAN_ACCESS_TOKEN=…  DHAN_CLIENT_ID=…   (web.dhan.co → DhanHQ Trading APIs)
+python -m nifty_engine dhan-download --start 2021-10-01 --end 2026-10-01   # resumable; about 5,000 requests
+python -m nifty_engine dhan-check                                         # coverage per day + expiry resolution
+python -m nifty_engine train    --source dhan --start 2021-10-01 --end 2025-10-01
+python -m nifty_engine backtest --source dhan --start 2025-10-01 --end 2026-10-01 --model models/direction_model.json
+```
+
+Train and backtest on **separate, consecutive** periods. The backtest must come after the training data.
+
+**Dhan data caveats**, all handled in `data/dhan_store.py`:
+- **No expiry date per bar.** It is inferred from the weekly expiry weekday (Thursday until Aug 2025, Tuesday from
+  Sep 2025), moved earlier for holidays, and checked against Dhan's IV for each day.
+- **No bid/ask.** A spread is assumed (`--spread-bps`, default 50), plus 1 tick of slippage.
+- **No expired futures.** Futures-based features are switched off in models trained on Dhan data, both in training and live.
+- **Reports of missing rows.** Run `dhan-check` before training.
+- **Lot size changed over the years.** Use `--lot-size` for older periods.
 
 ## Connecting Kite
 
@@ -79,7 +105,7 @@ docs/SPEC.md   v1.0 technical specification
 - **Stage 1–3** (market intelligence, prediction, option selection): done.
 - **Stage 4**:
   - Paper trading and gated live execution: done.
-  - Real-data training: needs recorded chain history (SPEC §13–14).
+  - Real-data training: DhanHQ downloader and loader done (SPEC §13); needs your Dhan token to run.
 - **Android app** (Kotlin + Compose): next. Its screens and API contract are in SPEC §10–11.
 - **v1.1**:
   - Chain-snapshot recorder.

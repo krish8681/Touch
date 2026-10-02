@@ -34,7 +34,7 @@ def test_paper_round_trip(snapshot_parts):
     p = _spread(chain)
     pos = broker.open(p, chain, now)
     assert pos.entry_value == pytest.approx(p.net_premium)
-    assert pos.quantity == 150
+    assert pos.quantity == 2 * p.lot_size
     broker.close(pos, chain, now + timedelta(minutes=1), "MANUAL")
     # Immediate round trip loses the spread plus charges.
     assert pos.gross_pnl() < 0 and pos.net_pnl < pos.gross_pnl()

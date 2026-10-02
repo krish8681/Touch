@@ -176,7 +176,7 @@ class TradeProposal:
     reward_risk: float
     liquidity_score: float      # 0..1
     lots: int = 0
-    lot_size: int = 75
+    lot_size: int = 65
     horizon_minutes: int = 60
     notes: list[str] = field(default_factory=list)
 

@@ -298,16 +298,40 @@ This table feeds the closed loop. Join each prediction with the realised move, t
 service. `build_training_set` produces features and labels from the same feature code, so training and inference cannot drift
 apart.
 
-**Data caveat:**
-- Realistic option backtests need option prices for every strike over time, not just NIFTY spot.
-- Kite historical data is per instrument, and expired option contracts are generally not available.
-- The plan is to record chain snapshots daily from `KiteSource`, then replay them through `candle_chain_provider`. That provider
-  assumes a pessimistic spread because historical candles have no bid/ask.
-- The synthetic market only validates plumbing. Its P&L numbers say nothing about real-market edge.
+**Historical data: DhanHQ** (`data/dhan.py`, `data/dhan_store.py`). Kite generally does not serve expired option contracts,
+so history comes from Dhan.
+
+Endpoints:
+- `POST /v2/charts/rollingoption`: NSE_FNO, OPTIDX, securityId 13, WEEK, expiryCode 1. It covers strikes ATM−10…ATM+10 for
+  CALL and PUT, at most 30 days per call, about 5 years back.
+- `POST /v2/charts/intraday`: IDX_I/INDEX 13 for the spot candles.
+
+Downloads:
+- Saved as gzipped CSV chunks with a manifest, and they resume after an interruption.
+- Request rate is throttled to 4/s.
+- Retries on 805 / DH-904 / 5xx.
+
+`DhanChainProvider` rebuilds each minute's `OptionChain` from the last completed bar of every strike:
+- Quotes older than 5 minutes are dropped.
+- Volume is accumulated through the day, and OI change is measured from the session's first OI, matching the live source.
+- The spread is assumed: ±`spread_bps`/2 around the close, at least one tick.
+
+**Expiry resolution:** the API returns no expiry date. For each day, the resolver builds candidates:
+- The next 3 weekly expiries: Thursday until 31 Aug 2025, Tuesday from 1 Sep 2025.
+- Each moved to the previous trading day if the exchange was closed.
+
+It then picks the candidate whose Black-76 IV of the ATM bars matches Dhan's `iv` field best. This also detects whether the IV
+is in percent, and whether `expiryCode` meant the near or the next expiry. `dhan-check` reports coverage, the method used and
+the IV error per day.
+
+Models trained on Dhan data record `uses_futures=false`. The decision engine then drops futures-based features live as well,
+so training and inference match.
+
+The synthetic market only validates plumbing. Its P&L numbers say nothing about real-market edge.
 
 ## 14. Promotion path to live
 
-1. Collect at least 3 months of recorded chain data, then train on real data.
+1. Download Dhan history (`dhan-download`, `dhan-check`). Train on the older years and backtest on the most recent year only.
 2. Every horizon must beat its base rate on out-of-sample data, with ECE < 0.05.
 3. Paper trade for at least 4 weeks. Compare paper expectancy (after charges) with the backtest. Investigate slippage.
 4. Live with `APPROVAL_MODE=manual` and 1 lot.

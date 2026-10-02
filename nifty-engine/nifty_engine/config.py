@@ -53,6 +53,8 @@ class RiskLimits:
 class Settings:
     kite_api_key: str = ""
     kite_api_secret: str = ""
+    dhan_access_token: str = ""
+    dhan_client_id: str = ""
     app_api_token: str = ""
     database_url: str = "sqlite:///./nifty_engine.db"
     execution_mode: str = "paper"            # paper | live
@@ -60,7 +62,7 @@ class Settings:
     approval_mode: str = "manual"            # manual | auto
     data_source: str = "synthetic"           # synthetic | kite
     capital: float = 500_000.0
-    lot_size: int = 75                       # NIFTY lot size; refreshed from instrument dump when available
+    lot_size: int = 65                       # NIFTY lot size; refreshed from the Kite instrument dump when live
     strike_step: int = 50
     risk_free_rate: float = 0.065
     dividend_yield: float = 0.012
@@ -79,6 +81,8 @@ class Settings:
         return cls(
             kite_api_key=_env("KITE_API_KEY", ""),
             kite_api_secret=_env("KITE_API_SECRET", ""),
+            dhan_access_token=_env("DHAN_ACCESS_TOKEN", ""),
+            dhan_client_id=_env("DHAN_CLIENT_ID", ""),
             app_api_token=_env("APP_API_TOKEN", ""),
             database_url=_env("DATABASE_URL", "sqlite:///./nifty_engine.db"),
             execution_mode=_env("EXECUTION_MODE", "paper").lower(),

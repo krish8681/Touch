@@ -46,7 +46,8 @@ class DecisionEngine:
         ca: ChainAnalysis = analyze_chain(chain, self.settings.strike_step)
         impact = self.news.impact(now)
         events = self.news.active_events(now)
-        f = compute_features(snap.m1, snap.m5, snap.fut_m1, ca, snap.vix, snap.vix_prev_close, impact, now)
+        fut = snap.fut_m1 if self.direction.uses_futures else None
+        f = compute_features(snap.m1, snap.m5, fut, ca, snap.vix, snap.vix_prev_close, impact, now)
         ivp = iv_percentile(ca.atm_iv, snap.iv_history) if ca.atm_iv and len(snap.iv_history) >= 20 else None
         reg = classify_regime(f, ivp, event_active=bool(events))
 

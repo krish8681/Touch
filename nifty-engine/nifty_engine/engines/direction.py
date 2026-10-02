@@ -183,9 +183,14 @@ class TrainReport:
 
 
 class DirectionEngine:
-    def __init__(self, models: dict[int, SoftmaxRegression] | None = None, reports: dict[int, TrainReport] | None = None):
+    def __init__(self, models: dict[int, SoftmaxRegression] | None = None, reports: dict[int, TrainReport] | None = None,
+                 uses_futures: bool = True, trained_on: str = ""):
         self.models = models or {}
         self.reports = reports or {}
+        # Futures-derived features (VWAP from futures volume, build-up, basis) must be absent at inference
+        # when the training data had no futures (e.g. Dhan expired-options history).
+        self.uses_futures = uses_futures
+        self.trained_on = trained_on
 
     @property
     def trained(self) -> bool:
@@ -249,6 +254,8 @@ class DirectionEngine:
         payload = {
             "features": list(FEATURE_NAMES),
             "label_band": LABEL_BAND,
+            "uses_futures": self.uses_futures,
+            "trained_on": self.trained_on,
             "models": {str(h): m.to_dict() for h, m in self.models.items()},
             "reports": {str(h): r.__dict__ for h, r in self.reports.items()},
         }
@@ -264,4 +271,4 @@ class DirectionEngine:
             raise ValueError("saved model was trained on a different feature set; retrain it")
         models = {int(h): SoftmaxRegression.from_dict(d) for h, d in payload["models"].items()}
         reports = {int(h): TrainReport(**r) for h, r in payload.get("reports", {}).items()}
-        return cls(models, reports)
+        return cls(models, reports, payload.get("uses_futures", True), payload.get("trained_on", ""))
