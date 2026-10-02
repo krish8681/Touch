@@ -34,6 +34,20 @@ public class IntelTest {
             for (String d : brent.keySet()) { v *= Math.exp(r.nextGaussian() * 0.01); m.put(d, v); }
             h.global.put(k, m);
         }
+        // NSE positioning (daily) and the ten heavyweights (5-minute: Nifty's own path plus noise)
+        for (String k : com.krish.niftydirection.data.HistoryLoader.POI_KEYS) {
+            TreeMap<String, Double> m = new TreeMap<>();
+            double v = 0.4;
+            for (String d : h.niftyDaily.keySet()) { v = Math.max(0.05, Math.min(0.95, v + r.nextGaussian() * 0.02)); m.put(d, v); }
+            h.global.put(k, m);
+        }
+        for (String[] st : FeatureEngine.LEADER_STOCKS) {
+            double lv = 1000;
+            for (History.Day day : h.days) {
+                float[] a = day.aux("STK:" + st[0]);
+                for (int i = 0; i < History.BARS; i++) if (!Float.isNaN(day.c[i])) { lv *= Math.exp(r.nextGaussian() * 0.001); a[i] = (float) (lv * day.c[i] / 25000); }
+            }
+        }
         return h;
     }
 
@@ -86,6 +100,18 @@ public class IntelTest {
         int filled = 0;
         for (double v : f200) if (!Double.isNaN(v)) filled++;
         check("all " + FeatureEngine.N + " inputs computable on full data (" + filled + ")", filled >= FeatureEngine.N - 1);
+
+        // ---- honesty: on a market with no pattern the model must say "base rate", not a confident guess
+        History noise = synth(700, 0.0, 5);
+        HorizonModel nm = Trainer.train(noise, Trainer.dataset(noise), Horizon.of("1h"));
+        int[] nsi = noise.sessionIndex();
+        double dev = 0; int nd = 0;
+        for (int d = noise.days.size() - 60; d < noise.days.size(); d++) for (int k = 6; k < 75; k += 12) {
+            double[] f = FeatureEngine.compute(noise, d, k, nsi); dev += Math.abs(nm.predict(f, Regime.of(f)).p - nm.base); nd++; }
+        System.out.printf("noise 1h: shrink %.2f, avg |p − base| %.3f, groups used: %s%n", nm.shrink, dev / nd, nm.info.used);
+        check("pure noise: forecasts stay at the base rate (no confident guesses)", dev / nd < 0.02 && nm.shrink <= 0.3);
+        check("pure noise: no input group survives gating", nm.info.used.startsWith("none"));
+        check("Day close / 15m / 30m / 1W flags: 15m, 30m, 1W watch only", Horizon.of("15m").watchOnly() && Horizon.of("1W").watchOnly() && !Horizon.of("1D").watchOnly() && !Horizon.of("1h").watchOnly());
 
         // ---- 4. live path = history path
         int dl = sig.days.size() - 1, kl = 40;
