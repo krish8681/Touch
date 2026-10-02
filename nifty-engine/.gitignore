@@ -4,6 +4,6 @@ __pycache__/
 *.db
 *.sqlite
 .env
-data/
-models/*.json
-!models/.gitkeep
+/data/
+/models/*.json
+!/models/.gitkeep
