@@ -102,12 +102,12 @@ public class IntelTest {
         check("all " + FeatureEngine.N + " inputs computable on full data (" + filled + ")", filled >= FeatureEngine.N - 1);
 
         // ---- honesty: on a market with no pattern the model must say "base rate", not a confident guess
-        History noise = synth(700, 0.0, 5);
-        HorizonModel nm = Trainer.train(noise, Trainer.dataset(noise), Horizon.of("1h"));
-        int[] nsi = noise.sessionIndex();
+        History flat = synth(700, 0.0, 5);
+        HorizonModel nm = Trainer.train(flat, Trainer.dataset(flat), Horizon.of("1h"));
+        int[] nsi = flat.sessionIndex();
         double dev = 0; int nd = 0;
-        for (int d = noise.days.size() - 60; d < noise.days.size(); d++) for (int k = 6; k < 75; k += 12) {
-            double[] f = FeatureEngine.compute(noise, d, k, nsi); dev += Math.abs(nm.predict(f, Regime.of(f)).p - nm.base); nd++; }
+        for (int d = flat.days.size() - 60; d < flat.days.size(); d++) for (int k = 6; k < 75; k += 12) {
+            double[] f = FeatureEngine.compute(flat, d, k, nsi); dev += Math.abs(nm.predict(f, Regime.of(f)).p - nm.base); nd++; }
         System.out.printf("noise 1h: shrink %.2f, avg |p − base| %.3f, groups used: %s%n", nm.shrink, dev / nd, nm.info.used);
         check("pure noise: forecasts stay at the base rate (no confident guesses)", dev / nd < 0.02 && nm.shrink <= 0.3);
         check("pure noise: no input group survives gating", nm.info.used.startsWith("none"));
