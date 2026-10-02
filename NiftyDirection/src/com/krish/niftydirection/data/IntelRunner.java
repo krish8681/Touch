@@ -7,6 +7,7 @@ import com.krish.niftydirection.intel.Horizon;
 import com.krish.niftydirection.intel.HorizonModel;
 import com.krish.niftydirection.intel.ImpactGraph;
 import com.krish.niftydirection.intel.Journal;
+import com.krish.niftydirection.intel.OptionStrategy;
 import com.krish.niftydirection.intel.IntelEngine;
 import com.krish.niftydirection.intel.Trainer;
 import com.krish.niftydirection.intel.Validator;
@@ -438,6 +439,19 @@ public final class IntelRunner {
                     .append(num(e.pnl(), 2)).append(',').append(num(e.signalProb, 4)).append(',').append(num(e.paperEntry, 2)).append(',')
                     .append(Double.isNaN(e.paperEntry) ? "" : num(e.dir * (e.entry - e.paperEntry), 2)).append('\n');
         n += entry(z, "my_trades_journal.csv", jr.toString());
+        StringBuilder op = new StringBuilder("id,strategy,horizon,expiry,paper,lots,lot,opened,closed,legs,net_premium_points,spot_at_entry,exit_below,exit_above,take_profit_rupees_per_lot,stop_rupees_per_lot,net_rupees_after_costs\n");
+        java.text.SimpleDateFormat tf = new java.text.SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.US);
+        tf.setTimeZone(Collector.IST);
+        for (OptionStrategy.Position p : optPositions(base)) {
+            StringBuilder legs = new StringBuilder();
+            for (OptionStrategy.Leg g : p.legs) legs.append(legs.length() > 0 ? " | " : "").append(g.label());
+            op.append(csv(p.id)).append(',').append(csv(p.name)).append(',').append(p.horizon).append(',').append(p.expiry).append(',').append(p.paper ? 1 : 0).append(',')
+                    .append(p.lots).append(',').append(p.lot).append(',').append(tf.format(new java.util.Date(p.openedAt))).append(',')
+                    .append(p.closed ? tf.format(new java.util.Date(p.closedAt)) : "").append(',').append(csv(legs.toString())).append(',').append(num(p.net(), 2)).append(',')
+                    .append(num(p.spotAtEntry, 2)).append(',').append(num(p.exitBelow, 2)).append(',').append(num(p.exitAbove, 2)).append(',')
+                    .append(num(p.takeProfit, 0)).append(',').append(num(p.stopLoss, 0)).append(',').append(num(p.exitPnl, 2)).append('\n');
+        }
+        n += entry(z, "my_option_positions.csv", op.toString());
         String rep = report(base);
         if (!rep.isEmpty()) n += entry(z, "training_report.txt", rep);
         if (settings != null) n += entry(z, "settings.txt", String.format(Locale.US,
@@ -459,6 +473,7 @@ public final class IntelRunner {
             + "replay_features.csv      the 74 model inputs at every replay moment (scaled values as the models see them), for your own analysis.\n"
             + "leakage_audit.txt        the look-ahead and purge checks.\n"
             + "my_trades_journal.csv    the trades you marked \"I took this\": your fills, points, net ₹ after charges, and slippage vs the paper entry.\n"
+            + "my_option_positions.csv  option ideas you saved from the strategy builder (paper or real): legs, exit plan and net ₹ after costs once closed.\n"
             + "live_forecast_log.csv    every live forecast this phone logged (every 30 min per horizon), its outcome once known, and paper trades.\n"
             + "validation.json          the raw report. training_report.txt: what the models learnt and how they tested. settings.txt: assumptions used.\n\n"
             + "NOTES\n"
@@ -532,6 +547,123 @@ public final class IntelRunner {
             p.signalQuality = "LOW";
             p.signalReason = "risk guard: " + fc.guard.get(0);
         }
+    }
+
+    // ================================================================== option strategy builder
+
+    /** Everything the Options page shows for one horizon. */
+    public static final class OptionsPlan {
+        public OptionStrategy.Chain chain;
+        public OptionStrategy.Market market;
+        public OptionStrategy.View view;
+        public List<OptionStrategy.Fair> fair = new ArrayList<>();
+        public List<OptionStrategy.Idea> ideas = new ArrayList<>();
+        public IntelEngine.HPred pred;
+        public final List<String> notes = new ArrayList<>();
+    }
+
+    /** One expiry of the snapshot's chain for the builder (next = the following weekly expiry). Null if not loaded. */
+    public static OptionStrategy.Chain optChain(Snapshot s, boolean next) {
+        List<com.krish.niftydirection.model.OptionRow> rows = next ? s.chain2 : s.chain;
+        if (rows == null || rows.isEmpty() || s.nifty == null || !s.nifty.ok()) return null;
+        OptionStrategy.Chain c = new OptionStrategy.Chain();
+        c.spot = s.spot(); c.rows = rows; c.step = s.strikeStep > 0 ? s.strikeStep : 50; c.lot = s.lotSize > 0 ? s.lotSize : 65;
+        c.expiry = next ? s.expiry2 : s.expiry; c.days = next ? s.opt2DaysToExpiry : s.optDaysToExpiry;
+        c.years = com.krish.niftydirection.engine.Greeks.yearsToExpiry(s.today, s.minute, c.expiry, c.days);
+        return c;
+    }
+
+    /** Annualised 10-day realised volatility of Nifty from the snapshot's daily candles. */
+    public static double realisedVol(Snapshot s) {
+        List<Double> closes = new ArrayList<>();
+        for (com.krish.niftydirection.model.Candle c : s.niftyDaily) if (c.c > 0) closes.add(c.c);
+        return OptionStrategy.realised(closes, 10);
+    }
+
+    /** horizonId null = the current signal's horizon, else 1 day, else the first horizon with a forecast. */
+    public static OptionsPlan optionsPlan(Snapshot s, IntelEngine.Forecast fc, String horizonId, Validator.Config cfg, long now) {
+        OptionsPlan plan = new OptionsPlan();
+        OptionStrategy.Chain near = optChain(s, false);
+        if (near == null) { plan.notes.add("Option chain not loaded yet. Log in to Kite and refresh."); return plan; }
+        IntelEngine.HPred p = null;
+        if (fc != null) {
+            for (IntelEngine.HPred x : fc.preds) if (x.has() && horizonId != null && x.hz.id.equals(horizonId)) p = x;
+            if (p == null && fc.signal >= 0 && fc.signal < fc.preds.size() && fc.preds.get(fc.signal).has()) p = fc.preds.get(fc.signal);
+            if (p == null) for (IntelEngine.HPred x : fc.preds) if (x.has() && "1D".equals(x.hz.id)) p = x;
+            if (p == null) for (IntelEngine.HPred x : fc.preds) if (x.has()) { p = x; break; }
+        }
+        plan.pred = p;
+        OptionStrategy.View v = new OptionStrategy.View();
+        if (p != null) {
+            v.horizon = p.hz.id; v.horizonLabel = p.hz.label; v.pUp = p.pFinal; v.sigma = p.range68; v.act = p.tradeable; v.validation = p.validation;
+            v.exitBy = p.hz.swing() ? OptionStrategy.exitBy(now, 0, p.hz.sessions) : OptionStrategy.exitBy(now, p.hz.minutesAt(fc.k), 0);
+            v.blocks.addAll(fc.guard);
+        } else {
+            v.horizon = "1D"; v.horizonLabel = "1 day (no AI forecast yet)"; v.pUp = 0.5;
+            v.exitBy = OptionStrategy.exitBy(now, 0, 1);
+            plan.notes.add("No AI forecast yet — ideas assume 50/50, so none can show an edge.");
+        }
+        v.years = Math.max(5, (v.exitBy - now) / 60000.0) / (365.0 * 1440);
+        OptionStrategy.Chain c = near;
+        OptionStrategy.Chain next = optChain(s, true);
+        if (next != null && (near.days == 0 || near.years - v.years < 0.5 / 365)) {
+            c = next;
+            plan.notes.add("Uses the " + next.expiry + " expiry: the " + near.expiry + (near.days == 0 ? " expiry is today" : " expiry ends before this trade would") + ".");
+        }
+        if (!s.live) plan.notes.add("Market closed: premiums are the last traded prices — re-check at the open before acting.");
+        double rv = realisedVol(s);
+        plan.chain = c;
+        plan.market = OptionStrategy.read(c, rv);
+        double sigDay = Double.NaN;
+        if (fc != null) for (IntelEngine.HPred x : fc.preds) if (x.has() && "1D".equals(x.hz.id)) sigDay = x.range68;
+        plan.fair = OptionStrategy.fair(c, plan.market, OptionStrategy.fairVol(rv, sigDay), 6);
+        OptionStrategy.Config oc = new OptionStrategy.Config();
+        oc.slip = cfg.slippagePts;
+        if (cfg.guard != null) oc.riskBudget = cfg.guard.maxLossRupees;
+        plan.view = v;
+        plan.ideas = OptionStrategy.build(c, plan.market, v, oc);
+        return plan;
+    }
+
+    static File optFile(File base) { return new File(dir(base), "option_positions.json"); }
+
+    public static synchronized List<OptionStrategy.Position> optPositions(File base) {
+        try { File f = optFile(base); return f.exists() ? OptionStrategy.fromJson(new JSONArray(read(f))) : new ArrayList<>(); }
+        catch (Exception e) { return new ArrayList<>(); }
+    }
+
+    static synchronized void saveOptPositions(File base, List<OptionStrategy.Position> l) throws Exception { write(optFile(base), OptionStrategy.toJson(l).toString()); }
+
+    public static synchronized OptionStrategy.Position takeOption(File base, OptionsPlan plan, OptionStrategy.Idea idea, int lots, boolean paper) throws Exception {
+        List<OptionStrategy.Position> l = optPositions(base);
+        OptionStrategy.Position p = OptionStrategy.open(idea, plan.chain, plan.view.horizon, lots, paper, System.currentTimeMillis());
+        l.add(p);
+        saveOptPositions(base, l);
+        return p;
+    }
+
+    /** Live status of a position against the snapshot (null when its expiry is not in the loaded chains). */
+    public static OptionStrategy.Status optStatus(Snapshot s, IntelEngine.Forecast fc, OptionStrategy.Position p, Validator.Config cfg) {
+        OptionStrategy.Chain c = optChain(s, false);
+        if (c == null || !c.expiry.equals(p.expiry)) c = optChain(s, true);
+        if (c == null || !c.expiry.equals(p.expiry)) return null;
+        double pUp = Double.NaN;
+        if (fc != null) for (IntelEngine.HPred x : fc.preds) if (x.has() && x.hz.id.equals(p.horizon)) pUp = x.pFinal;
+        OptionStrategy.Config oc = new OptionStrategy.Config();
+        oc.slip = cfg.slippagePts;
+        return OptionStrategy.check(p, c, pUp, System.currentTimeMillis(), oc);
+    }
+
+    public static synchronized void closeOption(File base, String id, OptionStrategy.Status st) throws Exception {
+        List<OptionStrategy.Position> l = optPositions(base);
+        for (OptionStrategy.Position p : l) if (p.id.equals(id) && !p.closed) OptionStrategy.close(p, st, System.currentTimeMillis());
+        saveOptPositions(base, l);
+    }
+
+    public static synchronized void deleteOption(File base, String id) throws Exception {
+        List<OptionStrategy.Position> l = optPositions(base);
+        l.removeIf(p -> p.id.equals(id));
+        saveOptPositions(base, l);
     }
 
     /** Last validation report, or null. */

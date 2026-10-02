@@ -49,7 +49,7 @@ public class IntelRunnerTest {
         }
         System.out.println("export: " + files + " files, " + bo.size() / 1024 + " KB: " + zip.keySet());
         String[] need = {"README.txt", "summary_by_horizon.csv", "confidence_buckets.csv", "market_conditions.csv", "stress_days.csv", "leakage_audit.txt",
-                "validation.json", "replay_forecasts.csv", "replay_trades.csv", "replay_features.csv", "live_forecast_log.csv", "my_trades_journal.csv", "training_report.txt", "settings.txt"};
+                "validation.json", "replay_forecasts.csv", "replay_trades.csv", "replay_features.csv", "live_forecast_log.csv", "my_trades_journal.csv", "my_option_positions.csv", "training_report.txt", "settings.txt"};
         for (String nm : need) ok &= zip.containsKey(nm);
         String[] rf = zip.getOrDefault("replay_forecasts.csv", "").split("\n");
         String[] feats = zip.getOrDefault("replay_features.csv", "").split("\n");

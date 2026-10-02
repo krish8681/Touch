@@ -46,6 +46,7 @@ public class Collector {
         public double fiiManual = Double.NaN;     // typed FII cash (₹ cr), used when NSE fails
         public int strikesEachSide = 15;          // chain width (outer flow layer uses all of it)
         public int oiStrikes = 6;                 // strikes each side that get yesterday's OI
+        public int strikesNext = 10;              // next-expiry chain width (strategy builder)
         public boolean newsOn = true;
         public String geminiKey = "", geminiModel = "auto";
         public String userEvents = "";            // "yyyy-mm-dd name" per line
@@ -510,14 +511,31 @@ public class Collector {
             want.add("NFO:" + i.symbol);
             bySym.put(i.symbol, i);
         }
+        for (Kite.Inst i : nfo) if (i.lot > 0 && ("CE".equals(i.type) || "PE".equals(i.type)) && exp.equals(i.expiry)) { s.lotSize = i.lot; break; }
+        // the following expiry, narrower (strategy builder uses it when the near one expires before the trade's horizon)
+        String exp2 = null;
+        for (Kite.Inst i : nfo) {
+            if (!("CE".equals(i.type) || "PE".equals(i.type)) || i.expiry.compareTo(exp) <= 0) continue;
+            if (exp2 == null || i.expiry.compareTo(exp2) < 0) exp2 = i.expiry;
+        }
+        Map<Double, OptionRow> rows2 = new java.util.TreeMap<>();
+        if (exp2 != null) {
+            double lo2 = atm - cfg.strikesNext * step, hi2 = atm + cfg.strikesNext * step;
+            for (Kite.Inst i : nfo) {
+                if (!exp2.equals(i.expiry) || i.strike < lo2 - 1 || i.strike > hi2 + 1 || !("CE".equals(i.type) || "PE".equals(i.type))) continue;
+                OptionRow r = rows2.get(i.strike);
+                if (r == null) { r = new OptionRow(); r.strike = i.strike; rows2.put(i.strike, r); }
+                if ("CE".equals(i.type)) { r.ceSymbol = i.symbol; r.ceToken = i.token; } else { r.peSymbol = i.symbol; r.peToken = i.token; }
+                want.add("NFO:" + i.symbol);
+            }
+        }
         Map<String, Quote> q = kite.quote(want);
-        for (OptionRow r : rows.values()) {
-            Quote c = q.get("NFO:" + r.ceSymbol), p = q.get("NFO:" + r.peSymbol);
-            if (c != null) { r.ceOi = c.oi; r.ceLtp = c.last; r.cePrevLtp = c.prevClose; r.ceVol = c.volume; }
-            if (p != null) { r.peOi = p.oi; r.peLtp = p.last; r.pePrevLtp = p.prevClose; r.peVol = p.volume; }
-            double t = Greeks.yearsToExpiry(s.today, s.minute, exp, s.optDaysToExpiry);
-            r.ceIv = Greeks.iv(true, spot, r.strike, t, r.ceLtp);
-            r.peIv = Greeks.iv(false, spot, r.strike, t, r.peLtp);
+        fill(rows.values(), q, spot, Greeks.yearsToExpiry(s.today, s.minute, exp, s.optDaysToExpiry));
+        if (exp2 != null && !rows2.isEmpty()) {
+            s.expiry2 = exp2;
+            s.opt2DaysToExpiry = days(s.today, exp2);
+            fill(rows2.values(), q, spot, Greeks.yearsToExpiry(s.today, s.minute, exp2, s.opt2DaysToExpiry));
+            s.chain2 = new ArrayList<>(rows2.values());
         }
 
         // yesterday's OI for the strikes nearest the money (cached per session + expiry)
@@ -543,6 +561,16 @@ public class Collector {
         }
         if (fetched > 0) writeJson(f, cache, "optoi_");
         s.chain = new ArrayList<>(rows.values());
+    }
+
+    private static void fill(java.util.Collection<OptionRow> rows, Map<String, Quote> q, double spot, double t) {
+        for (OptionRow r : rows) {
+            Quote c = q.get("NFO:" + r.ceSymbol), p = q.get("NFO:" + r.peSymbol);
+            if (c != null) { r.ceOi = c.oi; r.ceLtp = c.last; r.cePrevLtp = c.prevClose; r.ceVol = c.volume; r.ceBid = c.bid; r.ceAsk = c.ask; }
+            if (p != null) { r.peOi = p.oi; r.peLtp = p.last; r.pePrevLtp = p.prevClose; r.peVol = p.volume; r.peBid = p.bid; r.peAsk = p.ask; }
+            r.ceIv = Greeks.iv(true, spot, r.strike, t, r.ceLtp);
+            r.peIv = Greeks.iv(false, spot, r.strike, t, r.peLtp);
+        }
     }
 
     /** OI at the close of the last day before `session`. 0 if the contract did not exist yet, -1 if unknown. */

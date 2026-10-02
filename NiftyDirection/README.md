@@ -33,6 +33,36 @@ Each factor's weight = base × source trust (Kite / NSE 1.0, Yahoo 0.8, Gemini 0
 Regime: enter a side at ±25, keep it until ±15 (hysteresis). CONFLICT when structure and live are both ≥30 and opposite (confidence halved).
 NO EDGE when evidence is weak or mixed; RANGE only with 2+ real range signs.
 
+## Pure 2.5 — option strategy builder
+
+Options tab → **Strategy builder** (top of the page):
+
+- **AI view** for a horizon you pick (chips): direction, probability, typical move, trade-gate state, exit-by time.
+- **What options are pricing**: ATM strike and IV, Nifty's recent real moves on the same basis, an
+  EXPENSIVE / FAIR / CHEAP verdict, the move priced in to expiry and for one day, PCR, max pain, walls, skew.
+- **Ideas** (defined risk only): buy ATM CE/PE, debit spread, credit spread, iron condor, long straddle — with legs,
+  premium, max profit / loss, breakeven, chance of profit and expected ₹ from the AI's own probability and range,
+  charges + slippage, and lots that fit your risk limit (Settings → Risk guard → daily loss limit).
+- **Signals**: BUY only when the horizon passed validation, the gate and risk guard allow it and the expected value is
+  positive after costs; PAPER when only validation is missing; WAIT / AVOID with reasons (expensive options, wide
+  bid/offer, tiny premiums, against the AI). Naked selling / short straddles are never suggested.
+- **Exit plan + EXIT signals**: Nifty levels, ₹ target and stop, time. Saved positions (paper or real) are checked on
+  every refresh and in the background; an alert fires once when a rule is hit. Export adds `my_option_positions.csv`.
+- **Is the premium reasonable?** Market vs fair premium per strike (the market smile scaled to real moves blended with
+  the AI range) and bid/offer spread.
+- Uses the next weekly expiry when the near one ends before the trade's horizon (or is today). Chain now includes best
+  bid / offer and the next expiry (±10 strikes).
+
+What the real NSE option data (26 Sep 2025 – 1 Oct 2026, 251 sessions) showed — the rules above come from it:
+
+- Option data predicts the **size** of the next move (priced-in move vs real move, rank corr 0.31), **not the direction**:
+  PCR, PCR change, max pain, OI walls, futures build-up, IV change — none beat a coin flip in a robust way; 2 of 32
+  checks were "significant", about what chance gives. Walls held 85–89% of days, the same as any level at that distance.
+  Max pain did not pin expiry closes (moved toward it 43% of expiry days).
+- Options were **expensive vs real moves on ~3 of 4 days** (IV/realised median 1.4 on the same time basis). Buying premium
+  then lost money (ATM direction −₹261/trade, straddle −₹1,074/night); defined-risk condors lost to costs (4 legs).
+- The AI's 1-day direction as an ATM option: about break-even overall; better at fair/cheap IV (61 days, not proven).
+
 ## Pure 2.4.1 (fixes)
 
 - Today gauge: "Bearish" / "Bullish" no longer cut off at the screen edges.

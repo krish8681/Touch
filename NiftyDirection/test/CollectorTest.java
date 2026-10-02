@@ -48,6 +48,13 @@ public class CollectorTest {
         check(s.prevDay != null && s.prevDay.date.compareTo(today) < 0, "prevDay before today: " + (s.prevDay == null ? null : s.prevDay.date));
         check(today.equals(s.expiry), "options: nearest expiry is today before close: " + s.expiry);
         check(s.chain.size() == 31, "ATM ±15 = 31 strikes: " + s.chain.size());
+        check(s.chain2.size() == 21 && !s.expiry2.isEmpty() && s.expiry2.compareTo(s.expiry) > 0, "next expiry ±10 = 21 strikes: " + s.chain2.size() + " " + s.expiry2);
+        check(s.lotSize == 75, "lot size from the instrument list: " + s.lotSize);
+        check(s.chain.get(15).ceBid > 0 && s.chain.get(15).ceAsk > s.chain.get(15).ceBid, "best bid / offer read from depth");
+        com.krish.niftydirection.data.IntelRunner.OptionsPlan plan = com.krish.niftydirection.data.IntelRunner.optionsPlan(s, null, null, new com.krish.niftydirection.intel.Validator.Config(), System.currentTimeMillis());
+        boolean noBuy = plan.chain != null && !plan.ideas.isEmpty();
+        for (com.krish.niftydirection.intel.OptionStrategy.Idea i : plan.ideas) noBuy &= !"BUY".equals(i.signal);
+        check(noBuy && plan.chain.lot == 75 && plan.fair.size() > 5, "strategy builder runs on the live chain; without an AI forecast nothing is a BUY (" + plan.ideas.size() + " ideas)");
         int withPrev = 0; for (OptionRow r : s.chain) if (r.hasPrev()) withPrev++;
         check(withPrev == 13, "prev OI on ATM±6 = 13 strikes: " + withPrev);
         check(s.giftNifty == 25310 && "Kite".equals(s.giftSource), "GIFT Nifty read from Kite (beats the typed 25300): " + s.giftNifty + " " + s.giftSource);

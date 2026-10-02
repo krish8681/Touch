@@ -5,7 +5,8 @@ public class Quote {
     public String symbol = "";
     public long token;
     public double last, open, high, low, prevClose, volume, oi;
-    public double buyQty, sellQty;   // total pending buy / sell quantity in the order book (Kite depth totals)
+    public double buyQty, sellQty;
+    public double bid, ask;          // best bid / best offer price (0 = none)   // total pending buy / sell quantity in the order book (Kite depth totals)
     public double avgPrice;    // day VWAP from Kite (average_price)
     public String time = "";   // newest exchange time "yyyy-MM-dd HH:mm:ss"
 

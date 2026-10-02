@@ -62,6 +62,7 @@ public class MainActivity extends Activity implements Brain.Listener {
         super.onCreate(b);
         prefs = new Prefs(this);
         store = new Store(getFilesDir());
+        OptionsPage.redraw = this::render;
         getWindow().setStatusBarColor(Ui.BG);
         getWindow().setNavigationBarColor(Ui.PANEL);
 

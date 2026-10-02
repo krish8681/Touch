@@ -37,6 +37,11 @@ public class Snapshot {
     public String expiry = "";
     public int optDaysToExpiry = 7;
     public double strikeStep = 50;
+    public int lotSize;                 // Nifty F&O lot size from Kite (0 = unknown)
+    /** The following weekly expiry (fewer strikes, no OI history): used for trades that must outlive the near expiry. */
+    public List<OptionRow> chain2 = new ArrayList<>();
+    public String expiry2 = "";
+    public int opt2DaysToExpiry = 14;
 
     /** % change of global markets. Keys: see Global.SYMBOLS names. */
     public Map<String, Double> global = new LinkedHashMap<>();

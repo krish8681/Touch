@@ -136,6 +136,19 @@ public class WatchService extends Service {
                             "Strong enough to act on (validated " + h.validation + "). Signal only — the app never trades.");
             }
             p.put("act_set", now.toString());
+            // option positions: one alert per position when an exit rule is hit
+            String done = p.str("opt_exit_alerted", "");
+            StringBuilder still = new StringBuilder();
+            for (com.krish.niftydirection.intel.OptionStrategy.Position pos : IntelRunner.optPositions(dir)) {
+                if (pos.closed) continue;
+                com.krish.niftydirection.intel.OptionStrategy.Status st = IntelRunner.optStatus(o.snap, fc, pos, p.simConfig());
+                if (st == null || !"EXIT".equals(st.signal)) continue;
+                still.append(pos.id).append(',');
+                if (done.contains(pos.id + ",")) continue;
+                alert("EXIT " + pos.name + (pos.paper ? " (paper)" : ""),
+                        st.reasons.get(0) + String.format(java.util.Locale.US, ". P&L now %s₹%,.0f after costs. Signal only — close it yourself in Kite.", st.pnl < 0 ? "−" : "+", Math.abs(st.pnl)));
+            }
+            p.put("opt_exit_alerted", still.toString());
         } catch (Throwable ignored) { }
     }
 

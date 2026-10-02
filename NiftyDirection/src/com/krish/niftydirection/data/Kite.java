@@ -136,6 +136,12 @@ public class Kite {
                 q.avgPrice = o.optDouble("average_price", 0);
                 q.buyQty = o.optDouble("buy_quantity", 0);
                 q.sellQty = o.optDouble("sell_quantity", 0);
+                JSONObject depth = o.optJSONObject("depth");
+                if (depth != null) {
+                    org.json.JSONArray b = depth.optJSONArray("buy"), a = depth.optJSONArray("sell");
+                    if (b != null && b.length() > 0 && b.optJSONObject(0) != null) q.bid = b.optJSONObject(0).optDouble("price", 0);
+                    if (a != null && a.length() > 0 && a.optJSONObject(0) != null) q.ask = a.optJSONObject(0).optDouble("price", 0);
+                }
                 JSONObject ohlc = o.optJSONObject("ohlc");
                 if (ohlc != null) {
                     q.open = ohlc.optDouble("open", 0); q.high = ohlc.optDouble("high", 0);

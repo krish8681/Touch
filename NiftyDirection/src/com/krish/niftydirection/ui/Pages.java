@@ -333,6 +333,8 @@ final class Pages {
         Snapshot s = o.snap; Result r = o.result;
         if (s.chain.isEmpty()) return empty(c, "Option chain not loaded yet. Log in to Kite and refresh.");
         LinearLayout col = Ui.col(c);
+        try { OptionsPage.build(c, col, s); }
+        catch (Throwable t) { col.addView(empty(c, "Strategy builder could not draw: " + t)); }
         LinearLayout head = Ui.card(c);
         head.addView(Ui.header(c, "Nifty options · " + s.expiry + " expiry (" + s.optDaysToExpiry + " days)"));
         head.addView(Ui.kv(c, "Spot", n2(s.spot()), Ui.TEXT));

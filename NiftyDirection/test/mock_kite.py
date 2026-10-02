@@ -40,7 +40,7 @@ def opt_quote(i):
     intrinsic = max(0, SPOT - k) if t == "CE" else max(0, k - SPOT)
     ltp = round(intrinsic + 60 * math.exp(-abs(dist) / 6), 2)
     prev = ltp * (1.15 if t == "PE" else 0.9)
-    return {"instrument_token": i[0], "last_price": ltp, "oi": round(oi) + CALLS[0] * 3000, "volume": 1e6 + CALLS[0] * 2e5, "ohlc": {"open": prev, "high": ltp * 1.1, "low": ltp * .9, "close": round(prev, 2)},
+    return {"instrument_token": i[0], "last_price": ltp, "depth": {"buy": [{"price": round(ltp - 0.1, 2), "quantity": 750}], "sell": [{"price": round(ltp + 0.1, 2), "quantity": 750}]}, "oi": round(oi) + CALLS[0] * 3000, "volume": 1e6 + CALLS[0] * 2e5, "ohlc": {"open": prev, "high": ltp * 1.1, "low": ltp * .9, "close": round(prev, 2)},
             "timestamp": TODAY + " 11:00:00", "last_trade_time": TODAY + " 10:59:58"}
 
 def quote(key):
