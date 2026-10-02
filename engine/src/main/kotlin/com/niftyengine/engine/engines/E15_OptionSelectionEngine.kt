@@ -3,6 +3,8 @@ package com.niftyengine.engine.engines
 import com.niftyengine.engine.core.BlackScholes
 import com.niftyengine.engine.core.M
 import com.niftyengine.engine.core.Session
+import com.niftyengine.engine.core.TransactionCosts
+import com.niftyengine.engine.model.HorizonProb
 import com.niftyengine.engine.model.DirectionResult
 import com.niftyengine.engine.model.ExpectedMove
 import com.niftyengine.engine.model.OptionAnalysis
@@ -22,9 +24,18 @@ import kotlin.math.sqrt
  * (Black-Scholes, chain IV) under bull / bear / range scenarios built from the expected-move model,
  * then ranks by
  *   OPTION_SCORE = P(direction) × P(profit) × payoff × liquidity × IV × theta × execution
- * after hard filters (liquidity, spread, volume, IV distortion, theta risk).
+ * after hard filters (liquidity, spread, volume, IV distortion, theta risk, stale price).
+ *
+ * This is the OPTION OUTCOME model, deliberately separate from the direction model: "NIFTY bull 72%"
+ * is not "this call is profitable 72%" — strike distance, IV, theta, spread, costs and expiry decide that.
+ * Expected value and P(profit) are NET of brokerage, statutory charges and slippage ([TransactionCosts]).
  */
-class OptionSelectionEngine(private val f: Filters = Filters()) {
+class OptionSelectionEngine(
+    private val f: Filters = Filters(),
+    private val costs: TransactionCosts = TransactionCosts(),
+    /** Maps model P(profit) → historically observed option win rate; null until enough option outcomes exist. */
+    var optionCalibrator: ((Double) -> Double)? = null,
+) {
     data class Filters(
         val minOi: Double = 2_000.0,
         val minVolume: Double = 500.0,
@@ -32,11 +43,16 @@ class OptionSelectionEngine(private val f: Filters = Filters()) {
         val maxIvDistortion: Double = 1.35,
         val maxThetaShare: Double = 0.25,
         val minPremium: Double = 5.0,
+        /** Reject quotes whose last trade is older than this (when the feed reports it). */
+        val maxLastTradeAgeSec: Double = 300.0,
         val itmSteps: Int = 2,
         val otmSteps: Int = 6,
     )
 
-    fun analyze(chain: OptionChain?, spot: Double, now: Long, dir: DirectionResult, move: ExpectedMove, atmIvPct: Double): OptionAnalysis {
+    fun analyze(
+        chain: OptionChain?, spot: Double, now: Long, dir: DirectionResult, move: ExpectedMove, atmIvPct: Double,
+        probs: HorizonProb = HorizonProb(move.horizonMinutes, dir.pBull, dir.pBear, dir.pRange, false),
+    ): OptionAnalysis {
         if (chain == null || chain.rows.isEmpty()) return OptionAnalysis(null, null, emptyList(), atmIvPct, 0.0, listOf("Option chain unavailable"))
         val notes = mutableListOf<String>()
         val rows = chain.rows.sortedBy { it.strike }
@@ -47,14 +63,14 @@ class OptionSelectionEngine(private val f: Filters = Filters()) {
         val t2 = (tYears - hYears).coerceAtLeast(1.0 / (365 * 24 * 60))
         val dte = tYears * 365
         val atmIv = if (!atmIvPct.isNaN() && atmIvPct > 0) atmIvPct / 100 else move.annualVolUsed
-        val preferred = if (dir.pBull >= dir.pBear) OptionType.CE else OptionType.PE
+        val preferred = if (probs.pBull >= probs.pBear) OptionType.CE else OptionType.PE
         if (dte < 0.3) notes += "Expiry day: theta and gamma risk are extreme"
 
         val sigmaH = move.sigmaPoints
         val upMove = if (move.expectedMovePoints > 0) move.expectedMovePoints else 0.8 * sigmaH
         val dnMove = if (move.expectedMovePoints < 0) -move.expectedMovePoints else 0.8 * sigmaH
-        val scenarios = listOf(spot + upMove to dir.pBull, spot - dnMove to dir.pBear, spot to dir.pRange)
-        val drift = (dir.pBull - dir.pBear) * 0.8 * sigmaH
+        val scenarios = listOf(spot + upMove to probs.pBull, spot - dnMove to probs.pBear, spot to probs.pRange)
+        val drift = (probs.pBull - probs.pBear) * 0.8 * sigmaH
 
         val out = mutableListOf<OptionCandidate>()
         for (type in OptionType.values()) {
@@ -63,7 +79,7 @@ class OptionSelectionEngine(private val f: Filters = Filters()) {
             val hi = if (isCall) atm + f.otmSteps * step else atm + f.itmSteps * step
             for (r in rows.filter { it.strike in lo..hi }) {
                 val leg = if (isCall) r.call else r.put
-                candidate(type, r.strike, leg, spot, tYears, t2, atmIv, sigmaH, drift, scenarios, dir, move)?.let { out += it }
+                candidate(type, r.strike, leg, spot, tYears, t2, atmIv, sigmaH, drift, scenarios, probs, move)?.let { out += it }
             }
         }
         val ranked = out.sortedByDescending { it.score }
@@ -75,7 +91,7 @@ class OptionSelectionEngine(private val f: Filters = Filters()) {
 
     private fun candidate(
         type: OptionType, k: Double, leg: OptionLeg, spot: Double, tYears: Double, t2: Double, atmIv: Double,
-        sigmaH: Double, drift: Double, scenarios: List<Pair<Double, Double>>, dir: DirectionResult, move: ExpectedMove,
+        sigmaH: Double, drift: Double, scenarios: List<Pair<Double, Double>>, dir: HorizonProb, move: ExpectedMove,
     ): OptionCandidate? {
         val isCall = type == OptionType.CE
         val ltp = leg.ltp
@@ -91,17 +107,21 @@ class OptionSelectionEngine(private val f: Filters = Filters()) {
         val halfSpread = if (spreadPct.isNaN()) premium * 0.005 else (leg.ask - leg.bid) / 2
 
         // Scenario repricing at the horizon (exit at bid ≈ model − half-spread).
-        val ev = scenarios.sumOf { (s, p) -> p * (BlackScholes.price(isCall, s, k, t2, iv).price - halfSpread - premium) }
+        val grossEv = scenarios.sumOf { (s, p) -> p * (BlackScholes.price(isCall, s, k, t2, iv).price - halfSpread - premium) }
+        // Charges + slippage per unit, evaluated at the expected exit price.
+        val cost = costs.perUnit(premium, (premium + grossEv).coerceAtLeast(0.0))
+        val ev = grossEv - cost
         val target = scenarios[if (isCall) 0 else 1].first
         val valueAtTarget = BlackScholes.price(isCall, target, k, t2, iv).price
 
-        // Breakeven spot at horizon (value − half-spread = premium), by bisection.
+        // Net breakeven spot at horizon (value − half-spread = premium + costs), by bisection.
+        val hurdle = premium + cost
         var a = if (isCall) spot else spot - 6 * sigmaH - premium
         var b = if (isCall) spot + 6 * sigmaH + premium else spot
         repeat(50) {
             val m = (a + b) / 2
             val v = BlackScholes.price(isCall, m, k, t2, iv).price - halfSpread
-            if (isCall) { if (v > premium) b = m else a = m } else { if (v > premium) a = m else b = m }
+            if (isCall) { if (v > hurdle) b = m else a = m } else { if (v > hurdle) a = m else b = m }
         }
         val breakeven = (a + b) / 2
         val sd = sigmaH.coerceAtLeast(1e-6)
@@ -126,7 +146,9 @@ class OptionSelectionEngine(private val f: Filters = Filters()) {
         val dirProb = if (isCall) dir.pBull else dir.pBear
         val retPct = ev / premium * 100
         val payoff = M.clamp(0.5 + retPct / 100, 0.05, 2.0)
-        val score = dirProb * probProfit * payoff * liquidity * ivFactor * thetaFactor * execution
+        val probProfitCal = optionCalibrator?.invoke(probProfit) ?: Double.NaN
+        val pProfitUsed = if (probProfitCal.isNaN()) probProfit else probProfitCal
+        val score = dirProb * pProfitUsed * payoff * liquidity * ivFactor * thetaFactor * execution
 
         val fails = buildList {
             if (leg.oi < f.minOi) add("OI < %,.0f".format(f.minOi))
@@ -136,6 +158,9 @@ class OptionSelectionEngine(private val f: Filters = Filters()) {
             if (ivDist > f.maxIvDistortion) add("IV %.0f%% of ATM".format(ivDist * 100))
             if (thetaShare > f.maxThetaShare) add("Theta %.0f%% of premium over horizon".format(thetaShare * 100))
             if (premium < f.minPremium) add("Premium < ₹%.0f".format(f.minPremium))
+            if (!leg.lastTradeAgeSec.isNaN() && leg.lastTradeAgeSec > f.maxLastTradeAgeSec)
+                add("Stale price: last trade %.0fs ago".format(leg.lastTradeAgeSec))
+            if (iv > 1.5 || iv < 0.02) add("Abnormal IV %.0f%%".format(iv * 100))
         }
         val steps = (k - spot) / (sd.coerceAtLeast(1.0))
         val moneyness = when {
@@ -151,6 +176,8 @@ class OptionSelectionEngine(private val f: Filters = Filters()) {
             expectedValue = ev, expectedReturnPct = retPct, valueAtTarget = valueAtTarget,
             liquidityFactor = liquidity, ivFactor = ivFactor, thetaFactor = thetaFactor, executionFactor = execution,
             score = score, moneyness = moneyness, passedFilters = fails.isEmpty(), filterFailures = fails,
+            grossExpectedValue = grossEv, costPerUnit = cost, lastTradeAgeSec = leg.lastTradeAgeSec,
+            probProfitCalibrated = probProfitCal,
         )
     }
 }

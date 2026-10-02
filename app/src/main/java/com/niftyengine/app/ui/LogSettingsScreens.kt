@@ -42,10 +42,23 @@ import java.io.File
 private fun pct(x: Double) = if (x.isNaN()) "–" else "%.0f%%".format(x * 100)
 
 @Composable
+private fun BucketTable(buckets: List<PerformanceStats.Bucket>, predLabel: String = "pred", realLabel: String = "real") {
+    TableHeader("Bucket" to 1f, "N" to 0.6f, predLabel to 0.8f, realLabel to 0.8f, "gap" to 0.7f)
+    buckets.forEach { b ->
+        val gap = b.hitRate - b.avgPredicted
+        TableRow(Triple(b.label, 1f, C.white), Triple("${b.n}", 0.6f, C.text), Triple(pct(b.avgPredicted), 0.8f, C.text),
+            Triple(pct(b.hitRate), 0.8f, C.text),
+            Triple(if (gap.isNaN()) "–" else "%+.0f".format(gap * 100), 0.7f,
+                if (gap.isNaN() || b.n < 20) C.dim else if (kotlin.math.abs(gap) <= 0.05) C.green else if (kotlin.math.abs(gap) <= 0.10) C.amber else C.red))
+    }
+}
+
+@Composable
 fun StatsCard(title: String, summaries: List<PerformanceStats.Summary>) {
+    var h by remember { mutableStateOf(30) }
     Card(title) {
         if (summaries.all { it.n == 0 }) {
-            Label("No evaluated predictions yet. Outcomes are attached 15/30/60 min after each logged prediction.", color = C.dim, size = 11.sp)
+            Label("No evaluated predictions yet. Outcomes are attached 5/15/30/60 min after each logged prediction.", color = C.dim, size = 11.sp)
             return@Card
         }
         TableHeader("Horizon" to 1f, "N" to 0.6f, "Acc" to 0.7f, "Dir hit" to 0.8f, "Brier" to 0.8f, "Trades" to 0.9f)
@@ -56,25 +69,106 @@ fun StatsCard(title: String, summaries: List<PerformanceStats.Summary>) {
                 Triple("${s.tradeCount}·${pct(s.tradeWinRate)}", 0.9f, C.text),
             )
         }
-        val s30 = summaries.firstOrNull { it.horizon == 30 } ?: summaries.first()
         Spacer(Modifier.height(8.dp))
-        Label("CALIBRATION (${s30.horizon}m): predicted top-probability vs realised hit rate", color = C.dim, size = 10.sp)
-        s30.buckets.forEach { b -> KV(b.label, "n=${b.n}  pred ${pct(b.avgPredicted)}  real ${pct(b.hitRate)}") }
-        val dh = s30.driverHitRates.filterValues { !it.isNaN() }
+        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            summaries.forEach { s ->
+                OutlinedButton(onClick = { h = s.horizon }, colors = ButtonDefaults.outlinedButtonColors(containerColor = if (s.horizon == h) C.s2 else C.s1)) {
+                    Text("${s.horizon}m", color = if (s.horizon == h) C.green else C.dim, fontSize = 11.sp)
+                }
+            }
+        }
+        val sel = summaries.firstOrNull { it.horizon == h } ?: summaries.first()
+        Label("RELIABILITY · ${sel.horizon}m · raw model score (top class) vs realised hit rate", color = C.dim, size = 10.sp)
+        BucketTable(sel.buckets)
+        if (sel.calibratedBuckets.any { it.n > 0 }) {
+            Spacer(Modifier.height(6.dp))
+            Label("AFTER CALIBRATION · ${sel.horizon}m (predictions that were calibrated when made)", color = C.dim, size = 10.sp)
+            BucketTable(sel.calibratedBuckets)
+        }
+        if (sel.optionBuckets.any { it.n > 0 }) {
+            Spacer(Modifier.height(6.dp))
+            Label("OPTION OUTCOME MODEL · ${sel.horizon}m · P(profit) vs realised net option profit", color = C.dim, size = 10.sp)
+            BucketTable(sel.optionBuckets, "P(prof)", "won")
+        }
+        val dh = sel.driverHitRates.filterValues { !it.isNaN() }
         if (dh.isNotEmpty()) {
             Spacer(Modifier.height(6.dp))
-            Label("DRIVER SIGN HIT RATE (${s30.horizon}m)", color = C.dim, size = 10.sp)
+            Label("DRIVER SIGN HIT RATE (${sel.horizon}m)", color = C.dim, size = 10.sp)
             dh.forEach { (k, v) -> KV(k, pct(v), if (v > 0.55) C.green else if (v < 0.45) C.red else C.amber) }
         }
-        Label("Brier: 0 = perfect, ≈0.667 = uninformed 3-way guess.", color = C.dim, size = 9.sp)
+        Label("Goal: 'real' ≈ 'pred' in every bucket (gap within ±5). Brier: 0 = perfect, ≈0.667 = uninformed 3-way guess. Gaps with n < 20 are greyed — too few samples.",
+            color = C.dim, size = 9.sp, mono = false)
+    }
+}
+
+@Composable
+fun CalibrationCard(info: com.niftyengine.engine.model.CalibrationInfo, optionSamples: Int, onRefit: (() -> Unit)?) {
+    Card("Probability calibration", trailing = {
+        Chip(if (info.calibrated) "CALIBRATED" else "UNCALIBRATED", if (info.calibrated) C.green else C.amber)
+    }) {
+        Label(info.note, color = C.text, size = 11.sp, mono = false)
+        Spacer(Modifier.height(4.dp))
+        TableHeader("Horizon" to 0.8f, "Outcomes" to 1.1f, "Brier raw" to 1f, "Brier cal" to 1f)
+        com.niftyengine.engine.engines.ProbabilityCalibrator.HORIZONS.forEach { hz ->
+            val raw = info.holdoutBrierRaw[hz]; val cal = info.holdoutBrierCalibrated[hz]
+            TableRow(Triple("${hz}m", 0.8f, C.white), Triple("${info.samples[hz] ?: 0} / ${info.minSamples}", 1.1f,
+                if ((info.samples[hz] ?: 0) >= info.minSamples) C.green else C.amber),
+                Triple(raw?.let { "%.3f".format(it) } ?: "–", 1f, C.text),
+                Triple(cal?.let { "%.3f".format(it) } ?: "–", 1f, if (raw != null && cal != null && cal < raw) C.green else C.text))
+        }
+        KV("Option-outcome samples", "$optionSamples / 100")
+        Label("Isotonic regression per horizon and class, refitted from the log every 10 min. Brier columns are walk-forward: fitted on the oldest 70%, scored on the newest 30%.",
+            color = C.dim, size = 9.sp, mono = false)
+        if (onRefit != null) TextButtonLike("Refit now", onRefit)
+    }
+}
+
+@Composable
+private fun TextButtonLike(label: String, onClick: () -> Unit) =
+    Text(label, color = C.blue, fontSize = 12.sp, modifier = Modifier.padding(top = 6.dp).clickable { onClick() })
+
+@Composable
+private fun AuditDetail(r: com.niftyengine.engine.engines.PredictionRecord) {
+    Column(Modifier.fillMaxWidth().padding(start = 8.dp, bottom = 8.dp)) {
+        KV("Prediction ID", r.id)
+        KV("Engine / source", "${r.engineVersion.ifBlank { "≤3.1" }} · ${r.source}")
+        KV("Raw score B/b/R", "%.1f / %.1f / %.1f".format(r.pBull * 100, r.pBear * 100, r.pRange * 100))
+        if (r.calibrated) KV("Calibrated B/b/R", "%.1f / %.1f / %.1f".format(r.calPBull * 100, r.calPBear * 100, r.calPRange * 100))
+        KV("Composite / conflict", "%+.3f / %.0f%%".format(r.directionalScore, r.conflict * 100))
+        KV("Regime", r.regime + if (r.regimeReasons.isNotEmpty()) " — " + r.regimeReasons.joinToString("; ") else "")
+        KV("Expected move / σ", "%+.0f / %.0f pts (${r.horizonMinutes}m)".format(r.expectedMove, r.sigma))
+        KV("Data quality", if (r.dataQuality.isNaN()) "–" else "%.0f%%".format(r.dataQuality * 100))
+        r.circuitBreaker.forEach { Label("  breaker: $it", color = C.red, size = 10.sp) }
+        if (r.drivers.isNotEmpty()) {
+            Label("DRIVERS (score · weight · data conf · persistence · contribution)", color = C.dim, size = 9.sp)
+            r.drivers.forEach { d ->
+                Label("  %-20s %+.2f · %.0f · %.2f · %.2f · %+.2f".format(d.driver.label, d.score, d.weight, d.confidence, d.persistence, d.contribution),
+                    color = C.text, size = 10.sp)
+            }
+        }
+        if (r.signals.isNotEmpty()) {
+            Label("ENGINE SIGNALS", color = C.dim, size = 9.sp)
+            r.signals.forEach { (k, v) -> Label("  $k %+.2f (conf %.2f) %s".format(v.score, v.confidence, v.tags.take(3).joinToString(" ")), color = C.text, size = 10.sp) }
+        }
+        if (!r.strike.isNaN()) KV("Option", "%.0f %s @ %.2f · P(profit) %.0f%% · EV net %+.2f (gross %+.2f, cost %.2f)".format(
+            r.strike, r.optionType, r.premium, r.probProfit * 100, r.optionNetEv, r.optionGrossEv, r.optionCost))
+        if (r.failedChecks.isNotEmpty()) Label("Failed: " + r.failedChecks.joinToString("; "), color = C.amber, size = 10.sp)
+        if (r.feedStatus.isNotEmpty()) Label("Feeds: " + r.feedStatus.entries.joinToString("; ") { "${it.key} ${it.value.substringBefore(" ·")}" }, color = C.dim, size = 9.sp)
+        if (r.outcomes.isNotEmpty()) Label("Outcomes: " + r.outcomes.joinToString { o ->
+            "${o.minutes}m %+.0f (%s)%s".format(o.move, when (o.realized) { 1 -> "bull"; -1 -> "bear"; else -> "range" },
+                if (o.optionPrice.isNaN()) "" else " opt %.1f".format(o.optionPrice))
+        }, color = C.text, size = 10.sp)
+        if (r.config.isNotEmpty()) Label("Config: " + r.config.entries.joinToString(" ") { "${it.key}=${it.value}" }, color = C.dim, size = 9.sp)
     }
 }
 
 @Composable
 fun LogScreen(ui: UiState, vm: MainViewModel, onExport: () -> Unit) {
-    StatsCard("Live prediction performance", ui.stats)
+    CalibrationCard(ui.calibration, ui.optionCalibrationSamples) { vm.refitCalibration() }
+    StatsCard("Prediction performance (this data mode)", ui.stats)
     ReplayCard(ui, vm)
-    Card("Prediction log (${ui.records.size} recent)", trailing = {
+    var open by remember { mutableStateOf<String?>(null) }
+    Card("Prediction log (${ui.records.size} recent) · tap a row for the audit trail", trailing = {
         Text("Export", color = C.blue, fontSize = 12.sp, modifier = Modifier.padding(end = 12.dp).clickable { onExport() })
         Text("Clear", color = C.red, fontSize = 12.sp, modifier = Modifier.clickable { vm.clearLog() })
     }) {
@@ -82,13 +176,17 @@ fun LogScreen(ui: UiState, vm: MainViewModel, onExport: () -> Unit) {
         ui.records.take(60).forEach { r ->
             val o30 = r.outcomes.firstOrNull { it.minutes == 30 }
             val hit = o30?.let { it.realized == r.predictedClass }
-            TableRow(
-                Triple(Session.hhmm(r.timestamp), 0.8f, C.text),
-                Triple("%.0f".format(r.spot), 1f, C.white),
-                Triple("%.0f/%.0f/%.0f".format(r.pBull * 100, r.pBear * 100, r.pRange * 100), 1.4f, C.text),
-                Triple(r.decision.take(5), 0.9f, if (r.decision == "TRADE") C.green else C.dim),
-                Triple(o30?.let { "%+.0f".format(it.move) } ?: "…", 0.9f, when (hit) { true -> C.green; false -> C.red; null -> C.dim }),
-            )
+            Column(Modifier.fillMaxWidth().clickable { open = if (open == r.id) null else r.id }) {
+                TableRow(
+                    Triple(Session.hhmm(r.timestamp), 0.8f, C.text),
+                    Triple("%.0f".format(r.spot), 1f, C.white),
+                    Triple("%.0f/%.0f/%.0f".format(r.pBull * 100, r.pBear * 100, r.pRange * 100) + if (r.calibrated) "ᶜ" else "", 1.4f, C.text),
+                    Triple(r.decision.replace("PAPER_TRADE", "PAPER").replace("DATA_ERROR", "DATA✗").take(6), 0.9f,
+                        when (r.decision) { "TRADE" -> C.green; "PAPER_TRADE" -> C.blue; "DATA_ERROR" -> C.red; else -> C.dim }),
+                    Triple(o30?.let { "%+.0f".format(it.move) } ?: "…", 0.9f, when (hit) { true -> C.green; false -> C.red; null -> C.dim }),
+                )
+                if (open == r.id) AuditDetail(r)
+            }
         }
     }
 }
@@ -112,7 +210,13 @@ fun ReplayCard(ui: UiState, vm: MainViewModel) {
         Spacer(Modifier.height(6.dp))
         Button(onClick = { vm.runReplay(null, mode) }, enabled = !rp.running, modifier = Modifier.fillMaxWidth(),
             colors = ButtonDefaults.buttonColors(containerColor = C.blue)) { Text("Replay a simulated session", fontSize = 12.sp) }
-        if (ui.sessions.isEmpty()) Label("Recorded live sessions appear here (Settings → record live sessions).", color = C.dim, size = 10.sp)
+        Button(onClick = { vm.runWalkForward(mode) }, enabled = !rp.running && ui.sessions.size >= 2, modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
+            colors = ButtonDefaults.buttonColors(containerColor = C.violet)) {
+            Text("Walk-forward validate all ${ui.sessions.size} recorded sessions", fontSize = 12.sp)
+        }
+        Label("Walk-forward: each session is predicted with a calibration fitted only on earlier sessions — the honest test of whether 70% means 70%.",
+            color = C.dim, size = 10.sp, mono = false)
+        if (ui.sessions.isEmpty()) Label("Recorded live sessions appear here (Setup → record live sessions).", color = C.dim, size = 10.sp)
         ui.sessions.take(10).forEach { f: File ->
             Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth().padding(top = 4.dp)) {
                 Label(f.name.removePrefix("session-").removeSuffix(".jsonl") + " · %.1f MB".format(f.length() / 1e6), color = C.text, size = 11.sp, modifier = Modifier.weight(1f))
@@ -127,6 +231,7 @@ fun ReplayCard(ui: UiState, vm: MainViewModel) {
         }
         rp.error?.let { Label("Replay error: $it", color = C.red, size = 11.sp) }
     }
+    rp.walkForwardCalibration?.let { CalibrationCard(it, 0, null) }
     rp.result?.let { r ->
         StatsCard("Replay result · ${r.mode.name.lowercase().replace('_', ' ')} · ${r.outputs} snapshots, ${r.records.size} predictions", r.summaries)
     }
@@ -183,6 +288,18 @@ fun SettingsScreen(current: AppSettings, onSave: (AppSettings) -> Unit, onKiteLo
     var pmi by remember(current) { mutableStateOf(show(m.pmiManufacturing)) }
     var credit by remember(current) { mutableStateOf(show(m.creditGrowth)) }
     var liq by remember(current) { mutableStateOf(show(m.liquidityCr)) }
+    val dates = remember(current) { androidx.compose.runtime.mutableStateMapOf<String, String>().apply { putAll(current.macroDates) } }
+    var reqCal by remember(current) { mutableStateOf(current.requireCalibration) }
+    var minCalN by remember(current) { mutableStateOf(current.minCalibrationSamples.toString()) }
+    var confirm by remember(current) { mutableStateOf(current.confirmCycles.toString()) }
+    var minOptP by remember(current) { mutableStateOf((current.minOptionProfitProb * 100).toInt().toString()) }
+    var eventBump by remember(current) { mutableStateOf((current.eventThresholdBump * 100).toInt().toString()) }
+    var minDq by remember(current) { mutableStateOf((current.minDataQuality * 100).toInt().toString()) }
+    var brok by remember(current) { mutableStateOf(current.brokeragePerOrder.toString()) }
+    var stt by remember(current) { mutableStateOf(current.sttSellPct.toString()) }
+    var slip by remember(current) { mutableStateOf(current.slippageTicks.toString()) }
+    var lotSize by remember(current) { mutableStateOf(current.lotSize.toString()) }
+    var lots by remember(current) { mutableStateOf(current.lots.toString()) }
 
     fun build() = current.copy(
         mode = mode, refreshSeconds = num(refresh, 30.0).toInt().coerceIn(5, 600),
@@ -195,6 +312,14 @@ fun SettingsScreen(current: AppSettings, onSave: (AppSettings) -> Unit, onKiteLo
         macro = m.copy(repoRate = numOrNaN(repo), lastPolicyChangeBps = num(policy, 0.0), cpiYoY = numOrNaN(cpi), cpiPrevYoY = numOrNaN(cpiPrev),
             gdpGrowth = numOrNaN(gdp), gdpPrevGrowth = numOrNaN(gdpPrev), pmiManufacturing = numOrNaN(pmi),
             creditGrowth = numOrNaN(credit), liquidityCr = numOrNaN(liq)),
+        macroDates = dates.filterValues { it.isNotBlank() },
+        requireCalibration = reqCal, minCalibrationSamples = num(minCalN, 150.0).toInt().coerceIn(30, 5000),
+        confirmCycles = num(confirm, 2.0).toInt().coerceIn(1, 10),
+        minOptionProfitProb = (num(minOptP, 50.0) / 100).coerceIn(0.0, 0.95),
+        eventThresholdBump = (num(eventBump, 8.0) / 100).coerceIn(0.0, 0.3),
+        minDataQuality = (num(minDq, 70.0) / 100).coerceIn(0.0, 1.0),
+        brokeragePerOrder = num(brok, 20.0), sttSellPct = num(stt, 0.1), slippageTicks = num(slip, 1.0),
+        lotSize = num(lotSize, 65.0).toInt().coerceAtLeast(1), lots = num(lots, 1.0).toInt().coerceAtLeast(1),
     )
 
     Card("Data source") {
@@ -240,6 +365,25 @@ fun SettingsScreen(current: AppSettings, onSave: (AppSettings) -> Unit, onKiteLo
         Field("Max option bid/ask spread (%)", maxSpread) { maxSpread = it }
         Field("Min option OI", minOi, KeyboardType.Number) { minOi = it }
         Field("Min option volume", minVol, KeyboardType.Number) { minVol = it }
+        Field("Min option P(profit, net) (%)", minOptP, KeyboardType.Number) { minOptP = it }
+        Field("Event regime: raise probability threshold by (pts)", eventBump, KeyboardType.Number) { eventBump = it }
+        Field("Min data quality (%)", minDq, KeyboardType.Number) { minDq = it }
+        Field("Consecutive cycles before TRADE (hysteresis)", confirm, KeyboardType.Number) { confirm = it }
+    }
+    Card("Calibration") {
+        Toggle("Require calibrated probabilities for TRADE (else PAPER TRADE)", reqCal) { reqCal = it }
+        Field("Min outcomes per horizon before calibrating", minCalN, KeyboardType.Number) { minCalN = it }
+        Label("Predictions are logged every 5 min during market hours, so 150 outcomes ≈ 2 sessions per horizon. More is better; isotonic fits need data.",
+            color = C.dim, size = 10.sp, mono = false)
+    }
+    Card("Transaction costs (round trip)") {
+        Row { Column(Modifier.weight(1f).padding(end = 4.dp)) { Field("Brokerage ₹/order", brok) { brok = it } }
+            Column(Modifier.weight(1f)) { Field("STT % (sell)", stt) { stt = it } } }
+        Row { Column(Modifier.weight(1f).padding(end = 4.dp)) { Field("Lot size", lotSize, KeyboardType.Number) { lotSize = it } }
+            Column(Modifier.weight(1f)) { Field("Lots", lots, KeyboardType.Number) { lots = it } } }
+        Field("Slippage (ticks per side)", slip) { slip = it }
+        Label("Also applied: NSE txn 0.03503%, SEBI ₹10/cr, GST 18%, stamp 0.003% (buy). Check your broker's current charge sheet — statutory rates change.",
+            color = C.dim, size = 10.sp, mono = false)
     }
     Card("India macro (slow inputs)") {
         Label("Slow variables only add a capped bias (±0.30) and never create an intraday signal by themselves. Leave blank if unknown.",
@@ -254,6 +398,17 @@ fun SettingsScreen(current: AppSettings, onSave: (AppSettings) -> Unit, onKiteLo
         Row { Column(Modifier.weight(1f).padding(end = 4.dp)) { Field("Mfg PMI", pmi) { pmi = it } }
             Column(Modifier.weight(1f)) { Field("Credit growth %", credit) { credit = it } } }
         Field("System liquidity ₹ cr (+surplus)", liq) { liq = it }
+        Label("Release dates (yyyy-mm-dd). Values older than their release cycle are marked STALE; undated ones count as degraded.",
+            color = C.dim, size = 10.sp, mono = false)
+        com.niftyengine.app.store.MACRO_DATE_KEYS.chunked(2).forEach { pair ->
+            Row {
+                pair.forEachIndexed { i, k ->
+                    Column(Modifier.weight(1f).padding(end = if (i == 0) 4.dp else 0.dp)) {
+                        Field("$k date", dates[k] ?: "", KeyboardType.Text) { dates[k] = it }
+                    }
+                }
+            }
+        }
     }
     Card("App") {
         Toggle("Notify when trade filter passes", notify) { notify = it }

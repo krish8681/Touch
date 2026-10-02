@@ -55,6 +55,7 @@ object YahooClient {
         val prev = meta.optDouble("previousClose", meta.optDouble("chartPreviousClose", Double.NaN))
         return InstrumentData(
             symbol = name, last = lastPx, prevClose = prev,
+            asOf = meta.optLong("regularMarketTime", 0L) * 1000,
             open = candles.firstOrNull()?.o ?: Double.NaN,
             high = meta.optDouble("regularMarketDayHigh", Double.NaN), low = meta.optDouble("regularMarketDayLow", Double.NaN),
             volume = meta.optDouble("regularMarketVolume", 0.0),

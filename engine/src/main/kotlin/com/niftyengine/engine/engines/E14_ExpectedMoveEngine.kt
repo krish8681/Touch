@@ -5,6 +5,7 @@ import com.niftyengine.engine.core.Session
 import com.niftyengine.engine.model.DirectionResult
 import com.niftyengine.engine.model.Detail
 import com.niftyengine.engine.model.ExpectedMove
+import com.niftyengine.engine.model.MoveProb
 import kotlin.math.abs
 import kotlin.math.sqrt
 
@@ -66,6 +67,10 @@ class ExpectedMoveEngine {
             annualVolUsed = annual * mult,
             eventMultiplier = mult,
             components = comps,
+            // Move distribution: normal around the probability-weighted drift (model-based, not yet calibrated).
+            thresholds = listOf(50, 100, 150, 200).map { k ->
+                MoveProb(k, 1 - M.normCdf((k - drift) / sigma), M.normCdf((-k - drift) / sigma))
+            },
         )
     }
 }

@@ -62,7 +62,14 @@ class DirectionProbabilityEngine(private val state: EngineState, private val par
         return if (den <= 0) 0.0 else M.clamp(inputs.sumOf { w.getValue(it.driver) * it.confidence * it.score } / den)
     }
 
-    fun compute(inputs: List<DriverInput>, regime: Regime, regimeClass: RegimeClass, range: RangeInputs, commit: Boolean = true): DirectionResult {
+    /**
+     * @param qualityScore data-quality score 0..1 — confidence can never exceed it.
+     * @param concentration extra notes/penalty when the index move is carried by a few heavyweights.
+     */
+    fun compute(
+        inputs: List<DriverInput>, regime: Regime, regimeClass: RegimeClass, range: RangeInputs, commit: Boolean = true,
+        qualityScore: Double = 1.0, concentration: Pair<Double, String>? = null,
+    ): DirectionResult {
         val w = WEIGHTS.getValue(regimeClass)
         val contributions = inputs.map { inp ->
             val hist = state.driverHistory[inp.driver]?.toList().orEmpty()
@@ -106,7 +113,12 @@ class DirectionProbabilityEngine(private val state: EngineState, private val par
             0.15 * (if (priceConf) 1.0 else 0.0) + 0.15 * (if (derivConf) 1.0 else 0.0)
         if (regime == Regime.DIVERGENCE || regime == Regime.TRANSITION) cv -= 0.12
         if (regime == Regime.EVENT_SHOCK) cv -= 0.08
+        val extraConflicts = ArrayList<String>()
+        // Heavyweight concentration: a narrow, top-5-driven move deserves less confidence in broad direction.
+        if (concentration != null && concentration.first > 0) { cv -= concentration.first; extraConflicts += concentration.second }
         cv = M.clamp(cv, 0.0, 1.0)
+        val cap = M.clamp(qualityScore, 0.0, 1.0)
+        if (cv > cap) { cv = cap; extraConflicts += "Confidence capped at %.0f%% by data quality".format(cap * 100) }
         val level = when { cv >= 0.72 -> ConfidenceLevel.HIGH; cv >= 0.5 -> ConfidenceLevel.MEDIUM; else -> ConfidenceLevel.LOW }
         val conflictLevel = when { conflict >= 0.55 -> ConfidenceLevel.HIGH; conflict >= 0.3 -> ConfidenceLevel.MEDIUM; else -> ConfidenceLevel.LOW }
 
@@ -117,7 +129,8 @@ class DirectionProbabilityEngine(private val state: EngineState, private val par
             driverAgreement = agreement, conflict = conflict, conflictLevel = conflictLevel,
             priceConfirmation = priceConf, derivativeConfirmation = derivConf,
             drivers = contributions.sortedByDescending { abs(it.contribution) },
-            conflicts = conflicts,
+            conflicts = conflicts + extraConflicts,
+            qualityCap = cap,
         )
     }
 }

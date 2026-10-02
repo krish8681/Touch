@@ -1,4 +1,4 @@
-# NIFTY Direction Engine v3 — Android
+# NIFTY Direction Engine v3.2 — Android
 
 A **NIFTY market-intelligence and probability engine** for Android. It answers four questions in order:
 
@@ -10,8 +10,24 @@ A **NIFTY market-intelligence and probability engine** for Android. It answers f
 > Decision support only — not investment advice. Weights are starting engineering values, not validated
 > optima; use the prediction log and replay tools to measure before risking capital.
 
-**Install:** `release/NiftyDirectionEngine-v3.1.0.apk` (Android 8.0+, sideload / "install unknown apps").
+**Install:** `release/NiftyDirectionEngine-v3.2.0.apk` (Android 8.0+, sideload / "install unknown apps").
 It opens in **Simulator** mode (synthetic data, works offline/after hours). Switch to live data in **Setup**.
+
+## v3.2 — data integrity + calibration
+
+| Area | What it does |
+|------|--------------|
+| **Probability calibration** (`E19_ProbabilityCalibrator`) | Isotonic regression per horizon (5/15/30/60 min) and class, fitted on logged outcomes. Until a horizon has enough outcomes (default 150) probabilities are labelled **model score**, not probability. Walk-forward hold-out Brier (raw vs calibrated) is shown in the Log tab, with reliability buckets <50, 50–55 … 75–80, 80%+. |
+| **Data freshness** (`E01b_DataQualityEngine`) | Every input carries source, timestamp, age and status LIVE / DEGRADED / STALE / INVALID / MISSING / MANUAL (macro values with release dates). Stale inputs stop being drivers, degraded ones are down-weighted, and the weighted quality score caps confidence. |
+| **Circuit breaker** | NIFTY, futures or option chain missing/stale/invalid, a >2.5% jump between cycles, implausible basis, chain/spot mismatch, ATM IV ≤1% or ≥150%, ATM spread >10% ⇒ **DATA ERROR — NO TRADE**. |
+| **Direction ≠ option probability** | The option outcome model reports its own P(profit) and EV (calibrated separately against realised option P&L), and the trade filter checks it separately. |
+| **Transaction costs** (`TransactionCosts`) | Brokerage, STT, exchange, SEBI, GST, stamp duty and slippage. EV, breakeven and P(profit) are all net of these. Configurable in Setup. |
+| **Audit trail** | Each logged prediction stores every driver (score, weight, data confidence, persistence, contribution), every engine signal, regime reasons, raw + calibrated probabilities, feed statuses, the option economics, failed checks and the config. Tap a log row to inspect it. |
+| **Point-in-time validation** | Walk-forward replay across all recorded sessions: each session uses only a calibration fitted on earlier sessions. |
+| Also | Multi-horizon probability table, move distribution P(±50…±200), event regime raises the threshold (+8 pts), hysteresis (N consecutive cycles), stale option quotes rejected (Kite last-trade time), heavyweight-concentration confidence penalty, **PAPER TRADE** state when everything passes except calibration. |
+
+Deferred to v3.3+: AI-assisted news/event extraction, correlated-factor (latent factor) model, automatic macro-data updates,
+gamma/dealer regime, composite breadth, opening-session model, ML weight optimisation.
 
 ## Project layout
 
@@ -43,7 +59,9 @@ release/  prebuilt APK
 | 15 | `OptionSelectionEngine` | ITM→OTM candidates, Black-Scholes repricing under bull/bear/range scenarios, P(profit), P(touch), EV, liquidity/IV/theta/execution factors, hard filters |
 | 16 | `TradeDecisionEngine` | TRADE / WAIT / NO TRADE with every check shown |
 | 17 | `PredictionLogger` | logs each prediction, attaches 15/30/60-min outcomes (incl. option price), accuracy, Brier score, calibration buckets, per-driver hit rates |
-| 18 | `HistoricalReplayEngine` | Mode A market-only / Mode B full information, strict point-in-time (no future bars/news) |
+| 18 | `HistoricalReplayEngine` | Mode A market-only / Mode B full information, strict point-in-time (no future bars/news); walk-forward over many sessions |
+| 01b | `DataQualityEngine` | per-feed freshness/validity, quality score, circuit breaker |
+| 19 | `ProbabilityCalibrator` | isotonic calibration per horizon/class + option-outcome calibration, walk-forward hold-out check |
 
 `NiftyDirectionEngine` orchestrates one cycle; `sim/SimulatedMarket` generates a consistent synthetic market for demo/tests.
 

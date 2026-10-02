@@ -13,7 +13,10 @@ import com.niftyengine.app.store.SessionRecorder
 import com.niftyengine.app.store.SettingsStore
 import com.niftyengine.engine.NiftyDirectionEngine
 import com.niftyengine.engine.core.Session
+import com.niftyengine.engine.engines.CalibrationModel
 import com.niftyengine.engine.engines.HistoricalReplayEngine
+import com.niftyengine.engine.engines.ProbabilityCalibrator
+import com.niftyengine.engine.model.CalibrationInfo
 import com.niftyengine.engine.engines.PerformanceStats
 import com.niftyengine.engine.engines.PredictionLogger
 import com.niftyengine.engine.engines.PredictionRecord
@@ -43,6 +46,8 @@ data class ReplayState(
     val label: String = "",
     val result: HistoricalReplayEngine.Result? = null,
     val error: String? = null,
+    /** Set for walk-forward runs: calibration fitted from the replayed sessions. */
+    val walkForwardCalibration: CalibrationInfo? = null,
 )
 
 data class UiState(
@@ -57,6 +62,8 @@ data class UiState(
     val records: List<PredictionRecord> = emptyList(),
     val sessions: List<File> = emptyList(),
     val replay: ReplayState = ReplayState(),
+    val calibration: CalibrationInfo = CalibrationInfo(),
+    val optionCalibrationSamples: Int = 0,
 )
 
 class MainViewModel(app: Application) : AndroidViewModel(app) {
@@ -73,6 +80,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     private val notifier = Notifier(app)
 
     private var engine = NiftyDirectionEngine(_settings.value.engineConfig())
+    private var calibration = CalibrationModel()
+    private var lastFit = 0L
     private var provider: SnapshotProvider = makeProvider()
     private var loop: Job? = null
     private var lastLoggedBucket = -1L
@@ -81,6 +90,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     private val path = ArrayDeque<Triple<Long, Double, OptionChain?>>()
 
     init {
+        refitCalibration()
         refreshStats()
         start()
     }
@@ -140,7 +150,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         val bucket = o.timestamp / (5 * 60_000L)
         val sessionOpen = Session.isOpen(o.timestamp)
         if (sessionOpen && (bucket != lastLoggedBucket || o.decision.decision != lastDecision)) {
-            logger.record(o); lastLoggedBucket = bucket
+            logger.record(o, s.auditConfig()); lastLoggedBucket = bucket
         }
         val changed = logger.evaluate(o.timestamp) { r ->
             path.filter { it.first > r.timestamp }.map { (t, spot, chain) ->
@@ -149,14 +159,34 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             }
         }
         if (changed > 0) predictionStore.flush()
+        if (changed > 0 && System.currentTimeMillis() - lastFit > 10 * 60_000L) refitCalibration()
         if (s.recordSessions && s.mode != DataMode.SIMULATED && sessionOpen) runCatching { recorder.record(snap) }
-        if (s.notifyOnTrade && o.decision.decision == Decision.TRADE && lastDecision != Decision.TRADE) notifier.trade(o)
+        val alert = o.decision.decision == Decision.TRADE || o.decision.decision == Decision.PAPER_TRADE
+        if (s.notifyOnTrade && alert && lastDecision != o.decision.decision) notifier.trade(o)
         lastDecision = o.decision.decision
         refreshStats()
     }
 
+    /**
+     * Records from the same data family as the current mode: simulated predictions must never calibrate
+     * (or be mixed into the statistics of) live predictions.
+     */
+    private fun recordsForMode(): List<PredictionRecord> {
+        val sim = _settings.value.mode == DataMode.SIMULATED
+        return predictionStore.all().filter { it.source.startsWith("SIMULATED") == sim }
+    }
+
+    /** 19 — refit the probability calibrator from logged outcomes and hand it to the engine. */
+    fun refitCalibration() {
+        val fit = ProbabilityCalibrator.fit(recordsForMode(), _settings.value.minCalibrationSamples)
+        calibration = fit
+        engine.calibration = fit
+        lastFit = System.currentTimeMillis()
+        _ui.update { it.copy(calibration = fit.info, optionCalibrationSamples = fit.optionSamples) }
+    }
+
     fun refreshStats() {
-        val recs = predictionStore.all()
+        val recs = recordsForMode()
         _ui.update {
             it.copy(
                 stats = logger.horizons.map { h -> PerformanceStats.summarize(recs, h) },
@@ -177,9 +207,11 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         settingsStore.save(new)
         _settings.value = new
         if (old.kiteAccessToken != new.kiteAccessToken && new.mode == DataMode.LIVE_KITE) refreshNow()
-        if (old.mode != new.mode || old.engineConfig() != new.engineConfig()) {
+        if (old.mode != new.mode || old.engineConfig() != new.engineConfig() || old.minCalibrationSamples != new.minCalibrationSamples) {
             engine = NiftyDirectionEngine(new.engineConfig())
             if (old.mode != new.mode) { provider = makeProvider(); path.clear(); _ui.update { it.copy(chart = emptyList(), output = null) } }
+            refitCalibration()
+            refreshStats()
             refreshNow()
         }
     }
@@ -215,6 +247,32 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                     }
                 }
                 _ui.update { it.copy(replay = it.replay.copy(running = false, progress = 1f, result = result)) }
+            } catch (e: Exception) {
+                _ui.update { it.copy(replay = it.replay.copy(running = false, error = e.message)) }
+            }
+        }
+    }
+
+    /**
+     * Point-in-time validation across ALL recorded sessions (oldest first): each session is predicted with a
+     * calibration fitted only on the sessions before it.
+     */
+    fun runWalkForward(mode: ReplayMode) {
+        if (_ui.value.replay.running) return
+        viewModelScope.launch {
+            _ui.update { it.copy(replay = ReplayState(running = true, label = "Walk-forward · all recorded sessions")) }
+            try {
+                val wf = withContext(Dispatchers.Default) {
+                    val files = recorder.sessions().sortedBy { it.name }
+                    if (files.size < 2) throw IllegalStateException("Need at least 2 recorded sessions (have ${files.size})")
+                    val sessions = files.map { recorder.load(it) }.filter { it.size >= 20 }
+                    HistoricalReplayEngine(_settings.value.engineConfig()).runWalkForward(sessions, mode, recorder.newsArchive(),
+                        _settings.value.minCalibrationSamples) { done, total ->
+                        _ui.update { it.copy(replay = it.replay.copy(progress = done.toFloat() / total)) }
+                    }
+                }
+                _ui.update { it.copy(replay = it.replay.copy(running = false, progress = 1f, result = wf.result,
+                    label = "Walk-forward · ${wf.sessions} sessions", walkForwardCalibration = wf.finalCalibration.info)) }
             } catch (e: Exception) {
                 _ui.update { it.copy(replay = it.replay.copy(running = false, error = e.message)) }
             }

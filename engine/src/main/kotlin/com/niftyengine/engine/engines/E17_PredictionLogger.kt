@@ -1,16 +1,22 @@
 package com.niftyengine.engine.engines
 
 import com.niftyengine.engine.core.M
+import com.niftyengine.engine.model.DriverContribution
 import com.niftyengine.engine.model.EngineOutput
 import com.niftyengine.engine.model.Driver
 import kotlinx.serialization.Serializable
 import kotlin.math.abs
 import kotlin.math.pow
+import kotlin.math.sqrt
 
 /**
- * 17 — Prediction Logger.
- * Every prediction is saved with its inputs; 15/30/60 minutes later the actual outcome is attached.
- * This builds the labelled dataset for stage-3 weight/threshold/calibration tuning automatically.
+ * 17 — Prediction Logger / Audit Trail.
+ *
+ * Every logged prediction stores everything needed to reproduce *why* the app said what it said:
+ * all driver scores/weights/confidences, every engine signal, regime + reasons, raw and calibrated
+ * probabilities, data freshness, the option chosen with its gross/net economics, and every decision check.
+ * 5/15/30/60 minutes later the realised NIFTY move (and the option's price) is attached — the labelled
+ * dataset for calibration and weight tuning.
  */
 @Serializable
 data class Outcome(
@@ -20,15 +26,19 @@ data class Outcome(
     val high: Double,
     val low: Double,
     val optionPrice: Double = Double.NaN,
-    /** +1 bull, −1 bear, 0 range — realised class using the record's threshold. */
+    /** +1 bull, −1 bear, 0 range — realised class using the record's horizon-scaled threshold. */
     val realized: Int,
 )
+
+@Serializable
+data class SignalAudit(val score: Double, val confidence: Double, val tags: List<String> = emptyList())
 
 @Serializable
 data class PredictionRecord(
     val id: String,
     val timestamp: Long,
     val spot: Double,
+    /** RAW model scores (the calibrator is fitted on these, never on calibrated values). */
     val pBull: Double,
     val pBear: Double,
     val pRange: Double,
@@ -36,6 +46,7 @@ data class PredictionRecord(
     val confidenceValue: Double,
     val regime: String,
     val expectedMove: Double,
+    /** 1σ move for [horizonMinutes]. */
     val sigma: Double,
     val strike: Double = Double.NaN,
     val optionType: String = "",
@@ -51,6 +62,29 @@ data class PredictionRecord(
     val decision: String,
     val source: String,
     val outcomes: List<Outcome> = emptyList(),
+    // ---- v3.2 audit fields
+    val engineVersion: String = "",
+    val horizonMinutes: Int = 60,
+    val calPBull: Double = Double.NaN,
+    val calPBear: Double = Double.NaN,
+    val calPRange: Double = Double.NaN,
+    val calibrated: Boolean = false,
+    val regimeReasons: List<String> = emptyList(),
+    val drivers: List<DriverContribution> = emptyList(),
+    val signals: Map<String, SignalAudit> = emptyMap(),
+    val directionalScore: Double = Double.NaN,
+    val conflict: Double = Double.NaN,
+    val dataQuality: Double = Double.NaN,
+    val feedStatus: Map<String, String> = emptyMap(),
+    val circuitBreaker: List<String> = emptyList(),
+    val failedChecks: List<String> = emptyList(),
+    val probProfit: Double = Double.NaN,
+    val probProfitCalibrated: Double = Double.NaN,
+    val optionGrossEv: Double = Double.NaN,
+    val optionNetEv: Double = Double.NaN,
+    val optionCost: Double = Double.NaN,
+    val optionSpreadPct: Double = Double.NaN,
+    val config: Map<String, String> = emptyMap(),
 ) {
     val predictedClass: Int get() = when {
         pBull >= pBear && pBull >= pRange -> 1
@@ -72,15 +106,17 @@ class InMemoryPredictionStore : PredictionStore {
     override fun all(): List<PredictionRecord> = list.toList()
 }
 
-class PredictionLogger(private val store: PredictionStore, val horizons: List<Int> = listOf(15, 30, 60)) {
+class PredictionLogger(private val store: PredictionStore, val horizons: List<Int> = ProbabilityCalibrator.HORIZONS) {
     data class PricePoint(val t: Long, val price: Double, val optionPrice: Double = Double.NaN)
 
-    fun record(o: EngineOutput): PredictionRecord {
+    fun record(o: EngineOutput, config: Map<String, String> = emptyMap()): PredictionRecord {
         val best = o.options.best
+        val d = o.direction
+        val cal = d.decisionProbs(o.expectedMove.horizonMinutes)
         val r = PredictionRecord(
             id = "${o.timestamp}", timestamp = o.timestamp, spot = o.spot,
-            pBull = o.direction.pBull, pBear = o.direction.pBear, pRange = o.direction.pRange,
-            confidence = o.direction.confidence.name, confidenceValue = o.direction.confidenceValue,
+            pBull = d.pBull, pBear = d.pBear, pRange = d.pRange,
+            confidence = d.confidence.name, confidenceValue = d.confidenceValue,
             regime = o.regime.regime.name, expectedMove = o.expectedMove.expectedMovePoints, sigma = o.expectedMove.sigmaPoints,
             strike = best?.strike ?: Double.NaN, optionType = best?.type?.name ?: "", premium = best?.premium ?: Double.NaN,
             iv = best?.iv ?: Double.NaN, delta = best?.delta ?: Double.NaN,
@@ -89,8 +125,28 @@ class PredictionLogger(private val store: PredictionStore, val horizons: List<In
             breadth = o.signals["Breadth"]?.score ?: 0.0,
             globalScore = o.signals["Global risk"]?.score ?: 0.0,
             newsScore = o.signals["News"]?.score ?: 0.0,
-            driverScores = o.direction.drivers.associate { it.driver.name to it.score },
+            driverScores = d.drivers.associate { it.driver.name to it.score },
             decision = o.decision.decision.name, source = o.dataSource,
+            engineVersion = o.engineVersion, horizonMinutes = o.expectedMove.horizonMinutes,
+            calPBull = if (cal.calibrated) cal.pBull else Double.NaN,
+            calPBear = if (cal.calibrated) cal.pBear else Double.NaN,
+            calPRange = if (cal.calibrated) cal.pRange else Double.NaN,
+            calibrated = cal.calibrated,
+            regimeReasons = o.regime.reasons,
+            drivers = d.drivers,
+            signals = o.signals.mapValues { SignalAudit(it.value.score, it.value.confidence, it.value.tags) },
+            directionalScore = d.directionalScore, conflict = d.conflict,
+            dataQuality = o.dataQuality.score,
+            feedStatus = o.dataQuality.feeds.associate { it.name to "${it.status}${if (it.detail.isNotBlank()) " · ${it.detail}" else ""}" },
+            circuitBreaker = o.dataQuality.circuitBreaker,
+            failedChecks = o.decision.checks.filter { !it.passed }.map { "${it.name}: ${it.detail}" },
+            probProfit = best?.probProfit ?: Double.NaN,
+            probProfitCalibrated = best?.probProfitCalibrated ?: Double.NaN,
+            optionGrossEv = best?.grossExpectedValue ?: Double.NaN,
+            optionNetEv = best?.expectedValue ?: Double.NaN,
+            optionCost = best?.costPerUnit ?: Double.NaN,
+            optionSpreadPct = best?.spreadPct ?: Double.NaN,
+            config = config,
         )
         store.append(r)
         return r
@@ -116,22 +172,26 @@ class PredictionLogger(private val store: PredictionStore, val horizons: List<In
 
     fun outcomeFor(r: PredictionRecord, h: Int, path: List<PricePoint>): Outcome? {
         val end = r.timestamp + h * 60_000L
+        val tolerance = minOf(5 * 60_000L, (h * 60_000L * 0.4).toLong())
         val window = path.filter { it.t > r.timestamp && it.t <= end }
-        if (window.isEmpty() || window.last().t < end - 5 * 60_000L) return null
+        if (window.isEmpty() || window.last().t < end - tolerance) return null
         val px = window.last().price
         val move = px - r.spot
-        val thr = classThreshold(r)
+        val thr = classThreshold(r, h)
         return Outcome(h, px, move, window.maxOf { it.price }, window.minOf { it.price }, window.last().optionPrice,
             when { move > thr -> 1; move < -thr -> -1; else -> 0 })
     }
 
     companion object {
-        /** A move smaller than 0.35σ (or 0.1%) of the predicted horizon σ counts as "range". */
-        fun classThreshold(r: PredictionRecord): Double = maxOf(0.35 * r.sigma, r.spot * 0.001)
+        /** "Range" = |move| below 0.35σ of that horizon (σ scaled by √time from the record's horizon), floor 0.04%·√(h/15). */
+        fun classThreshold(r: PredictionRecord, h: Int = r.horizonMinutes): Double {
+            val sigmaH = r.sigma * sqrt(h.toDouble() / r.horizonMinutes.coerceAtLeast(1))
+            return maxOf(0.35 * sigmaH, r.spot * 0.0004 * sqrt(h / 15.0))
+        }
     }
 }
 
-/** Calibration / performance summary over logged predictions (stage 2 → stage 3 tuning input). */
+/** Calibration / performance summary over logged predictions. */
 object PerformanceStats {
     data class Bucket(val label: String, val n: Int, val avgPredicted: Double, val hitRate: Double)
     data class Summary(
@@ -142,13 +202,37 @@ object PerformanceStats {
         val directionalHitRate: Double,
         val tradeCount: Int,
         val tradeWinRate: Double,
+        /** Reliability of the RAW top-class score. */
         val buckets: List<Bucket>,
+        /** Reliability after calibration (only records that were calibrated when logged). */
+        val calibratedBuckets: List<Bucket>,
         val driverHitRates: Map<String, Double>,
+        /** Option-outcome model: predicted P(profit) vs realised net option profit. */
+        val optionBuckets: List<Bucket>,
     )
+
+    /** The bucket edges requested for calibration review. */
+    val EDGES = listOf(0.0 to 0.50, 0.50 to 0.55, 0.55 to 0.60, 0.60 to 0.65, 0.65 to 0.70, 0.70 to 0.75, 0.75 to 0.80, 0.80 to 1.01)
+
+    private fun label(lo: Double, hi: Double) = when {
+        lo == 0.0 -> "<50%"; hi > 1.0 -> "80%+"; else -> "%.0f–%.0f%%".format(lo * 100, hi * 100)
+    }
+
+    private fun bucketize(points: List<Pair<Double, Boolean>>): List<Bucket> = EDGES.map { (lo, hi) ->
+        val sel = points.filter { it.first >= lo && it.first < hi }
+        Bucket(label(lo, hi), sel.size, if (sel.isEmpty()) Double.NaN else sel.map { it.first }.average(),
+            if (sel.isEmpty()) Double.NaN else sel.count { it.second }.toDouble() / sel.size)
+    }
 
     fun summarize(records: List<PredictionRecord>, horizon: Int = 30): Summary {
         val done = records.mapNotNull { r -> r.outcomes.firstOrNull { it.minutes == horizon }?.let { r to it } }
-        if (done.isEmpty()) return Summary(horizon, 0, Double.NaN, Double.NaN, Double.NaN, 0, Double.NaN, emptyList(), emptyMap())
+        val opt = records.mapNotNull { r ->
+            if (r.probProfit.isNaN() || r.premium.isNaN()) return@mapNotNull null
+            val o = r.outcomes.firstOrNull { it.minutes == horizon } ?: return@mapNotNull null
+            if (o.optionPrice.isNaN()) return@mapNotNull null
+            r.probProfit to (o.optionPrice - r.premium - (if (r.optionCost.isNaN()) 0.0 else r.optionCost) > 0)
+        }
+        if (done.isEmpty()) return Summary(horizon, 0, Double.NaN, Double.NaN, Double.NaN, 0, Double.NaN, emptyList(), emptyList(), emptyMap(), bucketize(opt))
         val acc = done.count { (r, o) -> r.predictedClass == o.realized }.toDouble() / done.size
         val brier = done.map { (r, o) ->
             val y = doubleArrayOf(if (o.realized == 1) 1.0 else 0.0, if (o.realized == -1) 1.0 else 0.0, if (o.realized == 0) 1.0 else 0.0)
@@ -156,21 +240,21 @@ object PerformanceStats {
         }.average()
         val directional = done.filter { it.first.predictedClass != 0 }
         val dirHit = if (directional.isEmpty()) Double.NaN else directional.count { (r, o) -> r.predictedClass * o.move > 0 }.toDouble() / directional.size
-        val trades = done.filter { it.first.decision == "TRADE" }
+        val trades = done.filter { it.first.decision == "TRADE" || it.first.decision == "PAPER_TRADE" }
         val tradeWin = if (trades.isEmpty()) Double.NaN else trades.count { (r, o) ->
-            if (!o.optionPrice.isNaN() && !r.premium.isNaN()) o.optionPrice > r.premium else r.predictedClass * o.move > 0
+            if (!o.optionPrice.isNaN() && !r.premium.isNaN()) o.optionPrice - r.premium - (if (r.optionCost.isNaN()) 0.0 else r.optionCost) > 0
+            else r.predictedClass * o.move > 0
         }.toDouble() / trades.size
-        // Reliability: bucket the top directional probability and compare with realised hit rate.
-        val buckets = listOf(0.33 to 0.45, 0.45 to 0.55, 0.55 to 0.65, 0.65 to 0.75, 0.75 to 1.01).map { (lo, hi) ->
-            val sel = done.filter { (r, _) -> maxOf(r.pBull, r.pBear, r.pRange) in lo..<hi }
-            Bucket("%.0f–%.0f%%".format(lo * 100, minOf(hi, 1.0) * 100), sel.size,
-                if (sel.isEmpty()) Double.NaN else sel.map { maxOf(it.first.pBull, it.first.pBear, it.first.pRange) }.average(),
-                if (sel.isEmpty()) Double.NaN else sel.count { (r, o) -> r.predictedClass == o.realized }.toDouble() / sel.size)
+        val raw = done.map { (r, o) -> maxOf(r.pBull, r.pBear, r.pRange) to (r.predictedClass == o.realized) }
+        val cal = done.filter { it.first.calibrated && !it.first.calPBull.isNaN() }.map { (r, o) ->
+            val top = maxOf(r.calPBull, r.calPBear, r.calPRange)
+            val cls = when (top) { r.calPBull -> 1; r.calPBear -> -1; else -> 0 }
+            top to (cls == o.realized)
         }
         val driverHits = Driver.values().associate { d ->
             val sel = done.filter { abs(it.first.driverScores[d.name] ?: 0.0) > 0.2 }
             d.label to if (sel.size < 5) Double.NaN else sel.count { (r, o) -> M.clamp(r.driverScores.getValue(d.name)) * o.move > 0 }.toDouble() / sel.size
         }
-        return Summary(horizon, done.size, acc, brier, dirHit, trades.size, tradeWin, buckets, driverHits)
+        return Summary(horizon, done.size, acc, brier, dirHit, trades.size, tradeWin, bucketize(raw), bucketize(cal), driverHits, bucketize(opt))
     }
 }

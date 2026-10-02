@@ -65,12 +65,14 @@ object NseClient {
     data class IndexBoard(val nifty: InstrumentData?, val bank: InstrumentData?, val vix: InstrumentData?, val sectors: Map<Sector, InstrumentData>)
 
     fun allIndices(): IndexBoard {
-        val data = JSONObject(api("/api/allIndices")).getJSONArray("data")
+        val root = JSONObject(api("/api/allIndices"))
+        val data = root.getJSONArray("data")
+        val asOf = TimeParse.ist(root.optString("timestamp"))
         val map = HashMap<String, InstrumentData>()
         for (i in 0 until data.length()) {
             val o = data.getJSONObject(i)
             val name = o.optString("index", o.optString("indexSymbol"))
-            map[name] = InstrumentData(name, o.num("last"), o.num("previousClose"), o.num("open"), o.num("high"), o.num("low"))
+            map[name] = InstrumentData(name, o.num("last"), o.num("previousClose"), o.num("open"), o.num("high"), o.num("low"), asOf = asOf)
         }
         return IndexBoard(map["NIFTY 50"], map["NIFTY BANK"], map["INDIA VIX"],
             SECTOR_INDICES.mapNotNull { (n, s) -> map[n]?.let { s to it } }.toMap())
@@ -92,7 +94,8 @@ object NseClient {
             val sym = o.optString("symbol")
             if (sym.isBlank() || sym == "NIFTY 50" || o.optInt("priority", 0) == 1) continue
             out[sym] = InstrumentData(sym, o.num("lastPrice"), o.num("previousClose"), o.num("open"), o.num("dayHigh"), o.num("dayLow"),
-                o.num("totalTradedVolume").let { if (it.isNaN()) 0.0 else it }, freeFloatMcap = o.num("ffmc"))
+                o.num("totalTradedVolume").let { if (it.isNaN()) 0.0 else it }, freeFloatMcap = o.num("ffmc"),
+                asOf = TimeParse.ist(o.optString("lastUpdateTime")))
         }
         if (out.isEmpty()) throw IllegalStateException("no constituents in response")
         return out
@@ -156,7 +159,7 @@ object NseClient {
         }
         rows.sortBy { it.strike }
         val step = rows.zipWithNext { a, b -> b.strike - a.strike }.filter { it > 0 }.minOrNull() ?: 50.0
-        return OptionChain(underlying, expiry, expiryMillis(expiry), rows, step)
+        return OptionChain(underlying, expiry, expiryMillis(expiry), rows, step, asOf = TimeParse.ist(records.optString("timestamp")))
     }
 
     /** Near-month NIFTY futures (price, OI, ΔOI, volume). Current NextApi endpoint first, legacy fallback. */
@@ -216,7 +219,7 @@ object NseClient {
             if (cat.startsWith("FII") || cat.contains("FPI")) { fpi = net; date = o.optString("date") }
             if (cat.startsWith("DII")) dii = net
         }
-        return FlowData(fpiNetCr = fpi, diiNetCr = dii, date = date)
+        return FlowData(fpiNetCr = fpi, diiNetCr = dii, date = date, asOf = TimeParse.istDate(date))
     }
 
     private fun Double.nz() = if (isNaN()) 0.0 else this

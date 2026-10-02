@@ -34,16 +34,19 @@ class HistoricalReplayEngine(private val config: EngineConfig = EngineConfig()) 
         mode: ReplayMode,
         newsArchive: List<NewsItem> = emptyList(),
         predictEvery: Int = 1,
+        calibration: CalibrationModel = CalibrationModel(),
         onProgress: (Int, Int) -> Unit = { _, _ -> },
     ): Result {
         val sorted = snapshots.sortedBy { it.timestamp }
         val engine = NiftyDirectionEngine(config.copy(requireMarketOpen = false))
+        engine.calibration = calibration
         val store = InMemoryPredictionStore()
         val logger = PredictionLogger(store)
         val allNews = (newsArchive + sorted.flatMap { it.news }).distinctBy { it.id }
         var last: EngineOutput? = null
         sorted.forEachIndexed { i, raw ->
             val snap = pointInTime(raw, mode, allNews)
+            // Replayed snapshots are historical by construction: judge freshness relative to their own time.
             val out = engine.process(snap)
             last = out
             if (i % predictEvery == 0 && Session.isOpen(out.timestamp)) logger.record(out)
@@ -60,6 +63,31 @@ class HistoricalReplayEngine(private val config: EngineConfig = EngineConfig()) 
         }
         val recs = store.all()
         return Result(mode, recs, logger.horizons.map { PerformanceStats.summarize(recs, it) }, sorted.size, last)
+    }
+
+    data class WalkForward(val result: Result, val sessions: Int, val finalCalibration: CalibrationModel)
+
+    /**
+     * Walk-forward validation over several sessions (oldest first). Session k is predicted with a calibration
+     * fitted only on sessions 0..k-1 — the probabilities each prediction carries were knowable at that time.
+     */
+    fun runWalkForward(
+        sessions: List<List<MarketSnapshot>>, mode: ReplayMode, newsArchive: List<NewsItem> = emptyList(),
+        minSamples: Int = 150, onProgress: (Int, Int) -> Unit = { _, _ -> },
+    ): WalkForward {
+        val ordered = sessions.filter { it.isNotEmpty() }.sortedBy { s -> s.minOf { it.timestamp } }
+        val all = ArrayList<PredictionRecord>()
+        var cal = CalibrationModel()
+        var outputs = 0
+        var last: EngineOutput? = null
+        ordered.forEachIndexed { i, snaps ->
+            val r = run(snaps, mode, newsArchive, 1, cal)
+            all += r.records; outputs += r.outputs; last = r.lastOutput ?: last
+            cal = ProbabilityCalibrator.fit(all, minSamples)
+            onProgress(i + 1, ordered.size)
+        }
+        val horizons = ProbabilityCalibrator.HORIZONS
+        return WalkForward(Result(mode, all, horizons.map { PerformanceStats.summarize(all, it) }, outputs, last), ordered.size, cal)
     }
 
     /** Strip everything that was not knowable at the snapshot's timestamp. */

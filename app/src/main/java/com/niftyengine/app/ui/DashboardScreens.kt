@@ -17,6 +17,7 @@ import com.niftyengine.engine.core.Session
 import com.niftyengine.engine.model.ConfidenceLevel
 import com.niftyengine.engine.model.Decision
 import com.niftyengine.engine.model.EngineOutput
+import com.niftyengine.engine.model.FeedStatus
 import com.niftyengine.engine.model.OptionCandidate
 import kotlin.math.abs
 
@@ -42,11 +43,28 @@ fun DashboardScreen(ui: UiState) {
         Spacer(Modifier.height(8.dp))
         SpotChart(ui.chart)
     }
-    // Direction
-    Card("Direction · next ${o.expectedMove.horizonMinutes} min") {
-        ProbBar("BULL", d.pBull, C.green)
-        ProbBar("BEAR", d.pBear, C.red)
-        ProbBar("RANGE", d.pRange, C.amber)
+    if (o.dataQuality.circuitBreaker.isNotEmpty()) DataErrorBanner(o)
+    // Direction (calibrated probabilities when available, otherwise clearly labelled model scores)
+    val hp = d.decisionProbs(o.expectedMove.horizonMinutes)
+    Card("Direction · next ${o.expectedMove.horizonMinutes} min", trailing = {
+        Chip(if (hp.calibrated) "CALIBRATED" else "UNCALIBRATED · MODEL SCORE", if (hp.calibrated) C.green else C.amber)
+    }) {
+        ProbBar("BULL", hp.pBull, C.green)
+        ProbBar("BEAR", hp.pBear, C.red)
+        ProbBar("RANGE", hp.pRange, C.amber)
+        if (!hp.calibrated) Label(d.calibration.note, color = C.dim, size = 10.sp, mono = false)
+        else Label("Raw model score: bull %.0f / bear %.0f / range %.0f".format(d.pBull * 100, d.pBear * 100, d.pRange * 100), color = C.dim, size = 10.sp)
+        Spacer(Modifier.height(6.dp))
+        TableHeader("Horizon" to 1f, "Bull" to 0.8f, "Bear" to 0.8f, "Range" to 0.8f, "" to 1.2f)
+        d.horizons.forEach { h ->
+            TableRow(
+                Triple("${h.minutes} min", 1f, C.white),
+                Triple("%.0f%%".format(h.pBull * 100), 0.8f, C.green),
+                Triple("%.0f%%".format(h.pBear * 100), 0.8f, C.red),
+                Triple("%.0f%%".format(h.pRange * 100), 0.8f, C.amber),
+                Triple(if (h.calibrated) "calibrated" else "model score", 1.2f, if (h.calibrated) C.green else C.dim),
+            )
+        }
         Spacer(Modifier.height(8.dp))
         Row {
             Column(Modifier.weight(1f)) {
@@ -78,9 +96,19 @@ fun DashboardScreen(ui: UiState) {
                 Label("σ %.0f pts · vol %.1f%%".format(m.sigmaPoints, m.annualVolUsed * 100), color = C.text, size = 11.sp)
             }
         }
+        if (m.thresholds.isNotEmpty()) {
+            Spacer(Modifier.height(8.dp))
+            Label("MOVE DISTRIBUTION (model, not yet calibrated)", color = C.dim, size = 10.sp)
+            TableHeader("Move" to 1f, "P(≥ +)" to 1f, "P(≤ −)" to 1f)
+            m.thresholds.forEach { t ->
+                TableRow(Triple("${t.points} pts", 1f, C.white), Triple("%.0f%%".format(t.pUp * 100), 1f, C.green),
+                    Triple("%.0f%%".format(t.pDown * 100), 1f, C.red))
+            }
+        }
     }
     DecisionCard(o)
-    o.options.best?.let { Card("Option candidate") { CandidateSummary(it) } }
+    o.options.best?.let { Card("Option outcome model") { CandidateSummary(it) } }
+    DataQualityCard(o)
     Card("Driver agreement") {
         KV("Agreement", "%.0f%%".format(d.driverAgreement * 100), if (d.driverAgreement > 0.7) C.green else C.amber)
         KV("Conflict", "${d.conflictLevel} (%.0f%%)".format(d.conflict * 100), confColor(when (d.conflictLevel) {
@@ -102,7 +130,10 @@ fun EmptyState(ui: UiState) {
 @Composable
 fun DecisionCard(o: EngineOutput) {
     val dec = o.decision
-    val col = when (dec.decision) { Decision.TRADE -> C.green; Decision.WAIT -> C.amber; Decision.NO_TRADE -> C.red }
+    val col = when (dec.decision) {
+        Decision.TRADE -> C.green; Decision.PAPER_TRADE -> C.blue; Decision.WAIT -> C.amber
+        Decision.NO_TRADE -> C.red; Decision.DATA_ERROR -> C.red
+    }
     Card("Decision") {
         Label(dec.decision.name.replace('_', ' '), color = col, size = 24.sp, weight = FontWeight.Bold)
         Label(dec.headline, color = C.white, size = 12.sp)
@@ -115,7 +146,9 @@ fun DecisionCard(o: EngineOutput) {
             }
         }
         Spacer(Modifier.height(6.dp))
-        Label("Decision support only — not investment advice. Probabilities are model estimates and are not validated until the prediction log has enough outcomes.",
+        if (dec.decision == Decision.PAPER_TRADE) Label("Every check passed except probability calibration. Paper-trade and let the log build outcomes; don't use real money yet.",
+            color = C.blue, size = 10.sp, mono = false)
+        Label("Decision support only — not investment advice. Until calibrated, probabilities are model scores, not proven frequencies.",
             color = C.dim, size = 9.sp, mono = false)
     }
 }
@@ -128,10 +161,14 @@ fun CandidateSummary(c: OptionCandidate) {
     }
     Label("${c.moneyness} · score %.3f".format(c.score), color = C.dim, size = 11.sp)
     Spacer(Modifier.height(4.dp))
-    KV("P(profit @ horizon)", "%.0f%%".format(c.probProfit * 100))
+    Label("Separate from the direction model: strike, IV, theta, spread and costs decide the option's odds.", color = C.dim, size = 10.sp, mono = false)
+    KV("P(profit @ horizon, net)", "%.0f%% model".format(c.probProfit * 100) +
+        if (c.probProfitCalibrated.isNaN()) " · uncalibrated" else " · %.0f%% calibrated".format(c.probProfitCalibrated * 100))
     KV("P(touch strike)", "%.0f%%".format(c.probReach * 100))
-    KV("Expected value", "%+.1f (%+.1f%%)".format(c.expectedValue, c.expectedReturnPct), C.signed(c.expectedValue))
-    KV("Breakeven spot", "%,.0f".format(c.breakevenSpot))
+    KV("EV gross / costs", "%+.1f / −%.2f per unit".format(c.grossExpectedValue, c.costPerUnit))
+    KV("EV net", "%+.1f (%+.1f%%)".format(c.expectedValue, c.expectedReturnPct), C.signed(c.expectedValue))
+    KV("Breakeven spot (net)", "%,.0f".format(c.breakevenSpot))
+    if (!c.lastTradeAgeSec.isNaN()) KV("Last trade", "%.0fs ago".format(c.lastTradeAgeSec), if (c.lastTradeAgeSec > 120) C.amber else C.text)
     KV("IV / Delta", "%.1f%% / %.2f".format(c.iv, c.delta))
     KV("Theta/day / Vega", "%.1f / %.1f".format(c.thetaPerDay, c.vega))
     KV("Liquidity", "OI %,.0f · Vol %,.0f · spread %.1f%%".format(c.oi, c.volume, c.spreadPct),
@@ -266,5 +303,42 @@ fun NewsScreen(ui: UiState) {
             }
             if (e.sectors.isNotEmpty()) Label("Sectors: " + e.sectors.joinToString { it.label }, color = C.dim, size = 10.sp)
         }
+    }
+}
+
+fun statusColor(s: FeedStatus) = when (s) {
+    FeedStatus.LIVE -> C.green; FeedStatus.MANUAL -> C.blue; FeedStatus.DEGRADED -> C.amber
+    FeedStatus.STALE, FeedStatus.INVALID, FeedStatus.MISSING -> C.red
+}
+
+private fun age(sec: Double) = when {
+    sec.isNaN() -> "–"; sec < 120 -> "%.0fs".format(sec); sec < 7200 -> "%.0fm".format(sec / 60)
+    sec < 172800 -> "%.1fh".format(sec / 3600); else -> "%.0fd".format(sec / 86400)
+}
+
+@Composable
+fun DataErrorBanner(o: EngineOutput) {
+    Card("Data error — no trade") {
+        o.dataQuality.circuitBreaker.forEach { Label("✗ $it", color = C.red, size = 12.sp, weight = FontWeight.Bold) }
+        Label("The circuit breaker blocks recommendations instead of filling gaps with assumptions.", color = C.dim, size = 10.sp, mono = false)
+    }
+}
+
+@Composable
+fun DataQualityCard(o: EngineOutput) {
+    val q = o.dataQuality
+    Card("Data quality %.0f%%".format(q.score * 100), trailing = {
+        Chip(if (q.circuitBreaker.isEmpty()) "OK" else "BREAKER", if (q.circuitBreaker.isEmpty()) C.green else C.red)
+    }) {
+        o.direction.conflicts.firstOrNull { it.startsWith("Confidence capped") }?.let { Label(it, color = C.amber, size = 10.sp) }
+        TableHeader("Input" to 1.3f, "Status" to 1f, "Age" to 0.6f)
+        q.feeds.forEach { f ->
+            TableRow(Triple(f.name.removePrefix("Macro: "), 1.3f, if (f.critical) C.white else C.text),
+                Triple(f.status.name + if (f.critical) " *" else "", 1f, statusColor(f.status)), Triple(age(f.ageSeconds), 0.6f, C.dim))
+            if (f.detail.isNotBlank() && f.status != FeedStatus.LIVE) Label("   ${f.detail}", color = C.dim, size = 10.sp, maxLines = 2)
+        }
+        q.warnings.forEach { Label("• $it", color = C.amber, size = 10.sp) }
+        Label("* critical: missing/stale/invalid ⇒ DATA ERROR — NO TRADE. MANUAL = entered in Setup with a release date.",
+            color = C.dim, size = 9.sp, mono = false)
     }
 }

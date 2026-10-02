@@ -41,5 +41,9 @@ class LiveFeedTest {
         println("Move: ${out.expectedMove}")
         println("Best option: ${out.options.best}")
         println("Decision: ${out.decision.headline} ${out.decision.reasons}")
+        println("Data quality %.0f%% breaker=${out.dataQuality.circuitBreaker}".format(out.dataQuality.score * 100))
+        out.dataQuality.feeds.forEach { println("  " + it.name + ": " + it.status + " age=" + "%.0fs ".format(it.ageSeconds) + it.detail) }
+        println("Horizons: ${out.direction.horizons}")
+        println("Best option net: ${out.options.best?.let { "EV gross %.2f cost %.2f net %.2f".format(it.grossExpectedValue, it.costPerUnit, it.expectedValue) }}")
     }
 }

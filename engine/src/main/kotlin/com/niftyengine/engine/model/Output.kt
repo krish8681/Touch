@@ -92,7 +92,16 @@ data class DirectionResult(
     val derivativeConfirmation: Boolean,
     val drivers: List<DriverContribution>,
     val conflicts: List<String>,
+    /** Calibrated probabilities per horizon (5/15/30/60 min). Raw model scores when not yet calibrated. */
+    val horizons: List<HorizonProb> = emptyList(),
+    val calibration: CalibrationInfo = CalibrationInfo(),
+    /** Confidence cap applied because of data quality (1.0 = none). */
+    val qualityCap: Double = 1.0,
 ) {
+    /** Probabilities for the decision horizon: calibrated if available, else raw model score. */
+    fun decisionProbs(h: Int): HorizonProb = horizons.filter { it.calibrated }.minByOrNull { kotlin.math.abs(it.minutes - h) }
+        ?.takeIf { it.minutes == h } ?: HorizonProb(h, pBull, pBear, pRange, false)
+
     val bias: Int get() = when {
         pBull > pBear && pBull > pRange -> 1
         pBear > pBull && pBear > pRange -> -1
@@ -100,6 +109,28 @@ data class DirectionResult(
     }
     val topProbability: Double get() = maxOf(pBull, pBear, pRange)
 }
+
+@Serializable
+data class HorizonProb(val minutes: Int, val pBull: Double, val pBear: Double, val pRange: Double, val calibrated: Boolean) {
+    val top: Double get() = maxOf(pBull, pBear, pRange)
+}
+
+@Serializable
+data class CalibrationInfo(
+    val calibrated: Boolean = false,
+    /** Evaluated samples per horizon behind the fit. */
+    val samples: Map<Int, Int> = emptyMap(),
+    val minSamples: Int = 150,
+    /** Walk-forward Brier score on the hold-out slice: raw vs calibrated, per horizon. */
+    val holdoutBrierRaw: Map<Int, Double> = emptyMap(),
+    val holdoutBrierCalibrated: Map<Int, Double> = emptyMap(),
+    val fittedAt: Long = 0L,
+    val note: String = "Uncalibrated: probabilities are model scores until enough outcomes are logged",
+)
+
+/** P(NIFTY move over the horizon ≥ +pts) or ≤ −pts. */
+@Serializable
+data class MoveProb(val points: Int, val pUp: Double, val pDown: Double)
 
 @Serializable
 data class ExpectedMove(
@@ -115,6 +146,7 @@ data class ExpectedMove(
     val annualVolUsed: Double,
     val eventMultiplier: Double,
     val components: List<Detail>,
+    val thresholds: List<MoveProb> = emptyList(),
 )
 
 @Serializable
@@ -152,6 +184,13 @@ data class OptionCandidate(
     val moneyness: String,
     val passedFilters: Boolean,
     val filterFailures: List<String>,
+    /** Expected value before charges/slippage (premium points per unit). [expectedValue] is net of them. */
+    val grossExpectedValue: Double = Double.NaN,
+    /** Round-trip brokerage + STT + exchange + SEBI + GST + stamp + slippage, per unit. */
+    val costPerUnit: Double = 0.0,
+    val lastTradeAgeSec: Double = Double.NaN,
+    /** P(profit) mapped through the option-outcome calibrator (NaN until enough option outcomes). */
+    val probProfitCalibrated: Double = Double.NaN,
 )
 
 @Serializable
@@ -165,7 +204,15 @@ data class OptionAnalysis(
 )
 
 @Serializable
-enum class Decision { TRADE, WAIT, NO_TRADE }
+enum class Decision {
+    TRADE,
+    /** Every check passes except probability calibration: log it, paper-trade it, don't risk money. */
+    PAPER_TRADE,
+    WAIT,
+    NO_TRADE,
+    /** Circuit breaker: required data missing, stale or invalid. */
+    DATA_ERROR,
+}
 
 @Serializable
 data class TradeDecision(
@@ -195,6 +242,34 @@ data class EngineOutput(
     val events: List<NewsEvent>,
     val dataSource: String,
     val feedStatus: Map<String, String>,
+    val dataQuality: DataQualityReport = DataQualityReport(),
+    val engineVersion: String = "",
+)
+
+@Serializable
+enum class FeedStatus { LIVE, DEGRADED, STALE, INVALID, MISSING, MANUAL }
+
+@Serializable
+data class FeedQuality(
+    val name: String,
+    val status: FeedStatus,
+    val source: String,
+    /** Source timestamp (epoch ms), 0 if unknown. */
+    val asOf: Long,
+    val ageSeconds: Double,
+    /** Required for any trade recommendation. */
+    val critical: Boolean,
+    val detail: String = "",
+)
+
+@Serializable
+data class DataQualityReport(
+    val feeds: List<FeedQuality> = emptyList(),
+    /** 0..1 weighted share of usable inputs. */
+    val score: Double = 1.0,
+    /** Non-empty ⇒ circuit breaker tripped (DATA ERROR — NO TRADE). */
+    val circuitBreaker: List<String> = emptyList(),
+    val warnings: List<String> = emptyList(),
 )
 
 @Serializable

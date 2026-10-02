@@ -34,7 +34,29 @@ data class AppSettings(
         gdpGrowth = Double.NaN, gdpPrevGrowth = Double.NaN, pmiManufacturing = Double.NaN,
         creditGrowth = Double.NaN, liquidityCr = Double.NaN,
     ),
+    /** Release date (yyyy-MM-dd) per macro field — drives MANUAL/STALE status. */
+    val macroDates: Map<String, String> = emptyMap(),
+    // ---- v3.2 integrity / calibration / costs
+    val requireCalibration: Boolean = true,
+    val minCalibrationSamples: Int = 150,
+    val confirmCycles: Int = 2,
+    val minOptionProfitProb: Double = 0.50,
+    val eventThresholdBump: Double = 0.08,
+    val minDataQuality: Double = 0.70,
+    val brokeragePerOrder: Double = 20.0,
+    val sttSellPct: Double = 0.1,
+    val slippageTicks: Double = 1.0,
+    val lotSize: Int = 65,
+    val lots: Int = 1,
 ) {
+    fun macroInputs(): MacroInputs = macro.copy(
+        source = "manual (Setup)",
+        releasedAt = macroDates.mapNotNull { (k, v) ->
+            runCatching { java.time.LocalDate.parse(v.trim()).atTime(12, 0).atZone(com.niftyengine.engine.core.Session.IST).toInstant().toEpochMilli() }
+                .getOrNull()?.let { k to it }
+        }.toMap(),
+    )
+
     /** Kite access tokens expire daily around 06:00 IST. */
     fun kiteLoginNeeded(now: Long = System.currentTimeMillis()): Boolean {
         if (mode != DataMode.LIVE_KITE) return false
@@ -49,6 +71,19 @@ data class AppSettings(
         horizonMinutes = horizonMinutes, minProbability = minProbability, minConfidence = minConfidence,
         minExpectedMovePts = minExpectedMovePts, requireMarketOpen = mode != DataMode.SIMULATED,
         maxSpreadPct = maxSpreadPct, minOi = minOi, minVolume = minVolume,
+        costs = com.niftyengine.engine.core.TransactionCosts(brokeragePerOrder = brokeragePerOrder, sttSellPct = sttSellPct,
+            slippageTicks = slippageTicks, lotSize = lotSize, lots = lots),
+        minOptionProfitProb = minOptionProfitProb, eventThresholdBump = eventThresholdBump, minDataQuality = minDataQuality,
+        confirmCycles = confirmCycles, requireCalibration = requireCalibration,
+    )
+
+    /** Key settings copied into each logged prediction (audit trail). */
+    fun auditConfig(): Map<String, String> = mapOf(
+        "mode" to mode.name, "horizon" to "$horizonMinutes", "minProb" to "$minProbability", "minConf" to minConfidence.name,
+        "minMove" to "$minExpectedMovePts", "maxSpread" to "$maxSpreadPct", "minOptionProb" to "$minOptionProfitProb",
+        "eventBump" to "$eventThresholdBump", "minDataQuality" to "$minDataQuality", "confirmCycles" to "$confirmCycles",
+        "requireCalibration" to "$requireCalibration", "lotSize" to "$lotSize", "lots" to "$lots",
+        "brokerage" to "$brokeragePerOrder", "stt" to "$sttSellPct", "slippageTicks" to "$slippageTicks",
     )
 }
 
@@ -77,6 +112,18 @@ class SettingsStore(context: Context) {
             kiteApiSecret = p.getString("kiteSecret", "")!!,
             kiteAccessToken = p.getString("kiteToken", "")!!,
             kiteTokenDate = p.getString("kiteTokenDate", "")!!,
+            macroDates = MACRO_DATE_KEYS.mapNotNull { k -> p.getString("md_$k", null)?.takeIf { it.isNotBlank() }?.let { k to it } }.toMap(),
+            requireCalibration = p.getBoolean("reqCal", def.requireCalibration),
+            minCalibrationSamples = p.getInt("minCalN", def.minCalibrationSamples),
+            confirmCycles = p.getInt("confirm", def.confirmCycles),
+            minOptionProfitProb = d("minOptP", def.minOptionProfitProb),
+            eventThresholdBump = d("eventBump", def.eventThresholdBump),
+            minDataQuality = d("minDQ", def.minDataQuality),
+            brokeragePerOrder = d("brok", def.brokeragePerOrder),
+            sttSellPct = d("stt", def.sttSellPct),
+            slippageTicks = d("slip", def.slippageTicks),
+            lotSize = p.getInt("lotSize", def.lotSize),
+            lots = p.getInt("lots", def.lots),
             macro = MacroInputs(
                 repoRate = d("m_repo", def.macro.repoRate),
                 lastPolicyChangeBps = d("m_policy", def.macro.lastPolicyChangeBps),
@@ -104,6 +151,14 @@ class SettingsStore(context: Context) {
             .putString("m_gdp", n(s.macro.gdpGrowth)).putString("m_gdpPrev", n(s.macro.gdpPrevGrowth))
             .putString("m_pmi", n(s.macro.pmiManufacturing)).putString("m_credit", n(s.macro.creditGrowth))
             .putString("m_liq", n(s.macro.liquidityCr))
+            .putBoolean("reqCal", s.requireCalibration).putInt("minCalN", s.minCalibrationSamples).putInt("confirm", s.confirmCycles)
+            .putString("minOptP", s.minOptionProfitProb.toString()).putString("eventBump", s.eventThresholdBump.toString())
+            .putString("minDQ", s.minDataQuality.toString()).putString("brok", s.brokeragePerOrder.toString())
+            .putString("stt", s.sttSellPct.toString()).putString("slip", s.slippageTicks.toString())
+            .putInt("lotSize", s.lotSize).putInt("lots", s.lots)
+            .also { e -> MACRO_DATE_KEYS.forEach { k -> e.putString("md_$k", s.macroDates[k] ?: "") } }
             .apply()
     }
 }
+
+val MACRO_DATE_KEYS = listOf("repoRate", "cpiYoY", "gdpGrowth", "pmiManufacturing", "creditGrowth", "liquidityCr")

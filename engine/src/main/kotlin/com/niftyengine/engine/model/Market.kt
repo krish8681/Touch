@@ -31,6 +31,8 @@ data class InstrumentData(
     val daily: List<Candle> = emptyList(),
     /** Free-float market cap if the source publishes it (NSE `ffmc`). Used to derive live index weights. */
     val freeFloatMcap: Double = Double.NaN,
+    /** Source timestamp of [last] (epoch ms). 0 = unknown (treated as degraded by the data-quality engine). */
+    val asOf: Long = 0L,
 ) {
     val changePct: Double get() = if (prevClose > 0) (last - prevClose) / prevClose * 100.0 else 0.0
 }
@@ -47,6 +49,7 @@ data class FuturesData(
     val volume: Double = 0.0,
     /** Today's futures bars with OI (e.g. Kite historical `oi=1`), ascending. Optional. */
     val intraday: List<FuturesBar> = emptyList(),
+    val asOf: Long = 0L,
 )
 
 @Serializable
@@ -62,6 +65,8 @@ data class OptionLeg(
     val ltp: Double = 0.0,
     val bid: Double = 0.0,
     val ask: Double = 0.0,
+    /** Seconds since this contract last traded (Kite `last_trade_time`); NaN if the feed doesn't say. */
+    val lastTradeAgeSec: Double = Double.NaN,
 )
 
 @Serializable
@@ -79,6 +84,7 @@ data class OptionChain(
     val expiryMillis: Long,
     val rows: List<OptionStrikeRow>,
     val strikeStep: Double = 50.0,
+    val asOf: Long = 0L,
 )
 
 @Serializable
@@ -125,6 +131,9 @@ data class MacroInputs(
     /** Banking system liquidity, ₹ crore. Positive = surplus. */
     val liquidityCr: Double = Double.NaN,
     val tradeBalanceBn: Double = Double.NaN,
+    /** Release/as-of date per field name (e.g. "cpiYoY" → epoch ms). Values without a date are treated as undated MANUAL inputs. */
+    val releasedAt: Map<String, Long> = emptyMap(),
+    val source: String = "manual",
 )
 
 @Serializable
@@ -136,6 +145,7 @@ data class FlowData(
     val fpi5dCr: Double = Double.NaN,
     val dii5dCr: Double = Double.NaN,
     val date: String = "",
+    val asOf: Long = 0L,
 )
 
 @Serializable

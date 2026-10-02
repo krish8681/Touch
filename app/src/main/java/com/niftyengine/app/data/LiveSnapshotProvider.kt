@@ -199,7 +199,7 @@ class LiveSnapshotProvider(private val cacheDir: File, private val settings: () 
 
         MarketSnapshot(
             timestamp = now, nifty = nifty, bankNifty = bank, vix = vix, futures = fut, optionChain = optChain,
-            constituents = stocks, sectors = sectors, global = glob, macro = s.macro, flows = flows.get(),
+            constituents = stocks, sectors = sectors, global = glob, macro = s.macroInputs(), flows = flows.get(),
             news = n?.items ?: emptyList(),
             source = if (kiteLive) "LIVE · Kite (+NSE/Yahoo/RSS)" else "LIVE · NSE+Yahoo",
             feedStatus = status,

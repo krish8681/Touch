@@ -3,6 +3,10 @@ package com.niftyengine.engine
 import com.niftyengine.engine.core.EngineState
 import com.niftyengine.engine.core.Session
 import com.niftyengine.engine.engines.BreadthEngine
+import com.niftyengine.engine.engines.CalibrationModel
+import com.niftyengine.engine.engines.DataQualityEngine
+import com.niftyengine.engine.engines.ProbabilityCalibrator
+import kotlin.math.abs
 import com.niftyengine.engine.engines.DataCollector
 import com.niftyengine.engine.engines.DataNormalizer
 import com.niftyengine.engine.engines.DirectionProbabilityEngine
@@ -37,7 +41,15 @@ data class EngineConfig(
     val maxSpreadPct: Double = 3.0,
     val minOi: Double = 2_000.0,
     val minVolume: Double = 500.0,
+    val costs: com.niftyengine.engine.core.TransactionCosts = com.niftyengine.engine.core.TransactionCosts(),
+    val minOptionProfitProb: Double = 0.50,
+    val eventThresholdBump: Double = 0.08,
+    val minDataQuality: Double = 0.70,
+    val confirmCycles: Int = 2,
+    val requireCalibration: Boolean = true,
 )
+
+const val ENGINE_VERSION = "3.2.0"
 
 /**
  * NIFTY Direction Engine v3 — orchestrates modules 02–16 for one snapshot.
@@ -66,9 +78,19 @@ class NiftyDirectionEngine(val config: EngineConfig = EngineConfig()) {
     private val direction = DirectionProbabilityEngine(state)
     private val move = ExpectedMoveEngine()
     private val optionSelect = OptionSelectionEngine(
-        OptionSelectionEngine.Filters(minOi = config.minOi, minVolume = config.minVolume, maxSpreadPct = config.maxSpreadPct))
+        OptionSelectionEngine.Filters(minOi = config.minOi, minVolume = config.minVolume, maxSpreadPct = config.maxSpreadPct), config.costs)
     private val decision = TradeDecisionEngine(TradeDecisionEngine.Params(
-        config.minProbability, config.minConfidence, config.minExpectedMovePts, config.requireMarketOpen))
+        minProbability = config.minProbability, minConfidence = config.minConfidence, minExpectedMovePts = config.minExpectedMovePts,
+        requireMarketOpen = config.requireMarketOpen, minOptionProfitProb = config.minOptionProfitProb,
+        eventThresholdBump = config.eventThresholdBump, minDataQuality = config.minDataQuality,
+        confirmCycles = config.confirmCycles, requireCalibration = config.requireCalibration))
+    private val quality = DataQualityEngine()
+    private var prevSpot = Double.NaN
+    private var prevSpotT = 0L
+
+    /** Fitted calibration (from the prediction log). Replace whenever a new fit is available. */
+    var calibration: CalibrationModel = CalibrationModel()
+        set(value) { field = value; optionSelect.optionCalibrator = value.optionFn() }
 
     fun process(raw: MarketSnapshot): EngineOutput {
         val wall = raw.timestamp
@@ -84,38 +106,56 @@ class NiftyDirectionEngine(val config: EngineConfig = EngineConfig()) {
         )
         recordTicks(s, now)
         val health = DataCollector.health(s)
+        // 01b — freshness/validity of every input; ages are measured against wall-clock time.
+        val dq = quality.assess(s, wall, prevSpot, prevSpotT)
+        if (s.nifty.last > 0) { prevSpot = s.nifty.last; prevSpotT = wall }
 
         val st = structure.analyze(s, now, sessionStart)
         val hw = weights.analyze(s)
         val sec = sectors.analyze(s, hw.contributionBySector, now, sessionStart)
-        val br = breadth.analyze(s, hw.report, now, sessionStart)
+        val br = quality.gate(breadth.analyze(s, hw.report, now, sessionStart), dq)
         val fu = futures.analyze(s, now)
         val op = options.analyze(s, now)
         val vx = vix.analyze(s, now, sessionStart)
         val gl = global.analyze(s, now, sessionStart)
         val mc = macro.analyze(s, now, sessionStart)
-        val fl = flows.analyze(s)
+        val fl = quality.gate(flows.analyze(s), dq)
         val nw = news.analyze(s.news, now, st.series, s.nifty.prevClose, s.nifty.last)
+        // Stale/invalid inputs stop acting as live drivers; degraded ones are down-weighted.
+        val stSig = quality.gate(st.signal, dq); val hwSig = quality.gate(hw.signal, dq); val secSig = quality.gate(sec.signal, dq)
+        val fuSig = quality.gate(fu.signal, dq); val opSig = quality.gate(op.signal, dq); val vxSig = quality.gate(vx.signal, dq)
+        val glSig = quality.gate(gl.signal, dq); val nwSig = quality.gate(nw.signal, dq)
 
-        val derivatives = blend("Derivatives", fu.signal, op.signal, 0.5)
-        val sectorDriver = blend("Sector+heavyweight", hw.signal, sec.signal, 0.5)
+        val derivatives = blend("Derivatives", fuSig, opSig, 0.5)
+        val sectorDriver = blend("Sector+heavyweight", hwSig, secSig, 0.5)
         val inputs = listOf(
-            DriverInput(Driver.PRICE, st.signal.score, st.signal.confidence),
+            DriverInput(Driver.PRICE, stSig.score, stSig.confidence),
             DriverInput(Driver.DERIVATIVES, derivatives.score, derivatives.confidence),
             DriverInput(Driver.SECTOR, sectorDriver.score, sectorDriver.confidence),
-            DriverInput(Driver.GLOBAL, gl.signal.score, gl.signal.confidence),
+            DriverInput(Driver.GLOBAL, glSig.score, glSig.confidence),
             DriverInput(Driver.BREADTH, br.score, br.confidence),
-            DriverInput(Driver.VIX, vx.signal.score, vx.signal.confidence),
+            DriverInput(Driver.VIX, vxSig.score, vxSig.confidence),
             DriverInput(Driver.MACRO, mc.signal.score, mc.signal.confidence),
             DriverInput(Driver.FLOWS, fl.score, fl.confidence),
-            DriverInput(Driver.NEWS, nw.signal.score, nw.signal.confidence),
+            DriverInput(Driver.NEWS, nwSig.score, nwSig.confidence),
         )
         val prelim = direction.preliminary(inputs)
         val rg = regime.classify(MarketRegimeEngine.Inputs(prelim, st, fu, op, vx, br.score, derivatives.score,
             hw.report.fakeBreadth, nw), now)
         val insideOr = !st.orHigh.isNaN() && s.nifty.last <= st.orHigh && s.nifty.last >= st.orLow
-        val dir = direction.compute(inputs, rg.regime, rg.regimeClass,
-            DirectionProbabilityEngine.RangeInputs(st.adx, op.rangeEvidence, vx.state, insideOr))
+        val hwr = hw.report
+        val prevClose = s.nifty.prevClose.takeIf { it > 0 } ?: s.nifty.last
+        val concentration = if (abs(hwr.totalContributionPts) > prevClose * 0.003 && (hwr.fakeBreadth || abs(hwr.heavyweightDependence) > 0.8))
+            0.08 to "Heavyweight concentration: top 5 carry %.0f%% of a %+.0f pt move".format(hwr.heavyweightDependence * 100, hwr.totalContributionPts)
+        else null
+        val rawDir = direction.compute(inputs, rg.regime, rg.regimeClass,
+            DirectionProbabilityEngine.RangeInputs(st.adx, op.rangeEvidence, vx.state, insideOr),
+            qualityScore = dq.score, concentration = concentration)
+        // 19 — calibrated probabilities per horizon (raw scores flagged uncalibrated until enough outcomes).
+        val dir = rawDir.copy(
+            horizons = calibration.allHorizons(rawDir.pBull, rawDir.pBear, rawDir.pRange, ProbabilityCalibrator.HORIZONS),
+            calibration = calibration.info,
+        )
         state.pushDirection(now, dir.directionalScore)
 
         val horizon = if (Session.isOpen(wall)) config.horizonMinutes.coerceAtMost(Session.minutesToClose(now).toInt().coerceAtLeast(15))
@@ -127,14 +167,16 @@ class NiftyDirectionEngine(val config: EngineConfig = EngineConfig()) {
             freshMajorEvent = nw.events.any { it.magnitude >= 0.6 && it.decay > 0.5 },
             globalStress = gl.globalVolStress, momentum = st.pressure,
         ), dir)
-        val oa = optionSelect.analyze(s.optionChain, s.optionChain?.underlying?.takeIf { it > 0 } ?: s.nifty.last, wall, dir, em, op.atmIv)
+        val oa = optionSelect.analyze(s.optionChain, s.optionChain?.underlying?.takeIf { it > 0 } ?: s.nifty.last, wall, dir, em, op.atmIv,
+            dir.decisionProbs(em.horizonMinutes))
         val shockAge = nw.shock?.let { (now - it.firstSeen) / 60_000.0 }
-        val td = decision.decide(dir, rg, em, oa, Session.isOpen(wall), shockAge)
+        val majorEvent = nw.events.any { it.magnitude >= 0.7 && now - it.firstSeen <= 120 * 60_000L && it.confidence >= 0.4 }
+        val td = decision.decide(dir, rg, em, oa, Session.isOpen(wall), shockAge, dq, majorEvent)
 
         val signals = linkedMapOf(
-            st.signal.name to st.signal, hw.signal.name to hw.signal, sec.signal.name to sec.signal,
-            br.name to br, fu.signal.name to fu.signal, op.signal.name to op.signal, vx.signal.name to vx.signal,
-            gl.signal.name to gl.signal, mc.signal.name to mc.signal, fl.name to fl, nw.signal.name to nw.signal,
+            stSig.name to stSig, hwSig.name to hwSig, secSig.name to secSig,
+            br.name to br, fuSig.name to fuSig, opSig.name to opSig, vxSig.name to vxSig,
+            glSig.name to glSig, mc.signal.name to mc.signal, fl.name to fl, nwSig.name to nwSig,
         )
         val feed = LinkedHashMap(s.feedStatus)
         feed["Coverage"] = "%.0f%%".format(health.coverage * 100) + if (health.missing.isEmpty()) "" else " (missing: ${health.missing.joinToString()})"
@@ -142,7 +184,7 @@ class NiftyDirectionEngine(val config: EngineConfig = EngineConfig()) {
             timestamp = wall, spot = s.nifty.last, spotChangePct = s.nifty.changePct,
             signals = signals, regime = rg, direction = dir, expectedMove = em, options = oa, decision = td,
             heavyweights = hw.report, sectors = sec.rows, events = nw.events,
-            dataSource = s.source, feedStatus = feed,
+            dataSource = s.source, feedStatus = feed, dataQuality = dq, engineVersion = ENGINE_VERSION,
         )
     }
 

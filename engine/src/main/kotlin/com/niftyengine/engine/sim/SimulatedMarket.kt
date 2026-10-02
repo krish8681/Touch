@@ -249,7 +249,26 @@ class SimulatedMarket(seed: Long = 7L, startDate: LocalDate = LocalDate.now(Sess
         return snapshot()
     }
 
-    fun snapshot(): MarketSnapshot {
+    fun snapshot(): MarketSnapshot = stamp(rawSnapshot())
+
+    /** Simulated feeds are always "fresh": stamp every input with the snapshot time. */
+    private fun stamp(s: MarketSnapshot): MarketSnapshot {
+        val ts = s.timestamp
+        val day = 86_400_000L
+        return s.copy(
+            nifty = s.nifty.copy(asOf = ts), bankNifty = s.bankNifty?.copy(asOf = ts), vix = s.vix?.copy(asOf = ts),
+            futures = s.futures?.copy(asOf = ts), optionChain = s.optionChain?.copy(asOf = ts),
+            constituents = s.constituents.mapValues { it.value.copy(asOf = ts) },
+            sectors = s.sectors.mapValues { it.value.copy(asOf = ts) },
+            global = s.global.mapValues { it.value.copy(asOf = ts) },
+            flows = s.flows?.copy(asOf = ts - day),
+            macro = s.macro.copy(source = "simulated", releasedAt = mapOf(
+                "repoRate" to ts - 20 * day, "cpiYoY" to ts - 18 * day, "gdpGrowth" to ts - 30 * day,
+                "pmiManufacturing" to ts - 2 * day, "creditGrowth" to ts - 10 * day, "liquidityCr" to ts - day)),
+        )
+    }
+
+    private fun rawSnapshot(): MarketSnapshot {
         val ts = t(minute)
         val niftyOpen = niftyBars.firstOrNull()?.o ?: nifty
         val niftyData = InstrumentData("NIFTY 50", nifty, niftyPrev, niftyOpen, niftyBars.maxOfOrNull { it.h } ?: nifty,

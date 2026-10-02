@@ -200,13 +200,16 @@ class KiteMarketData(private val api: KiteApi, private val cacheDir: File) {
         val futures: FuturesData?, val chain: OptionChain?,
     )
 
+    /** Kite quote timestamp ("yyyy-MM-dd HH:mm:ss" IST); falls back to last_trade_time. */
+    private fun ts(q: JSONObject): Long = TimeParse.ist(q.optString("timestamp")).takeIf { it > 0 } ?: TimeParse.ist(q.optString("last_trade_time"))
+
     private fun inst(q: JSONObject?, name: String): InstrumentData? = q?.let {
         val ohlc = it.optJSONObject("ohlc") ?: JSONObject()
         InstrumentData(name, it.optDouble("last_price"), ohlc.optDouble("close"), ohlc.optDouble("open"),
-            ohlc.optDouble("high"), ohlc.optDouble("low"), it.optDouble("volume", 0.0))
+            ohlc.optDouble("high"), ohlc.optDouble("low"), it.optDouble("volume", 0.0), asOf = ts(it))
     }
 
-    private fun leg(q: JSONObject?, isCall: Boolean, spot: Double, k: Double, tYears: Double): OptionLeg {
+    private fun leg(q: JSONObject?, isCall: Boolean, spot: Double, k: Double, tYears: Double, now: Long): OptionLeg {
         if (q == null) return OptionLeg()
         val depth = q.optJSONObject("depth")
         val bid = depth?.optJSONArray("buy")?.optJSONObject(0)?.optDouble("price", 0.0) ?: 0.0
@@ -214,8 +217,10 @@ class KiteMarketData(private val api: KiteApi, private val cacheDir: File) {
         val ltp = q.optDouble("last_price", 0.0)
         val mid = if (bid > 0 && ask > 0) (bid + ask) / 2 else ltp
         val iv = if (mid > 0) BlackScholes.impliedVol(isCall, spot, k, tYears, mid) * 100 else Double.NaN
+        val lastTrade = TimeParse.ist(q.optString("last_trade_time"))
         return OptionLeg(oi = q.optDouble("oi", 0.0), changeOi = 0.0, volume = q.optDouble("volume", 0.0),
-            iv = iv, ltp = ltp, bid = bid, ask = ask)
+            iv = iv, ltp = ltp, bid = bid, ask = ask,
+            lastTradeAgeSec = if (lastTrade > 0) ((now - lastTrade) / 1000.0).coerceAtLeast(0.0) else Double.NaN)
     }
 
     /**
@@ -253,7 +258,8 @@ class KiteMarketData(private val api: KiteApi, private val cacheDir: File) {
         val futures = fut?.let { f ->
             q[f.key]?.let { fq ->
                 FuturesData(f.tradingSymbol, f.expiry.toString(), fq.optDouble("last_price"),
-                    fq.optJSONObject("ohlc")?.optDouble("close") ?: Double.NaN, fq.optDouble("oi", 0.0), Double.NaN, fq.optDouble("volume", 0.0))
+                    fq.optJSONObject("ohlc")?.optDouble("close") ?: Double.NaN, fq.optDouble("oi", 0.0), Double.NaN, fq.optDouble("volume", 0.0),
+                    asOf = ts(fq))
             }
         }
         val chain = if (expiry == null || optKeys.isEmpty() || spot.isNaN()) null else {
@@ -263,10 +269,11 @@ class KiteMarketData(private val api: KiteApi, private val cacheDir: File) {
             val rows = byStrike.keys.sorted().map { k ->
                 val ce = byStrike[k]!!.firstOrNull { it.type == "CE" }
                 val pe = byStrike[k]!!.firstOrNull { it.type == "PE" }
-                OptionStrikeRow(k, leg(ce?.let { q[it.key] }, true, spot, k, tY), leg(pe?.let { q[it.key] }, false, spot, k, tY))
+                OptionStrikeRow(k, leg(ce?.let { q[it.key] }, true, spot, k, tY, now), leg(pe?.let { q[it.key] }, false, spot, k, tY, now))
             }
             val step = rows.zipWithNext { a, b -> b.strike - a.strike }.filter { it > 0 }.minOrNull() ?: 50.0
-            OptionChain(spot, expiry.format(DateTimeFormatter.ofPattern("dd-MMM-yyyy", java.util.Locale.ENGLISH)), expMs, rows, step)
+            val chainTs = optKeys.mapNotNull { q[it.key]?.let(::ts) }.filter { it > 0 }.maxOrNull() ?: 0L
+            OptionChain(spot, expiry.format(DateTimeFormatter.ofPattern("dd-MMM-yyyy", java.util.Locale.ENGLISH)), expMs, rows, step, asOf = chainTs)
         }
         return Bundle(
             nifty = nifty,
