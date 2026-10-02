@@ -31,7 +31,7 @@ import java.util.Calendar;
 
 public class MainActivity extends Activity implements Brain.Listener {
     static final String[] TABS = {"AI", "Today", "Evidence", "Options", "Market", "News", "Record"};
-    static final String[] ICONS = {"↗", "◉", "≡", "⊞", "◍", "✎", "✓"};
+    static final String[] ICONS = {"✦", "◉", "≡", "⊞", "◍", "✎", "✓"};
 
     private Prefs prefs;
     private Store store;
@@ -68,31 +68,45 @@ public class MainActivity extends Activity implements Brain.Listener {
 
         // top bar
         LinearLayout bar = Ui.row(this);
-        bar.setPadding(Ui.dp(this, 16), Ui.dp(this, 10), Ui.dp(this, 10), Ui.dp(this, 6));
+        bar.setPadding(Ui.dp(this, 16), Ui.dp(this, 12), Ui.dp(this, 10), Ui.dp(this, 6));
+        TextView logo = Ui.text(this, "N", 16, 0xFFFFFFFF, true);
+        logo.setGravity(Gravity.CENTER);
+        logo.setBackground(Ui.gradient(Ui.dp(this, 12), 0, Ui.CYAN, Ui.ACCENT2));
+        bar.addView(logo, new LinearLayout.LayoutParams(Ui.dp(this, 36), Ui.dp(this, 36)));
         LinearLayout title = Ui.col(this);
-        title.addView(Ui.text(this, "Nifty Direction", 19, Ui.TEXT, true));
-        title.addView(Ui.text(this, BuildInfo.VERSION + " · 1H · 3H · 6H · next day", 10, Ui.DIM, false));
+        title.setPadding(Ui.dp(this, 10), 0, 0, 0);
+        title.addView(Ui.text(this, "Nifty Direction", 17, Ui.TEXT, true));
+        title.addView(Ui.text(this, BuildInfo.VERSION + " · 15 min → 1 week", 10.5f, Ui.DIM, false));
         bar.addView(title, Ui.weight(1));
         loginPill = Ui.pill(this, "Log in", Ui.AMBER);
         loginPill.setOnClickListener(v -> onLoginPill());
         bar.addView(loginPill, Ui.wrap());
-        refreshBtn = Ui.text(this, "⟳", 24, Ui.CYAN, true);
-        refreshBtn.setPadding(Ui.dp(this, 14), 0, Ui.dp(this, 6), 0);
+        refreshBtn = Ui.text(this, "⟳", 20, Ui.CYAN, true);
+        refreshBtn.setGravity(Gravity.CENTER);
+        refreshBtn.setBackground(Ui.round(Ui.alpha(Ui.CYAN, 0x1A), Ui.dp(this, 18), 0, 0));
+        LinearLayout.LayoutParams rlp = new LinearLayout.LayoutParams(Ui.dp(this, 36), Ui.dp(this, 36));
+        rlp.leftMargin = Ui.dp(this, 8);
+        refreshBtn.setLayoutParams(rlp);
         refreshBtn.setOnClickListener(v -> refresh());
-        bar.addView(refreshBtn, Ui.wrap());
-        TextView gear = Ui.text(this, "⚙", 22, Ui.DIM, false);
-        gear.setPadding(Ui.dp(this, 10), 0, Ui.dp(this, 4), 0);
+        bar.addView(refreshBtn);
+        TextView gear = Ui.text(this, "⚙", 18, Ui.DIM, false);
+        gear.setGravity(Gravity.CENTER);
+        gear.setBackground(Ui.round(0x14FFFFFF, Ui.dp(this, 18), 0, 0));
+        LinearLayout.LayoutParams glp = new LinearLayout.LayoutParams(Ui.dp(this, 36), Ui.dp(this, 36));
+        glp.leftMargin = Ui.dp(this, 8);
+        gear.setLayoutParams(glp);
         gear.setOnClickListener(v -> startActivity(new Intent(this, SettingsActivity.class)));
-        bar.addView(gear, Ui.wrap());
+        bar.addView(gear);
         shell.addView(bar, Ui.matchW());
 
         status = Ui.text(this, "", 11, Ui.DIM, false);
-        status.setPadding(Ui.dp(this, 16), 0, Ui.dp(this, 16), Ui.dp(this, 6));
+        status.setPadding(Ui.dp(this, 16), Ui.dp(this, 2), Ui.dp(this, 16), Ui.dp(this, 8));
         shell.addView(status, Ui.matchW());
 
         scroll = new ScrollView(this);
         page = Ui.col(this);
-        page.setPadding(Ui.dp(this, 12), Ui.dp(this, 4), Ui.dp(this, 12), Ui.dp(this, 12));
+        page.setPadding(Ui.dp(this, 14), Ui.dp(this, 4), Ui.dp(this, 14), Ui.dp(this, 16));
+        scroll.setVerticalScrollBarEnabled(false);
         scroll.addView(page);
         FrameLayout body = new FrameLayout(this);
         body.addView(scroll);
@@ -100,12 +114,18 @@ public class MainActivity extends Activity implements Brain.Listener {
 
         // bottom tabs
         LinearLayout nav = Ui.row(this);
-        nav.setBackgroundColor(Ui.PANEL);
-        nav.setPadding(0, Ui.dp(this, 6), 0, Ui.dp(this, 8));
+        android.graphics.drawable.GradientDrawable navBg = new android.graphics.drawable.GradientDrawable();
+        navBg.setColor(Ui.PANEL);
+        navBg.setCornerRadii(new float[]{Ui.dp(this, 22), Ui.dp(this, 22), Ui.dp(this, 22), Ui.dp(this, 22), 0, 0, 0, 0});
+        navBg.setStroke(1, 0x14FFFFFF);
+        nav.setBackground(navBg);
+        nav.setElevation(Ui.dp(this, 8));
+        nav.setPadding(Ui.dp(this, 6), Ui.dp(this, 8), Ui.dp(this, 6), Ui.dp(this, 10));
         for (int i = 0; i < TABS.length; i++) {
             final int k = i;
             TextView t = Ui.text(this, ICONS[i] + "\n" + TABS[i], 10, Ui.DIM, true);
             t.setGravity(Gravity.CENTER);
+            t.setPadding(0, Ui.dp(this, 6), 0, Ui.dp(this, 6));
             t.setOnClickListener(v -> { tab = k; scroll.scrollTo(0, 0); render(); });
             tabViews[i] = t;
             nav.addView(t, Ui.weight(1));
@@ -148,6 +168,7 @@ public class MainActivity extends Activity implements Brain.Listener {
     private final IntelPage.Actions fcActions = new IntelPage.Actions() {
         @Override public void update() { fcUpdate(); }
         @Override public void train() { fcTrain(); }
+        @Override public void redraw() { scroll.scrollTo(0, 0); render(); }
     };
 
     /** Keeps the forecast fresh: every 5 minutes in market hours, hourly otherwise; weekly retrain outside market hours. */
@@ -279,7 +300,10 @@ public class MainActivity extends Activity implements Brain.Listener {
     }
 
     private void render() {
-        for (int i = 0; i < tabViews.length; i++) tabViews[i].setTextColor(i == tab ? Ui.CYAN : Ui.DIM);
+        for (int i = 0; i < tabViews.length; i++) {
+            tabViews[i].setTextColor(i == tab ? Ui.TEXT : Ui.DIM);
+            tabViews[i].setBackground(i == tab ? Ui.gradient(Ui.dp(this, 14), 0, Ui.alpha(Ui.CYAN, 0x38), Ui.alpha(Ui.ACCENT2, 0x38)) : null);
+        }
         final int keepY = scroll.getScrollY();
         scroll.post(() -> scroll.scrollTo(0, keepY));
         page.removeAllViews();

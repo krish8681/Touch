@@ -1,4 +1,4 @@
-# Nifty Direction Pure 2.1 (Android)
+# Nifty Direction Pure 2.2 (Android)
 
 A **Nifty 50 direction engine** on Zerodha Kite. It does not guess "up or down". It **classifies** the market the way desks do:
 which side the evidence favours right now, how strongly, and how much of the evidence agrees.
@@ -32,6 +32,14 @@ Blend (smooth by minute): before the open structure 85% / live 15%, then live 30
 Each factor's weight = base × source trust (Kite / NSE 1.0, Yahoo 0.8, Gemini 0.6, typed 0.5, word list 0.35) × freshness × learnt multiplier (needs 100 readings: about 70 sessions with the app open at 9:45 and 11:30; ±15% until 400 readings, ±40% after).
 Regime: enter a side at ±25, keep it until ±15 (hysteresis). CONFLICT when structure and live are both ≥30 and opposite (confidence halved).
 NO EDGE when evidence is weak or mixed; RANGE only with 2+ real range signs.
+
+## Pure 2.2 — new look
+- **New theme across the app:** deep-navy background, glass cards with soft gradients, blue→violet accents, rounded 20dp corners, modern type. Bottom tabs highlight the selected tab with a pill.
+- **AI tab redesigned around one question — where is Nifty likely going, and can I act on it?**
+  - **Hero card:** price, day change and regime, a **probability ring**, the current signal with **confidence dots** and signal quality, a one-sentence plain-English summary, and a green "strong enough" / amber "no trade" banner.
+  - **Forecasts:** one row per horizon with a big arrow and %, confidence dots, a range chip and an **up / flat / down bar**. Tap a row to open Why? (bars showing each factor's push), What changed?, the outlook numbers and the test result.
+  - **Three sections** instead of one long scroll: **Overview** (hero, forecasts, drivers, event risk), **Insights** (what changed, news events with tier and persistence chips, cross-market chains, today's timeline, who moved Nifty, learnt links) and **Health** (data-quality bars, source conflicts, track record with calibration bars, the weight heat map, the training report).
+  - A friendly three-step start screen before the first training.
 
 ## Pure 2.1 — wider data, event chains, three-way outlook
 1. **More sources:** official feeds from the Fed, ECB, Bank of England, Bank of Japan, US BEA and PIB, NSE filings (kept only for Nifty 50 companies), and Google News searches for the 15 heaviest constituents (3 requests). All go through the same de-duplication and source tiers. BLS and the US Treasury block automated readers, so they are not included.
