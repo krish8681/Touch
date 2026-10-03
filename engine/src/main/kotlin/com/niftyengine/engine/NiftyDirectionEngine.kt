@@ -49,9 +49,11 @@ data class EngineConfig(
     val minDataQuality: Double = 0.70,
     val confirmCycles: Int = 2,
     val requireCalibration: Boolean = true,
+    /** Historical market-only backtest: no option chain/news/global exist for past days, so only NIFTY is critical. */
+    val marketOnlyBacktest: Boolean = false,
 )
 
-const val ENGINE_VERSION = "4.1.0"
+const val ENGINE_VERSION = "4.2.0"
 
 /**
  * NIFTY Direction Engine v3 — orchestrates modules 02–16 for one snapshot.
@@ -88,7 +90,7 @@ class NiftyDirectionEngine(val config: EngineConfig = EngineConfig()) {
         requireMarketOpen = config.requireMarketOpen, minOptionProfitProb = config.minOptionProfitProb,
         eventThresholdBump = config.eventThresholdBump, minDataQuality = config.minDataQuality,
         confirmCycles = config.confirmCycles, requireCalibration = config.requireCalibration))
-    private val quality = DataQualityEngine()
+    private val quality = DataQualityEngine(if (config.marketOnlyBacktest) setOf("NIFTY") else setOf("NIFTY", "Futures", "Options"))
     private var prevSpot = Double.NaN
     private var prevSpotT = 0L
 
@@ -103,10 +105,12 @@ class NiftyDirectionEngine(val config: EngineConfig = EngineConfig()) {
         val now = if (!Session.isOpen(wall) && lastBar != null && lastBar < wall && wall - lastBar < 5 * 86_400_000L) lastBar else wall
         state.rollDay(now)
         val sessionStart = Session.sessionStart(now)
+        val sessionDay = Session.zdt(now).toLocalDate()
         // Daily history must end before the analysed session (previous-day levels, percentiles).
         val s = raw.copy(
-            nifty = raw.nifty.copy(daily = raw.nifty.daily.filter { it.t < sessionStart }),
-            vix = raw.vix?.let { v -> v.copy(daily = v.daily.filter { it.t < sessionStart }) },
+            // By DATE: some feeds stamp daily candles at 00:00, which is earlier than 09:15 of the same day.
+            nifty = raw.nifty.copy(daily = raw.nifty.daily.filter { Session.zdt(it.t).toLocalDate() < sessionDay }),
+            vix = raw.vix?.let { v -> v.copy(daily = v.daily.filter { Session.zdt(it.t).toLocalDate() < sessionDay }) },
         )
         recordTicks(s, now)
         val health = DataCollector.health(s)

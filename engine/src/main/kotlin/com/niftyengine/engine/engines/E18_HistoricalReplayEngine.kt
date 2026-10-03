@@ -96,7 +96,7 @@ class HistoricalReplayEngine(private val config: EngineConfig = EngineConfig()) 
         val open = Session.sessionStart(t)
         fun clip(d: InstrumentData) = d.copy(
             intraday = d.intraday.filter { it.t <= t },
-            daily = d.daily.filter { it.t < open },
+            daily = d.daily.filter { Session.zdt(it.t).toLocalDate() < Session.zdt(t).toLocalDate() },
         )
         val news = when (mode) {
             ReplayMode.MARKET_ONLY -> emptyList()

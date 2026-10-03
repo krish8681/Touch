@@ -169,7 +169,8 @@ private fun AuditDetail(r: com.niftyengine.engine.engines.PredictionRecord) {
 }
 
 @Composable
-fun LogScreen(ui: UiState, vm: MainViewModel, onExport: () -> Unit) {
+fun LogScreen(ui: UiState, vm: MainViewModel, onExport: () -> Unit, onShare: (File) -> Unit = {}) {
+    BacktestCard(ui.backtest, vm, onShare)
     CalibrationCard(ui.calibration, ui.optionCalibrationSamples) { vm.refitCalibration() }
     StatsCard("Prediction performance (this data mode)", ui.stats)
     ReplayCard(ui, vm)
@@ -444,4 +445,62 @@ fun SettingsScreen(current: AppSettings, onSave: (AppSettings) -> Unit, onKiteLo
     Button(onClick = { onSave(build()) }, modifier = Modifier.fillMaxWidth().height(48.dp),
         colors = ButtonDefaults.buttonColors(containerColor = C.green)) { Text("Save settings", color = androidx.compose.ui.graphics.Color.Black, fontWeight = FontWeight.Bold) }
     Spacer(Modifier.height(24.dp).width(1.dp))
+}
+
+@Composable
+fun BacktestCard(bt: BacktestState, vm: MainViewModel, onShare: (File) -> Unit) {
+    Card("Kite historical backtest (market-only)") {
+        Label("Replays real NIFTY minute data every 5 min through the engine (no look-ahead), with walk-forward calibration, " +
+            "and compares it with two baselines: base rates (climatology) and 30-min momentum. Needs today's Kite login. " +
+            "Options, news, GIFT and global data don't exist historically, so this tests the market-only core.",
+            color = C.dim, size = 10.sp, mono = false)
+        Spacer(Modifier.height(6.dp))
+        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            listOf(1, 3, 6, 12).forEach { m ->
+                OutlinedButton(onClick = { vm.runBacktest(m) }, enabled = !bt.running) { Text("${m}M", color = C.green, fontSize = 11.sp) }
+            }
+            if (bt.running) OutlinedButton(onClick = { vm.cancelBacktest() }) { Text("Stop", color = C.red, fontSize = 11.sp) }
+        }
+        if (bt.running || bt.label.isNotBlank()) {
+            Label(bt.label, color = C.text, size = 10.sp, maxLines = 2)
+            LinearProgressIndicator(progress = { bt.progress }, modifier = Modifier.fillMaxWidth().padding(top = 4.dp), color = C.green, trackColor = C.s2)
+        }
+        bt.error?.let { Label("✗ $it", color = C.red, size = 11.sp) }
+        val r = bt.report ?: return@Card
+        Spacer(Modifier.height(8.dp))
+        Label("${r.from} → ${r.to} · ${r.days} days · ${r.predictions} predictions · %.0f s".format(r.elapsedMs / 1000.0), color = C.white, size = 11.sp)
+        Spacer(Modifier.height(4.dp))
+        Label("DOES THE MODEL BEAT THE BASELINES?", color = C.dim, size = 10.sp)
+        TableHeader("H" to 0.5f, "N" to 0.7f, "Model" to 0.8f, "Momtm" to 0.8f, "Brier" to 0.8f, "Clim" to 0.8f, "Skill" to 0.8f)
+        r.baselines.forEach { b ->
+            TableRow(Triple("${b.horizon}m", 0.5f, C.white), Triple("${b.n}", 0.7f, C.text),
+                Triple(pct(b.modelAccuracy), 0.8f, if (b.modelAccuracy > b.momentumAccuracy) C.green else C.red),
+                Triple(pct(b.momentumAccuracy), 0.8f, C.text),
+                Triple("%.3f".format(b.modelBrier), 0.8f, C.text), Triple("%.3f".format(b.climatologyBrier), 0.8f, C.text),
+                Triple("%+.3f".format(b.brierSkill), 0.8f, if (b.brierSkill > 0.01) C.green else if (b.brierSkill < -0.01) C.red else C.amber))
+        }
+        Label("Skill > 0 = probabilities beat 'always predict past base rates'. Model accuracy should also beat simple momentum.",
+            color = C.dim, size = 9.sp, mono = false)
+        if (!r.calibratedBrier.isNaN()) KV("Calibrated Brier (${r.calibratedN}, walk-forward)", "%.3f".format(r.calibratedBrier))
+        Spacer(Modifier.height(6.dp))
+        Label("SIGNAL QUALITY · bull/bear probability ≥ threshold", color = C.dim, size = 10.sp)
+        TableHeader("H" to 0.5f, "Prob" to 0.7f, "Cal" to 0.5f, "Signals" to 0.8f, "Hit" to 0.7f, "Avg pts" to 0.8f)
+        r.thresholds.filter { it.signals > 0 }.forEach { t ->
+            TableRow(Triple("${t.horizon}m", 0.5f, C.white), Triple("≥%.0f%%".format(t.threshold * 100), 0.7f, C.text),
+                Triple(if (t.calibrated) "yes" else "raw", 0.5f, C.dim), Triple("${t.signals}", 0.8f, C.text),
+                Triple(pct(t.hitRate), 0.7f, if (t.hitRate > 0.55) C.green else if (t.hitRate < 0.5) C.red else C.amber),
+                Triple("%+.1f".format(t.avgMovePts), 0.8f, C.signed(t.avgMovePts, 1.0)))
+        }
+        Spacer(Modifier.height(6.dp))
+        Label("BY REGIME (30m)", color = C.dim, size = 10.sp)
+        r.regimes.take(8).forEach { g -> KV(g.regime, "n=${g.n} · acc ${pct(g.accuracy)} · dir hit ${pct(g.directionalHitRate)}") }
+        Spacer(Modifier.height(6.dp))
+        (r.notes + bt.sourceNotes).forEach { Label("• $it", color = C.dim, size = 9.sp, mono = false) }
+        bt.csv?.let { f ->
+            Text("Share predictions CSV", color = C.blue, fontSize = 12.sp, modifier = Modifier.padding(top = 6.dp).clickable { onShare(f) })
+            Text("Share report JSON", color = C.blue, fontSize = 12.sp, modifier = Modifier.padding(top = 4.dp).clickable {
+                onShare(File(f.parentFile, f.name.removeSuffix(".csv") + "-report.json"))
+            })
+        }
+    }
 }

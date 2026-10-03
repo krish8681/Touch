@@ -98,7 +98,7 @@ class MainActivity : ComponentActivity() {
                             Tab.OPTIONS -> OptionsScreen(ui)
                             Tab.MARKET -> MarketScreen(ui)
                             Tab.NEWS -> NewsScreen(ui)
-                            Tab.LOG -> LogScreen(ui, vm, onExport = ::exportLog)
+                            Tab.LOG -> LogScreen(ui, vm, onExport = ::exportLog, onShare = ::shareFile)
                             Tab.SETTINGS -> SettingsScreen(settings, onSave = { vm.updateSettings(it); tab = Tab.HOME }, onKiteLogin = ::startKiteLogin)
                         }
                     }
@@ -119,6 +119,16 @@ class MainActivity : ComponentActivity() {
     private fun startKiteLogin(s: AppSettings) {
         vm.updateSettings(s)
         kiteLogin.launch(Intent(this, KiteLoginActivity::class.java).putExtra(KiteLoginActivity.EXTRA_API_KEY, s.kiteApiKey))
+    }
+
+    private fun shareFile(f: java.io.File) {
+        if (!f.exists()) return
+        val uri = FileProvider.getUriForFile(this, "$packageName.files", f)
+        startActivity(Intent.createChooser(Intent(Intent.ACTION_SEND).apply {
+            type = if (f.name.endsWith(".csv")) "text/csv" else "application/json"
+            putExtra(Intent.EXTRA_STREAM, uri)
+            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        }, "Share ${f.name}"))
     }
 
     private fun exportLog() {

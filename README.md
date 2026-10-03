@@ -1,4 +1,4 @@
-# NIFTY Direction Engine v4.1 — Android
+# NIFTY Direction Engine v4.2 — Android
 
 A **NIFTY market-intelligence and probability engine** for Android. It answers four questions in order:
 
@@ -10,8 +10,27 @@ A **NIFTY market-intelligence and probability engine** for Android. It answers f
 > Decision support only — not investment advice. Weights are starting engineering values, not validated
 > optima; use the prediction log and replay tools to measure before risking capital.
 
-**Install:** `release/NiftyDirectionEngine-v4.1.0.apk` (Android 8.0+, sideload / "install unknown apps").
+**Install:** `release/NiftyDirectionEngine-v4.2.0.apk` (Android 8.0+, sideload / "install unknown apps").
 It opens in **Simulator** mode (synthetic data, works offline/after hours). Switch to live data in **Setup**.
+
+## v4.2 — Kite historical backtest (market-only)
+
+Log tab → **Kite historical backtest** → 1M / 3M / 6M / 12M (needs today's Kite login).
+
+* Downloads NIFTY 50, India VIX, Bank Nifty (1-minute), sector indices and the 50 constituents (5-minute), continuous
+  NIFTY futures with OI (if Kite serves it) and daily history; ≤ 3 requests/s, ≤ 60 days per minute request, cached on disk.
+* Replays every 5 minutes with completed bars only (no look-ahead); walk-forward calibration refitted every 5 days from
+  earlier days only.
+* Compares the model with **climatology** (always predict past base rates; Brier skill score) and **30-min momentum**,
+  plus a signal-quality table (hit rate and average points when bull/bear ≥ 50…70 %) and accuracy by regime.
+* Exports every prediction (CSV) and the report (JSON) for sharing.
+* **Scope:** options, news, GIFT Nifty, global markets and FII/DII don't exist historically, so this tests the
+  market-only core. Constituents/weights are today's (survivorship bias for older periods).
+
+Workstation alternative: `./gradlew :app:testDebugUnitTest --tests '*KiteBacktestLiveRun*' -DkiteKey=… -DkiteToken=… -DbacktestMonths=6`.
+
+Also fixed: Kite daily candles are stamped 00:00 IST, so "previous-day" history could include today's partial bar in
+live Kite mode — daily history is now filtered by date.
 
 ## v4.1 — GIFT Nifty opening factor (`E21_GiftNiftyEngine`)
 

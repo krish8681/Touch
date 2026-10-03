@@ -14,8 +14,8 @@ android {
         applicationId = "com.niftyengine.app"
         minSdk = 26
         targetSdk = 35
-        versionCode = 7
-        versionName = "4.1.0"
+        versionCode = 8
+        versionName = "4.2.0"
     }
 
     signingConfigs {
@@ -75,6 +75,7 @@ dependencies {
 
 tasks.withType<Test>().configureEach {
     systemProperty("liveNetwork", System.getProperty("liveNetwork") ?: "false")
+    listOf("kiteKey", "kiteToken", "backtestMonths").forEach { k -> System.getProperty(k)?.let { systemProperty(k, it) } }
     // Optional: point Robolectric at a pre-downloaded android-all jar (offline/proxied environments).
     System.getProperty("robolectric.dependency.dir")?.let {
         systemProperty("robolectric.offline", "true")

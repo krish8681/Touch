@@ -95,9 +95,9 @@ class KiteApi(private val apiKey: String, private val accessToken: String, priva
     private val histFmt = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")
 
     /** Historical candles (requires the historical-data entitlement of the Kite Connect plan). */
-    fun historical(token: Long, interval: String, from: LocalDateTime, to: LocalDateTime, oi: Boolean = false): List<HistBar> {
+    fun historical(token: Long, interval: String, from: LocalDateTime, to: LocalDateTime, oi: Boolean = false, continuous: Boolean = false): List<HistBar> {
         val path = "/instruments/historical/$token/$interval?from=" + URLEncoder.encode(from.format(histFmt), "UTF-8") +
-            "&to=" + URLEncoder.encode(to.format(histFmt), "UTF-8") + if (oi) "&oi=1" else ""
+            "&to=" + URLEncoder.encode(to.format(histFmt), "UTF-8") + (if (oi) "&oi=1" else "") + (if (continuous) "&continuous=1" else "")
         val arr = JSONObject(get(path)).getJSONObject("data").getJSONArray("candles")
         return (0 until arr.length()).map { i ->
             val c = arr.getJSONArray(i)
@@ -299,7 +299,8 @@ class KiteMarketData(private val api: KiteApi, private val cacheDir: File) {
     fun daily(token: Long, now: Long): List<Candle> {
         val to = Session.zdt(now).toLocalDateTime()
         val start = Session.sessionStart(now)
-        return api.historical(token, "day", to.minusDays(370), to).filter { it.t < start }
+        val today = Session.zdt(now).toLocalDate() // Kite stamps daily candles at 00:00 IST: filter by date, not time
+        return api.historical(token, "day", to.minusDays(370), to).filter { Session.zdt(it.t).toLocalDate() < today && it.t < start }
             .map { Candle(it.t, it.o, it.h, it.l, it.c, it.v) }
     }
 

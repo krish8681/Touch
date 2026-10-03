@@ -14,6 +14,9 @@ import com.niftyengine.app.store.SettingsStore
 import com.niftyengine.engine.NiftyDirectionEngine
 import com.niftyengine.engine.core.Session
 import com.niftyengine.app.data.GeminiEventAnalyst
+import com.niftyengine.app.data.KiteApi
+import com.niftyengine.app.data.KiteHistoricalSource
+import com.niftyengine.engine.engines.HistoricalBacktest
 import com.niftyengine.app.data.GeminiException
 import com.niftyengine.app.store.AppJson
 import com.niftyengine.engine.engines.CalibrationModel
@@ -71,6 +74,17 @@ data class UiState(
     val optionCalibrationSamples: Int = 0,
     /** Event-analyst status line (Gemini or rules fallback). */
     val analystStatus: String = "",
+    val backtest: BacktestState = BacktestState(),
+)
+
+data class BacktestState(
+    val running: Boolean = false,
+    val progress: Float = 0f,
+    val label: String = "",
+    val report: com.niftyengine.engine.engines.BacktestReport? = null,
+    val sourceNotes: List<String> = emptyList(),
+    val csv: File? = null,
+    val error: String? = null,
 )
 
 class MainViewModel(app: Application) : AndroidViewModel(app) {
@@ -341,6 +355,66 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 _ui.update { it.copy(replay = it.replay.copy(running = false, progress = 1f, result = result)) }
             } catch (e: Exception) {
                 _ui.update { it.copy(replay = it.replay.copy(running = false, error = e.message)) }
+            }
+        }
+    }
+
+    @Volatile private var backtestCancel = false
+    fun cancelBacktest() { backtestCancel = true }
+
+    /**
+     * Kite historical (market-only) backtest over the last [months] months, run on the phone with the Kite session.
+     * Results stay separate from the live prediction log; every prediction is exported to CSV for review.
+     */
+    fun runBacktest(months: Int) {
+        if (_ui.value.backtest.running) return
+        val s = _settings.value
+        if (s.kiteApiKey.isBlank() || s.kiteAccessToken.isBlank() || s.kiteLoginNeeded()) {
+            _ui.update { it.copy(backtest = BacktestState(error = "Log in to Kite first (Setup → Login to Kite) — the backtest downloads Kite historical data.")) }
+            return
+        }
+        backtestCancel = false
+        _ui.update { it.copy(backtest = BacktestState(running = true, label = "Starting…")) }
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val today = Session.zdt(System.currentTimeMillis()).toLocalDate()
+                val to = today.minusDays(1)
+                val from = to.minusMonths(months.toLong())
+                val src = KiteHistoricalSource(KiteApi(s.kiteApiKey, s.kiteAccessToken), File(getApplication<Application>().cacheDir, "kite-hist")) { msg ->
+                    _ui.update { st -> st.copy(backtest = st.backtest.copy(label = msg)) }
+                }
+                val run = HistoricalBacktest(s.engineConfig()).run(src, from, to,
+                    onProgress = { msg, p -> _ui.update { st -> st.copy(backtest = st.backtest.copy(label = msg, progress = p)) } },
+                    cancelled = { backtestCancel })
+                val csv = File(getApplication<Application>().filesDir, "backtest-$from-$to.csv")
+                writeBacktestCsv(csv, run.records)
+                File(getApplication<Application>().filesDir, "backtest-$from-$to-report.json")
+                    .writeText(AppJson.encodeToString(com.niftyengine.engine.engines.BacktestReport.serializer(), run.report))
+                _ui.update { it.copy(backtest = BacktestState(running = false, progress = 1f,
+                    label = if (backtestCancel) "Cancelled — partial results" else "Done", report = run.report, sourceNotes = src.notes, csv = csv)) }
+            } catch (e: Exception) {
+                _ui.update { it.copy(backtest = it.backtest.copy(running = false, error = e.message ?: e.javaClass.simpleName)) }
+            }
+        }
+    }
+
+    private fun writeBacktestCsv(f: File, recs: List<PredictionRecord>) {
+        f.bufferedWriter().use { w ->
+            val drivers = com.niftyengine.engine.model.Driver.values()
+            w.write("time,spot,pBull,pBear,pRange,calibrated,calBull,calBear,calRange,regime,confidence,decision,composite," +
+                ProbabilityCalibrator.HORIZONS.joinToString(",") { "move${it}m,class${it}m" } + "," + drivers.joinToString(",") { it.name } + "\n")
+            for (r in recs) {
+                val z = Session.zdt(r.timestamp)
+                val cells = mutableListOf("%s %02d:%02d".format(z.toLocalDate(), z.hour, z.minute), "%.2f".format(r.spot),
+                    "%.4f".format(r.pBull), "%.4f".format(r.pBear), "%.4f".format(r.pRange), "${r.calibrated}",
+                    "%.4f".format(r.calPBull), "%.4f".format(r.calPBear), "%.4f".format(r.calPRange), r.regime, r.confidence, r.decision,
+                    "%.4f".format(r.directionalScore))
+                ProbabilityCalibrator.HORIZONS.forEach { h ->
+                    val o = r.outcomes.firstOrNull { it.minutes == h }
+                    cells += o?.let { "%.2f".format(it.move) } ?: ""; cells += o?.realized?.toString() ?: ""
+                }
+                drivers.forEach { d -> cells += r.driverScores[d.name]?.let { "%.4f".format(it) } ?: "" }
+                w.write(cells.joinToString(",") + "\n")
             }
         }
     }

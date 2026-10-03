@@ -18,7 +18,10 @@ import kotlin.math.abs
  * the overall quality score caps confidence, and the circuit breaker forces DATA ERROR — NO TRADE when a
  * critical input (NIFTY, futures, option chain) is missing, stale or implausible.
  */
-class DataQualityEngine {
+class DataQualityEngine(
+    /** Feeds whose absence trips the circuit breaker. A market-only historical backtest needs only NIFTY. */
+    private val criticalFeeds: Set<String> = setOf("NIFTY", "Futures", "Options"),
+) {
     data class Limits(val liveSec: Double, val staleSec: Double)
 
     companion object {
@@ -98,7 +101,7 @@ class DataQualityEngine {
             abs(n.changePct) > 12 -> "implausible change %.1f%%".format(n.changePct)
             else -> null
         }
-        timed("NIFTY", n.asOf, s.source, true, niftyInvalid)
+        timed("NIFTY", n.asOf, s.source, "NIFTY" in criticalFeeds, niftyInvalid)
         if (!prevSpot.isNaN() && prevSpot > 0 && n.last > 0 && now - prevT in 1..180_000) {
             val jump = abs(n.last - prevSpot) / prevSpot * 100
             if (jump > 2.5) breaker += "NIFTY jumped %.2f%% between cycles — verify feed".format(jump)
@@ -106,8 +109,8 @@ class DataQualityEngine {
 
         // ---- Futures
         val f = s.futures
-        if (f == null) feeds += FeedQuality("Futures", FeedStatus.MISSING, "-", 0, Double.NaN, true, "no futures quote")
-        else timed("Futures", f.asOf, s.source, true, when {
+        if (f == null) feeds += FeedQuality("Futures", FeedStatus.MISSING, "-", 0, Double.NaN, "Futures" in criticalFeeds, "no futures quote")
+        else timed("Futures", f.asOf, s.source, "Futures" in criticalFeeds, when {
             f.last.isNaN() || f.last <= 0 -> "invalid futures price"
             n.last > 0 && abs(f.last - n.last) / n.last > 0.02 -> "basis %.2f%% implausible".format((f.last - n.last) / n.last * 100)
             else -> null
@@ -115,7 +118,7 @@ class DataQualityEngine {
 
         // ---- Option chain
         val c = s.optionChain
-        if (c == null || c.rows.isEmpty()) feeds += FeedQuality("Options", FeedStatus.MISSING, "-", 0, Double.NaN, true, "no option chain")
+        if (c == null || c.rows.isEmpty()) feeds += FeedQuality("Options", FeedStatus.MISSING, "-", 0, Double.NaN, "Options" in criticalFeeds, "no option chain")
         else {
             val spot = n.last
             val atm = c.rows.minBy { abs(it.strike - spot) }
@@ -139,7 +142,7 @@ class DataQualityEngine {
                 c.expiryMillis < now -> "expired chain"
                 else -> null
             }
-            timed("Options", c.asOf, s.source, true, invalid, "ATM IV %.1f%%".format(atmIv))
+            timed("Options", c.asOf, s.source, "Options" in criticalFeeds, invalid, "ATM IV %.1f%%".format(atmIv))
         }
 
         // ---- other timed feeds
