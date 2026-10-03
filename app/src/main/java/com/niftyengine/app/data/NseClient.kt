@@ -4,6 +4,7 @@ import com.niftyengine.engine.core.Session
 import com.niftyengine.engine.model.Candle
 import com.niftyengine.engine.model.FlowData
 import com.niftyengine.engine.model.FuturesData
+import com.niftyengine.engine.model.GiftNiftyData
 import com.niftyengine.engine.model.InstrumentData
 import com.niftyengine.engine.model.OptionChain
 import com.niftyengine.engine.model.OptionLeg
@@ -207,6 +208,18 @@ object NseClient {
             bestExp = exp
         }
         return best ?: throw IllegalStateException("no futures in response")
+    }
+
+    /** GIFT Nifty (NSE IX near-month NIFTY futures) — trades while NSE is closed. NextApi `getGiftNifty`. */
+    fun giftNifty(): GiftNiftyData {
+        val g = JSONObject(api("/api/NextApi/apiClient?functionName=getGiftNifty")).getJSONObject("data").getJSONObject("giftNifty")
+        val last = g.num("lastprice")
+        if (last.isNaN() || last <= 0) throw IllegalStateException("no GIFT Nifty price")
+        return GiftNiftyData(
+            last = last, change = g.num("daychange").nz(), changePct = g.num("perchange").nz(),
+            expiry = g.optString("expirydate"), contracts = g.num("contractstraded").nz(),
+            asOf = TimeParse.ist(g.optString("timestmp")),
+        )
     }
 
     fun fiiDii(): FlowData {

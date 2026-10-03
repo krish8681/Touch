@@ -7,6 +7,7 @@ import com.niftyengine.engine.engines.SnapshotProvider
 import com.niftyengine.engine.model.Candle
 import com.niftyengine.engine.model.FlowData
 import com.niftyengine.engine.model.FuturesData
+import com.niftyengine.engine.model.GiftNiftyData
 import com.niftyengine.engine.model.GlobalAsset
 import com.niftyengine.engine.model.InstrumentData
 import com.niftyengine.engine.model.MacroInputs
@@ -72,6 +73,8 @@ class SimulatedMarket(seed: Long = 7L, startDate: LocalDate = LocalDate.now(Sess
     private val news = mutableListOf<NewsItem>()
     private var flows = FlowData()
     private var dayBias = 0.0
+    /** GIFT Nifty's pre-open view of today's gap: the real gap plus noise (GIFT is a good, not perfect, guide). */
+    private var giftGapPct = 0.0
     private val bullStories = listOf(
         "RBI cuts repo rate by 50 bps vs 25 bps expected, signals liquidity support",
         "US inflation cools more than expected, Wall Street rallies to record high",
@@ -146,6 +149,7 @@ class SimulatedMarket(seed: Long = 7L, startDate: LocalDate = LocalDate.now(Sess
             globalPx[a] = globalPrev.getValue(a) * (1 + chg / 100)
         }
         val gap = dayBias * 0.25 + rnd.nextGaussian() * 0.15
+        giftGapPct = gap + rnd.nextGaussian() * 0.08
         nifty = niftyPrev * (1 + gap / 100)
         vix = vixPrev * (1 - gap * 0.04)
         cons.forEach { c ->
@@ -171,8 +175,8 @@ class SimulatedMarket(seed: Long = 7L, startDate: LocalDate = LocalDate.now(Sess
             baseCallOi[k] = if (i >= -4) (60_000 + 90_000 * exp(-((i - 6) * (i - 6)) / 40.0)) * round100 * round500 * (0.8 + rnd.nextDouble() * 0.4) else 20_000.0
             basePutOi[k] = if (i <= 4) (60_000 + 90_000 * exp(-((i + 6) * (i + 6)) / 40.0)) * round100 * round500 * (0.8 + rnd.nextDouble() * 0.4) else 20_000.0
         }
-        if (abs(dayBias) > 0.7) addNews(0, if (dayBias > 0) bullStories.random(rnd) else bearStories.random(rnd), 3, t(0) - 3_600_000L)
         planStorylines()
+        if (abs(dayBias) > 0.7) addNews(0, pick(if (dayBias > 0) bullStories else bearStories), 3, t(0) - 3_600_000L)
     }
 
 
@@ -195,6 +199,12 @@ class SimulatedMarket(seed: Long = 7L, startDate: LocalDate = LocalDate.now(Sess
             beats += Beat(r + 20, "Military escalation likely as border clash widens, officials say", 3, Hidden.BEAR, 20)
             beats += Beat(r + 50, "Government confirms border clash; troops attacked", 4, Hidden.RANGE, 40)
         }
+    }
+
+    /** Random headline, avoiding a second, contradictory RBI story on days with a scripted RBI decision. */
+    private fun pick(stories: List<String>): String {
+        val rbiDay = beats.any { it.title.startsWith("RBI") }
+        return stories.filter { !(rbiDay && it.startsWith("RBI")) }.random(rnd)
     }
 
     private fun playBeats() {
@@ -222,9 +232,9 @@ class SimulatedMarket(seed: Long = 7L, startDate: LocalDate = LocalDate.now(Sess
         hiddenLeft = if (hidden == Hidden.EVENT_UP || hidden == Hidden.EVENT_DOWN) 15 + rnd.nextInt(20) else 45 + rnd.nextInt(90)
         shortCoverMode = rnd.nextDouble() < 0.3
         when (hidden) {
-            Hidden.EVENT_UP -> addNews(minute, bullStories.random(rnd), 4)
-            Hidden.EVENT_DOWN -> { addNews(minute, bearStories.random(rnd), 4); vix *= 1.08 }
-            else -> if (rnd.nextDouble() < 0.25) addNews(minute, (if (hidden == Hidden.BULL) bullStories else bearStories).random(rnd), 2)
+            Hidden.EVENT_UP -> addNews(minute, pick(bullStories), 4)
+            Hidden.EVENT_DOWN -> { addNews(minute, pick(bearStories), 4); vix *= 1.08 }
+            else -> if (rnd.nextDouble() < 0.25) addNews(minute, pick(if (hidden == Hidden.BULL) bullStories else bearStories), 2)
         }
     }
 
@@ -323,6 +333,11 @@ class SimulatedMarket(seed: Long = 7L, startDate: LocalDate = LocalDate.now(Sess
             bankNifty = InstrumentData("NIFTY BANK", 56_000 * bankNow / bankPrev, 56_000.0),
             vix = InstrumentData("INDIA VIX", vix, vixPrev, intraday = vixBars.toList(), daily = vixDaily.takeLast(250)),
             futures = FuturesData("NIFTY FUT", expiry().toString(), futPx, niftyPrev * (1 + 0.35 / 100), futOi, futOiPrev, futVol),
+            giftNifty = (niftyPrev * (1 + 0.35 / 100)).let { fc ->
+                // First cycle: the last pre-open GIFT quote (09:10). Later: GIFT trades live alongside NSE.
+                if (minute <= 1) (fc * (1 + giftGapPct / 100)).let { gl -> GiftNiftyData(gl, gl - fc, (gl - fc) / fc * 100, expiry().toString(), 50_000.0, t(0) - 5 * 60_000L) }
+                else (futPx).let { gl -> GiftNiftyData(gl, gl - fc, (gl - fc) / fc * 100, expiry().toString(), 50_000.0, ts - 60_000L) }
+            },
             optionChain = chain(ts),
             constituents = stocks,
             sectors = sectors,

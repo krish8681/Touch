@@ -515,8 +515,13 @@ class EventIntelligenceEngine(private val rules: NewsEventEngine = NewsEventEngi
 
     companion object {
         /** Snapshot → market levels used for pricing-in and reaction checks. */
-        fun baselineFrom(s: com.niftyengine.engine.model.MarketSnapshot, t: Long, usePrevClose: Boolean): MarketBaseline {
-            fun v(d: com.niftyengine.engine.model.InstrumentData?) = d?.let { if (usePrevClose) it.prevClose else it.last } ?: Double.NaN
+        /**
+         * @param usePrevClose build the "previous close" baseline. Which field holds the latest close depends on when the
+         * quote was taken (before 09:15 `last` is yesterday's close), so it is resolved per instrument from its timestamp.
+         */
+        fun baselineFrom(s: com.niftyengine.engine.model.MarketSnapshot, t: Long, usePrevClose: Boolean, wall: Long = s.timestamp): MarketBaseline {
+            fun ref(last: Double, prev: Double, asOf: Long) = GiftNiftyEngine.closeReference(last, prev, asOf, wall)
+            fun v(d: com.niftyengine.engine.model.InstrumentData?) = d?.let { if (usePrevClose) ref(it.last, it.prevClose, it.asOf) else it.last } ?: Double.NaN
             val chain = s.optionChain
             val pcr = if (usePrevClose || chain == null) Double.NaN else {
                 val ce = chain.rows.sumOf { it.call.oi }; val pe = chain.rows.sumOf { it.put.oi }
@@ -528,10 +533,10 @@ class EventIntelligenceEngine(private val rules: NewsEventEngine = NewsEventEngi
             return MarketBaseline(
                 t = t, nifty = v(s.nifty), bank = v(s.bankNifty), vix = v(s.vix),
                 usdinr = v(s.global[com.niftyengine.engine.model.GlobalAsset.USDINR]),
-                futures = s.futures?.let { if (usePrevClose) it.prevClose else it.last } ?: Double.NaN,
+                futures = s.futures?.let { if (usePrevClose) ref(it.last, it.prevClose, it.asOf) else it.last } ?: Double.NaN,
                 pcr = pcr, adRatio = ad,
-                sectors = s.sectors.mapValues { (_, d) -> if (usePrevClose) d.prevClose else d.last },
-                stocks = stocks.mapValues { (_, d) -> if (usePrevClose) d.prevClose else d.last },
+                sectors = s.sectors.mapValues { (_, d) -> if (usePrevClose) ref(d.last, d.prevClose, d.asOf) else d.last },
+                stocks = stocks.mapValues { (_, d) -> if (usePrevClose) ref(d.last, d.prevClose, d.asOf) else d.last },
             )
         }
     }

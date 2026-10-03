@@ -1,4 +1,4 @@
-# NIFTY Direction Engine v4.0 — Android
+# NIFTY Direction Engine v4.1 — Android
 
 A **NIFTY market-intelligence and probability engine** for Android. It answers four questions in order:
 
@@ -10,8 +10,23 @@ A **NIFTY market-intelligence and probability engine** for Android. It answers f
 > Decision support only — not investment advice. Weights are starting engineering values, not validated
 > optima; use the prediction log and replay tools to measure before risking capital.
 
-**Install:** `release/NiftyDirectionEngine-v4.0.0.apk` (Android 8.0+, sideload / "install unknown apps").
+**Install:** `release/NiftyDirectionEngine-v4.1.0.apk` (Android 8.0+, sideload / "install unknown apps").
 It opens in **Simulator** mode (synthetic data, works offline/after hours). Switch to live data in **Setup**.
+
+## v4.1 — GIFT Nifty opening factor (`E21_GiftNiftyEngine`)
+
+GIFT Nifty (NSE IX near-month NIFTY futures, trading ~06:30–02:45 IST) is used as an **opening** factor, not an all-day predictor:
+
+| Phase | Role |
+|-------|------|
+| Before 09:15 | **Implied gap** = GIFT vs the NSE near-month futures close (same contract ⇒ no basis error; falls back to GIFT's own day change on an expiry mismatch). Implied open = NIFTY's latest close × (1 + gap). Driver `GIFT_NIFTY` (weight 8–10, confidence 0.8 when the quote is ≤ 60 min old). |
+| 09:15 → 10:15 | The pre-open implied gap is **frozen** (GIFT keeps trading, so a live recompute would show the day's move). The factor tracks gap behaviour — extending / holding / fading / filled — and its confidence decays to 0 over the first hour. A warning is raised if NIFTY opens > 0.75 % away from the implied open. |
+| After 10:15 | Spent (confidence 0); intraday direction comes from the other engines. |
+| Pricing-in | Before the open, GIFT's implied open is the market's reaction to overnight news (NIFTY isn't trading), so overnight events are judged priced/unpriced correctly. |
+| Data quality | GIFT feed status/age shown (non-critical; quiet 02:45–06:30 is normal). |
+
+Reference closes are chosen from each quote's timestamp (before 09:15 NSE's `previousClose` can still be the day-before's close).
+Source: NSE `getGiftNifty` (works in both Kite and public modes).
 
 ## v4.0 — event intelligence (what was expected → what was priced → what changed → how the market repriced)
 
@@ -76,6 +91,7 @@ release/  prebuilt APK
 | 18 | `HistoricalReplayEngine` | Mode A market-only / Mode B full information, strict point-in-time (no future bars/news); walk-forward over many sessions |
 | 01b | `DataQualityEngine` | per-feed freshness/validity, quality score, circuit breaker |
 | 20 | `EventIntelligenceEngine` | event lifecycle/clustering, expectation state, pricing-in, reaction confirmation, multi-horizon news impact |
+| 21 | `GiftNiftyEngine` | GIFT Nifty implied opening gap, gap behaviour in the first hour, pre-open pricing of overnight news |
 | 19 | `ProbabilityCalibrator` | isotonic calibration per horizon/class + option-outcome calibration, walk-forward hold-out check |
 
 `NiftyDirectionEngine` orchestrates one cycle; `sim/SimulatedMarket` generates a consistent synthetic market for demo/tests.

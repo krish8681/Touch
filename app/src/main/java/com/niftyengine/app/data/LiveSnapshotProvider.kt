@@ -49,6 +49,7 @@ class LiveSnapshotProvider(private val cacheDir: File, private val settings: () 
     private val chain = Cached(45_000L) { NseClient.optionChain() }
     private val futures = Cached(20_000L) { NseClient.futures() }
     private val flows = Cached(30 * 60_000L) { NseClient.fiiDii() }
+    private val gift = Cached(60_000L) { NseClient.giftNifty() }
     private val news = Cached(3 * 60_000L) { NewsClient.fetchAll() }
     private val global = YahooClient.GLOBAL_SYMBOLS.mapValues { (a, sym) ->
         Cached(if (a == GlobalAsset.USDINR || a == GlobalAsset.BRENT) 60_000L else 120_000L) { YahooClient.chart(sym, "5m", "1d", "G_${a.name}") }
@@ -124,7 +125,7 @@ class LiveSnapshotProvider(private val cacheDir: File, private val settings: () 
 
         // ---------------- public feeds (full set when Kite is absent, gap-fillers otherwise)
         val jobs = buildList {
-            add(async { flows.get() }); add(async { news.get() }); add(async { chain.get() })
+            add(async { flows.get() }); add(async { news.get() }); add(async { chain.get() }); add(async { gift.get() })
             global.values.forEach { c -> add(async { c.get() }) }
             if (!kiteLive) {
                 add(async { board.get() }); add(async { constituents.get() }); add(async { futures.get() })
@@ -190,6 +191,7 @@ class LiveSnapshotProvider(private val cacheDir: File, private val settings: () 
         lastSpot = nifty.last
         st("NSE option chain", chain, "✓ ${nseChain?.rows?.size ?: 0} strikes" + if (kiteLive) " (ΔOI only)" else ", exp ${nseChain?.expiry ?: "-"}")
         st("NSE FII/DII", flows, "✓ ${flows.get()?.date ?: ""}")
+        st("GIFT Nifty", gift, gift.get()?.let { "✓ %.1f (%+.2f%%) @ %s".format(it.last, it.changePct, Session.hhmm(it.asOf)) } ?: "–")
         if (dailyN.isEmpty()) status["Daily history"] = "✗ ${kDaily.takeIf { k != null }?.lastError ?: niftyDaily.lastError}"
         val glob = global.mapNotNull { (a, c) -> c.get()?.let { a to it } }.toMap()
         val n = news.get()
@@ -200,6 +202,7 @@ class LiveSnapshotProvider(private val cacheDir: File, private val settings: () 
         MarketSnapshot(
             timestamp = now, nifty = nifty, bankNifty = bank, vix = vix, futures = fut, optionChain = optChain,
             constituents = stocks, sectors = sectors, global = glob, macro = s.macroInputs(), flows = flows.get(),
+            giftNifty = gift.get(),
             news = n?.items ?: emptyList(),
             source = if (kiteLive) "LIVE · Kite (+NSE/Yahoo/RSS)" else "LIVE · NSE+Yahoo",
             feedStatus = status,

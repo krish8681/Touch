@@ -19,6 +19,7 @@ import com.niftyengine.engine.engines.IndiaMacroEngine
 import com.niftyengine.engine.engines.MarketRegimeEngine
 import com.niftyengine.engine.engines.MarketStructureEngine
 import com.niftyengine.engine.engines.EventIntelligenceEngine
+import com.niftyengine.engine.engines.GiftNiftyEngine
 import com.niftyengine.engine.model.NewsHorizon
 import com.niftyengine.engine.engines.NiftyWeightEngine
 import com.niftyengine.engine.engines.OptionSelectionEngine
@@ -50,7 +51,7 @@ data class EngineConfig(
     val requireCalibration: Boolean = true,
 )
 
-const val ENGINE_VERSION = "4.0.0"
+const val ENGINE_VERSION = "4.1.0"
 
 /**
  * NIFTY Direction Engine v3 — orchestrates modules 02–16 for one snapshot.
@@ -76,6 +77,7 @@ class NiftyDirectionEngine(val config: EngineConfig = EngineConfig()) {
     private val flows = FlowEngine()
     /** 20 — event intelligence (lifecycle, expectations, pricing-in, reaction, horizons). State persisted by the app. */
     val eventIntel = EventIntelligenceEngine()
+    private val giftEngine = GiftNiftyEngine()
     private val regime = MarketRegimeEngine(state)
     private val direction = DirectionProbabilityEngine(state)
     private val move = ExpectedMoveEngine()
@@ -122,9 +124,17 @@ class NiftyDirectionEngine(val config: EngineConfig = EngineConfig()) {
         val gl = global.analyze(s, now, sessionStart)
         val mc = macro.analyze(s, now, sessionStart)
         val fl = quality.gate(flows.analyze(s), dq)
+        // 21 — GIFT Nifty: opening factor (pre-open implied gap → gap behaviour in the first hour).
+        val gift = giftEngine.analyze(s, wall)
+        val giftSig = quality.gate(gift.signal, dq)
+        // Before the open NIFTY isn't trading: GIFT's implied open is the market's reaction to overnight news.
+        val liveBaseline = EventIntelligenceEngine.baselineFrom(s, wall, usePrevClose = false).let { b ->
+            if (gift.impliedOpenForPricing.isNaN()) b else b.copy(nifty = gift.impliedOpenForPricing, futures = s.giftNifty?.last ?: b.futures)
+        }
+        // News is point-in-time against the wall clock (overnight/pre-open news must be visible before 09:15).
         val nw = eventIntel.process(
-            s.news, s.eventAnalyses, now,
-            market = EventIntelligenceEngine.baselineFrom(s, now, usePrevClose = false),
+            s.news, s.eventAnalyses, wall,
+            market = liveBaseline,
             prevCloseBaseline = EventIntelligenceEngine.baselineFrom(s, sessionStart, usePrevClose = true),
             niftySeries = st.series, decisionHorizon = NewsHorizon.forMinutes(config.horizonMinutes),
         )
@@ -145,6 +155,7 @@ class NiftyDirectionEngine(val config: EngineConfig = EngineConfig()) {
             DriverInput(Driver.MACRO, mc.signal.score, mc.signal.confidence),
             DriverInput(Driver.FLOWS, fl.score, fl.confidence),
             DriverInput(Driver.NEWS, nwSig.score, nwSig.confidence),
+            DriverInput(Driver.GIFT_NIFTY, giftSig.score, giftSig.confidence),
         )
         val prelim = direction.preliminary(inputs)
         val rg = regime.classify(MarketRegimeEngine.Inputs(prelim, st, fu, op, vx, br.score, derivatives.score,
@@ -190,7 +201,7 @@ class NiftyDirectionEngine(val config: EngineConfig = EngineConfig()) {
         val signals = linkedMapOf(
             stSig.name to stSig, hwSig.name to hwSig, secSig.name to secSig,
             br.name to br, fuSig.name to fuSig, opSig.name to opSig, vxSig.name to vxSig,
-            glSig.name to glSig, mc.signal.name to mc.signal, fl.name to fl, nwSig.name to nwSig,
+            glSig.name to glSig, mc.signal.name to mc.signal, fl.name to fl, nwSig.name to nwSig, giftSig.name to giftSig,
         )
         val feed = LinkedHashMap(s.feedStatus)
         feed["Coverage"] = "%.0f%%".format(health.coverage * 100) + if (health.missing.isEmpty()) "" else " (missing: ${health.missing.joinToString()})"
@@ -198,8 +209,8 @@ class NiftyDirectionEngine(val config: EngineConfig = EngineConfig()) {
             timestamp = wall, spot = s.nifty.last, spotChangePct = s.nifty.changePct,
             signals = signals, regime = rg, direction = dir, expectedMove = em, options = oa, decision = td,
             heavyweights = hw.report, sectors = sec.rows, events = nw.events,
-            dataSource = s.source, feedStatus = feed, dataQuality = dq, engineVersion = ENGINE_VERSION,
-            newsHorizons = nw.horizons, pendingEventAnalysis = nw.pending,
+            dataSource = s.source, feedStatus = feed, dataQuality = dq.copy(warnings = dq.warnings + gift.warnings), engineVersion = ENGINE_VERSION,
+            newsHorizons = nw.horizons, pendingEventAnalysis = nw.pending, gift = gift.report,
         )
     }
 

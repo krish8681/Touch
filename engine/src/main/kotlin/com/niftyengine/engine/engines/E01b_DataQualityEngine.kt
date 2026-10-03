@@ -29,7 +29,7 @@ class DataQualityEngine {
         )
         private val WEIGHTS = mapOf(
             "NIFTY" to 20.0, "Futures" to 15.0, "Options" to 15.0, "India VIX" to 10.0, "Constituents" to 10.0,
-            "Sectors" to 5.0, "NIFTY bars" to 5.0, "Global" to 8.0, "FPI/DII" to 4.0, "News" to 5.0, "Macro" to 3.0,
+            "Sectors" to 5.0, "NIFTY bars" to 5.0, "Global" to 8.0, "FPI/DII" to 4.0, "News" to 5.0, "Macro" to 3.0, "GIFT Nifty" to 3.0,
         )
         /** Max useful age (days) of slow macro values, by release frequency. */
         val MACRO_MAX_AGE_DAYS = mapOf(
@@ -43,7 +43,7 @@ class DataQualityEngine {
             "Futures" to listOf("Futures"), "Options" to listOf("Options"), "India VIX" to listOf("India VIX"),
             "Constituents" to listOf("Heavyweights", "Breadth"), "Sectors" to listOf("Sectors"),
             "Global" to listOf("Global risk"), "FPI/DII" to listOf("FPI/DII"), "News" to listOf("News"),
-            "NIFTY bars" to listOf("Market structure"),
+            "NIFTY bars" to listOf("Market structure"), "GIFT Nifty" to listOf("GIFT Nifty"),
         )
 
         fun factor(st: FeedStatus) = when (st) {
@@ -167,6 +167,23 @@ class DataQualityEngine {
                 val ageD = if (fl.asOf > 0) (now - fl.asOf) / 86_400_000.0 else Double.NaN
                 val st = when { ageD.isNaN() -> FeedStatus.DEGRADED; ageD <= 4 -> FeedStatus.LIVE; ageD <= 7 -> FeedStatus.DEGRADED; else -> FeedStatus.STALE }
                 feeds += FeedQuality("FPI/DII", st, "NSE", fl.asOf, ageD * 86400, false, "daily, as of ${fl.date.ifBlank { "?" }}")
+            }
+        }
+        // ---- GIFT Nifty (trades ~06:30–02:45 IST; quiet 02:45–06:30 is normal, so only age while it should trade)
+        s.giftNifty.let { gn ->
+            if (gn == null) feeds += FeedQuality("GIFT Nifty", FeedStatus.MISSING, "NSE", 0, Double.NaN, false)
+            else {
+                val ageM = if (gn.asOf > 0) ((now - gn.asOf) / 60_000.0).coerceAtLeast(0.0) else Double.NaN
+                val h = Session.zdt(now).hour
+                val quietHours = h in 3..6
+                val st = when {
+                    gn.last <= 0 -> FeedStatus.INVALID
+                    ageM.isNaN() -> FeedStatus.DEGRADED
+                    ageM <= 15 || quietHours -> FeedStatus.LIVE
+                    ageM <= 360 -> FeedStatus.DEGRADED
+                    else -> FeedStatus.STALE
+                }
+                feeds += FeedQuality("GIFT Nifty", st, "NSE IX", gn.asOf, ageM * 60, false, "%.1f (%+.2f%%)".format(gn.last, gn.changePct))
             }
         }
         // ---- news

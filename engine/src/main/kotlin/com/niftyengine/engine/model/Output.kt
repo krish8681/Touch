@@ -14,6 +14,7 @@ enum class Driver(val label: String) {
     MACRO("INR / crude / rates"),
     FLOWS("FPI / DII"),
     NEWS("News / events"),
+    GIFT_NIFTY("GIFT Nifty / opening"),
 }
 
 /**
@@ -248,6 +249,32 @@ data class EngineOutput(
     val newsHorizons: Map<NewsHorizon, Double> = emptyMap(),
     /** Events waiting for (re-)analysis by the AI analyst. */
     val pendingEventAnalysis: List<AnalysisRequest> = emptyList(),
+    val gift: GiftNiftyReport? = null,
+)
+
+@Serializable
+enum class GapState(val label: String) {
+    PRE_OPEN("Pre-open"), EXTENDING("Gap extending"), HOLDING("Gap holding"), FADING("Gap fading"),
+    FILLED("Gap filled"), NO_GAP("No meaningful gap"), SPENT("Opening factor spent");
+}
+
+@Serializable
+data class GiftNiftyReport(
+    val last: Double,
+    val changePct: Double,
+    val asOf: Long,
+    val ageMinutes: Double,
+    /** Expected NIFTY opening gap implied by GIFT vs the NSE futures close (same contract). */
+    val impliedGapPct: Double,
+    val impliedOpen: Double,
+    val method: String,
+    val state: GapState,
+    val actualGapPct: Double = Double.NaN,
+    /** actual gap ÷ implied gap (1 = opened exactly where GIFT implied). */
+    val gapRealization: Double = Double.NaN,
+    /** Share of the actual gap given back since the open (≥1 = filled). */
+    val retracement: Double = Double.NaN,
+    val notes: List<String> = emptyList(),
 )
 
 @Serializable

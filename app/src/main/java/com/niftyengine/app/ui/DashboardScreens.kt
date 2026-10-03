@@ -46,6 +46,7 @@ fun DashboardScreen(ui: UiState) {
         SpotChart(ui.chart)
     }
     if (o.dataQuality.circuitBreaker.isNotEmpty()) DataErrorBanner(o)
+    o.gift?.let { GiftCard(it, o.signals["GIFT Nifty"]) }
     // Direction (calibrated probabilities when available, otherwise clearly labelled model scores)
     val hp = d.decisionProbs(o.expectedMove.horizonMinutes)
     Card("Direction · next ${o.expectedMove.horizonMinutes} min", trailing = {
@@ -272,7 +273,7 @@ fun MarketScreen(ui: UiState) {
             )
         }
     }
-    listOf("Market structure", "Breadth", "Futures", "India VIX", "Global risk", "INR/crude/rates", "FPI/DII")
+    listOf("GIFT Nifty", "Market structure", "Breadth", "Futures", "India VIX", "Global risk", "INR/crude/rates", "FPI/DII")
         .mapNotNull { o.signals[it] }.forEach { SignalCard(it) }
 }
 
@@ -407,5 +408,40 @@ fun DataQualityCard(o: EngineOutput) {
         q.warnings.forEach { Label("• $it", color = C.amber, size = 10.sp) }
         Label("* critical: missing/stale/invalid ⇒ DATA ERROR — NO TRADE. MANUAL = entered in Setup with a release date.",
             color = C.dim, size = 9.sp, mono = false)
+    }
+}
+
+@Composable
+fun GiftCard(g: com.niftyengine.engine.model.GiftNiftyReport, sig: com.niftyengine.engine.model.EngineSignal?) {
+    val st = g.state
+    val stateColor = when (st) {
+        com.niftyengine.engine.model.GapState.EXTENDING, com.niftyengine.engine.model.GapState.HOLDING -> C.signed(g.actualGapPct, 0.0)
+        com.niftyengine.engine.model.GapState.FADING, com.niftyengine.engine.model.GapState.FILLED -> C.amber
+        com.niftyengine.engine.model.GapState.PRE_OPEN -> C.signed(g.impliedGapPct, 0.1)
+        else -> C.dim
+    }
+    Card("GIFT Nifty · opening factor", trailing = { Chip(st.label.uppercase(), stateColor) }) {
+        Row(verticalAlignment = Alignment.Bottom) {
+            Column(Modifier.weight(1f)) {
+                Label("IMPLIED GAP", color = C.dim, size = 10.sp)
+                Label("%+.2f%%".format(g.impliedGapPct), color = C.signed(g.impliedGapPct, 0.1), size = 20.sp, weight = FontWeight.Bold)
+                Label("open ≈ %,.0f".format(g.impliedOpen), color = C.text, size = 11.sp)
+            }
+            Column(Modifier.weight(1f)) {
+                Label("GIFT NIFTY", color = C.dim, size = 10.sp)
+                Label("%,.1f".format(g.last), color = C.white, size = 16.sp, weight = FontWeight.Bold)
+                Label("%+.2f%% · %s".format(g.changePct, if (g.ageMinutes.isNaN()) "age ?" else "%.0f min ago".format(g.ageMinutes)),
+                    color = if (g.ageMinutes > 60) C.amber else C.text, size = 11.sp)
+            }
+        }
+        if (!g.actualGapPct.isNaN()) {
+            Spacer(Modifier.height(6.dp))
+            KV("Actual gap", "%+.2f%%".format(g.actualGapPct) + if (g.gapRealization.isNaN()) "" else " (%.0f%% of implied)".format(g.gapRealization * 100))
+            if (!g.retracement.isNaN()) KV("Gap given back", "%.0f%%".format(g.retracement * 100), if (g.retracement >= 0.4) C.amber else C.text)
+        }
+        sig?.let { KV("Driver score / weight", "%+.2f · confidence %.0f%%".format(it.score, it.confidence * 100), C.signed(it.score)) }
+        g.notes.forEach { Label("• $it", color = C.amber, size = 10.sp, mono = false) }
+        Label("Before 09:15 the implied gap is a driver; in the first hour the factor tracks whether the gap holds or fades, then it switches off. " +
+            "It is not an all-day predictor.", color = C.dim, size = 9.sp, mono = false)
     }
 }

@@ -27,9 +27,12 @@ class LiveFeedTest {
         val daily = NseClient.indexDaily("NIFTY 50", today)
         val vixDaily = runCatching { NseClient.indexDaily("INDIA VIX", today) }.getOrElse { println("vix daily failed $it"); emptyList() }
         println("daily ${daily.size} last ${daily.lastOrNull()} vixDaily ${vixDaily.size}")
+        val gift = NseClient.giftNifty()
+        println("gift $gift")
         val snap = MarketSnapshot(
             timestamp = System.currentTimeMillis(), nifty = board.nifty!!.copy(intraday = intra, daily = daily), bankNifty = board.bank, vix = board.vix?.copy(daily = vixDaily),
             futures = fut, optionChain = chain, constituents = cons, sectors = board.sectors, flows = flows, source = "test",
+            giftNifty = gift,
         )
         val out = NiftyDirectionEngine().process(snap)
         println("Bull %.2f Bear %.2f Range %.2f conf %s regime %s".format(out.direction.pBull, out.direction.pBear, out.direction.pRange,
@@ -41,6 +44,7 @@ class LiveFeedTest {
         println("Move: ${out.expectedMove}")
         println("Best option: ${out.options.best}")
         println("Decision: ${out.decision.headline} ${out.decision.reasons}")
+        println("GIFT report: ${out.gift}")
         println("Data quality %.0f%% breaker=${out.dataQuality.circuitBreaker}".format(out.dataQuality.score * 100))
         out.dataQuality.feeds.forEach { println("  " + it.name + ": " + it.status + " age=" + "%.0fs ".format(it.ageSeconds) + it.detail) }
         println("Horizons: ${out.direction.horizons}")

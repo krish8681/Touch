@@ -39,18 +39,22 @@ class DirectionProbabilityEngine(private val state: EngineState, private val par
             RegimeClass.NORMAL to mapOf(
                 Driver.PRICE to 20.0, Driver.DERIVATIVES to 18.0, Driver.SECTOR to 15.0, Driver.GLOBAL to 12.0,
                 Driver.BREADTH to 10.0, Driver.VIX to 8.0, Driver.MACRO to 7.0, Driver.FLOWS to 5.0, Driver.NEWS to 5.0,
+                Driver.GIFT_NIFTY to 10.0,
             ),
             RegimeClass.TREND to mapOf(
                 Driver.PRICE to 25.0, Driver.DERIVATIVES to 20.0, Driver.SECTOR to 15.0, Driver.GLOBAL to 12.0,
                 Driver.BREADTH to 10.0, Driver.VIX to 6.0, Driver.MACRO to 7.0, Driver.FLOWS to 0.0, Driver.NEWS to 5.0,
+                Driver.GIFT_NIFTY to 8.0,
             ),
             RegimeClass.EVENT to mapOf(
                 Driver.NEWS to 25.0, Driver.GLOBAL to 15.0, Driver.VIX to 15.0, Driver.DERIVATIVES to 15.0,
                 Driver.PRICE to 15.0, Driver.SECTOR to 8.0, Driver.BREADTH to 4.0, Driver.MACRO to 3.0, Driver.FLOWS to 0.0,
+                Driver.GIFT_NIFTY to 10.0,
             ),
             RegimeClass.RANGE to mapOf(
                 Driver.PRICE to 25.0, Driver.DERIVATIVES to 20.0, Driver.VIX to 15.0, Driver.BREADTH to 10.0,
                 Driver.SECTOR to 8.0, Driver.GLOBAL to 7.0, Driver.MACRO to 5.0, Driver.NEWS to 5.0, Driver.FLOWS to 5.0,
+                Driver.GIFT_NIFTY to 8.0,
             ),
         )
     }

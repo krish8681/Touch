@@ -149,6 +149,17 @@ data class FlowData(
 )
 
 @Serializable
+data class GiftNiftyData(
+    val last: Double,
+    val change: Double,
+    val changePct: Double,
+    /** Contract expiry as published (e.g. "27-Oct-2026" or ISO date). */
+    val expiry: String,
+    val contracts: Double = 0.0,
+    val asOf: Long = 0L,
+)
+
+@Serializable
 data class NewsItem(
     val id: String,
     val title: String,
@@ -174,6 +185,8 @@ data class MarketSnapshot(
     val flows: FlowData? = null,
     val news: List<NewsItem> = emptyList(),
     val source: String = "unknown",
+    /** GIFT Nifty (NSE IX) near-month futures — trades ~06:30–02:45 IST, i.e. before the NSE open. */
+    val giftNifty: GiftNiftyData? = null,
     /** Event analyses (Gemini or rules) delivered up to this snapshot — recorded so replays stay point-in-time. */
     val eventAnalyses: List<EventAnalysis> = emptyList(),
     /** Per-feed health messages from the collector (feed -> status). */
