@@ -77,6 +77,11 @@ data class EventAnalysis(
     /** Other active EVENT_IDs that describe the same real-world event. */
     val mergeWith: List<String> = emptyList(),
     val rationale: String = "",
+    /**
+     * v5: −1..+1 — how much this information moved the market's EXPECTED future for Indian equities versus what was
+     * expected before it (0 = nothing new). NaN when the analyst did not say (rules analyst).
+     */
+    val expectationShift: Double = Double.NaN,
 )
 
 @Serializable

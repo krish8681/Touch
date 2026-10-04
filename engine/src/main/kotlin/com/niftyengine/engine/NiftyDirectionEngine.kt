@@ -4,40 +4,57 @@ import com.niftyengine.engine.core.EngineState
 import com.niftyengine.engine.core.Session
 import com.niftyengine.engine.engines.BreadthEngine
 import com.niftyengine.engine.engines.CalibrationModel
-import com.niftyengine.engine.engines.DataQualityEngine
-import com.niftyengine.engine.engines.ProbabilityCalibrator
-import kotlin.math.abs
 import com.niftyengine.engine.engines.DataCollector
 import com.niftyengine.engine.engines.DataNormalizer
+import com.niftyengine.engine.engines.DataQualityEngine
 import com.niftyengine.engine.engines.DirectionProbabilityEngine
 import com.niftyengine.engine.engines.DirectionProbabilityEngine.DriverInput
+import com.niftyengine.engine.engines.EventIntelligenceEngine
 import com.niftyengine.engine.engines.ExpectedMoveEngine
 import com.niftyengine.engine.engines.FlowEngine
 import com.niftyengine.engine.engines.FuturesPositionEngine
+import com.niftyengine.engine.engines.FutureExpectationEngine
+import com.niftyengine.engine.engines.GiftNiftyEngine
 import com.niftyengine.engine.engines.GlobalRiskEngine
 import com.niftyengine.engine.engines.IndiaMacroEngine
+import com.niftyengine.engine.engines.InformationShockEngine
 import com.niftyengine.engine.engines.MarketRegimeEngine
 import com.niftyengine.engine.engines.MarketStructureEngine
-import com.niftyengine.engine.engines.EventIntelligenceEngine
-import com.niftyengine.engine.engines.GiftNiftyEngine
-import com.niftyengine.engine.model.NewsHorizon
 import com.niftyengine.engine.engines.NiftyWeightEngine
 import com.niftyengine.engine.engines.OptionSelectionEngine
 import com.niftyengine.engine.engines.OptionsPositionEngine
+import com.niftyengine.engine.engines.ProbabilityCalibrator
+import com.niftyengine.engine.engines.RegimeEngineV5
+import com.niftyengine.engine.engines.RelativeBaselines
+import com.niftyengine.engine.engines.RiskEngine
+import com.niftyengine.engine.engines.ScenarioDistribution
+import com.niftyengine.engine.engines.ScenarioEngine
 import com.niftyengine.engine.engines.SectorEngine
+import com.niftyengine.engine.engines.ShadowTrader
+import com.niftyengine.engine.engines.StrategySelector
 import com.niftyengine.engine.engines.TradeDecisionEngine
+import com.niftyengine.engine.engines.TradeQualityEngine
 import com.niftyengine.engine.engines.VIXEngine
+import com.niftyengine.engine.model.ConfidenceLevel
+import com.niftyengine.engine.model.DecisionState
 import com.niftyengine.engine.model.Driver
 import com.niftyengine.engine.model.EngineOutput
 import com.niftyengine.engine.model.EngineSignal
+import com.niftyengine.engine.model.EventStage
 import com.niftyengine.engine.model.MarketSnapshot
+import com.niftyengine.engine.model.NewsHorizon
+import com.niftyengine.engine.model.PrimaryRegime
+import com.niftyengine.engine.model.Regime
+import com.niftyengine.engine.model.RiskConfig
+import com.niftyengine.engine.model.StrategyType
 import kotlinx.serialization.Serializable
+import kotlin.math.abs
 
 @Serializable
 data class EngineConfig(
     val horizonMinutes: Int = 60,
     val minProbability: Double = 0.65,
-    val minConfidence: com.niftyengine.engine.model.ConfidenceLevel = com.niftyengine.engine.model.ConfidenceLevel.HIGH,
+    val minConfidence: ConfidenceLevel = ConfidenceLevel.HIGH,
     val minExpectedMovePts: Double = 40.0,
     val requireMarketOpen: Boolean = true,
     val maxSpreadPct: Double = 3.0,
@@ -51,18 +68,33 @@ data class EngineConfig(
     val requireCalibration: Boolean = true,
     /** Historical market-only backtest: no option chain/news/global exist for past days, so only NIFTY is critical. */
     val marketOnlyBacktest: Boolean = false,
+    // ---- v5
+    /** Deterministic risk limits (sizing, stops, daily loss, IV/event caps). */
+    val risk: RiskConfig = RiskConfig(),
+    /** Execute approved decisions as virtual (shadow) trades. The app never places real orders. */
+    val shadowMode: Boolean = true,
+    val minTradeQuality: Double = 0.65,
+    val enableLongOptions: Boolean = true,
+    val enableSpreads: Boolean = true,
+    val enableCondor: Boolean = true,
 )
 
-const val ENGINE_VERSION = "4.2.0"
+const val ENGINE_VERSION = "5.0.0"
 
 /**
- * NIFTY Direction Engine v3 — orchestrates modules 02–16 for one snapshot.
+ * NIFTY Direction Engine v5 — one cycle of the decision pipeline:
  *
- *   data → features → (structure, heavyweights, sectors, breadth, futures, options, VIX, global, macro, flows, news)
- *        → regime → direction probabilities → expected move → option ranking → trade filter
+ *   data → normalized/relative state → market state engines (structure, heavyweights, sectors, breadth, futures,
+ *        options, VIX, global, macro, flows, GIFT, news/event intelligence)
+ *        → future expectation (what the market prices) → information shock (what changed)
+ *        → regime (v5 primary + quality) → direction probabilities (regime-weighted, EXPECTATION driver)
+ *        → calibration → expected move → scenarios → option selector → strategy selector
+ *        → trade quality → risk engine → TRADE / WAIT → shadow execution → outcome log → calibration
  *
- * The engine is stateful (tick history, driver persistence, regime history), so feed snapshots in
- * chronological order. Use one instance per live session or per replay run.
+ * The engine is stateful (tick history, driver persistence, regime/expectation history, baselines, shadow book), so
+ * feed snapshots in chronological order. Use one instance per live session or per replay run.
+ * Gemini (in the app) only reads news into structured events; probabilities, option and strategy selection, risk and
+ * execution are deterministic code.
  */
 class NiftyDirectionEngine(val config: EngineConfig = EngineConfig()) {
     val state = EngineState()
@@ -91,6 +123,20 @@ class NiftyDirectionEngine(val config: EngineConfig = EngineConfig()) {
         eventThresholdBump = config.eventThresholdBump, minDataQuality = config.minDataQuality,
         confirmCycles = config.confirmCycles, requireCalibration = config.requireCalibration))
     private val quality = DataQualityEngine(if (config.marketOnlyBacktest) setOf("NIFTY") else setOf("NIFTY", "Futures", "Options"))
+    // ---- v5 layers
+    /** 02c — rolling relative baselines. State persisted by the app. */
+    val baselines = RelativeBaselines()
+    private val expectationEngine = FutureExpectationEngine(state)
+    private val shockEngine = InformationShockEngine()
+    private val regimeV5 = RegimeEngineV5(state)
+    private val scenarioEngine = ScenarioEngine()
+    private val strategySelector = StrategySelector(config.costs, StrategySelector.Params(
+        enableLongOptions = config.enableLongOptions, enableSpreads = config.enableSpreads, enableCondor = config.enableCondor,
+        maxSpreadPct = config.maxSpreadPct, minOi = config.minOi, minVolume = config.minVolume))
+    private val qualityGate = TradeQualityEngine(TradeQualityEngine.Params(minScore = config.minTradeQuality))
+    private val riskEngine = RiskEngine(config.risk.copy(maxSpreadPct = config.maxSpreadPct), config.costs)
+    /** 28 — shadow execution book. State persisted by the app. */
+    val shadow = ShadowTrader(config.costs, config.shadowMode)
     private var prevSpot = Double.NaN
     private var prevSpotT = 0L
 
@@ -125,7 +171,9 @@ class NiftyDirectionEngine(val config: EngineConfig = EngineConfig()) {
         val fu = futures.analyze(s, now)
         val op = options.analyze(s, now)
         val vx = vix.analyze(s, now, sessionStart)
-        val gl = global.analyze(s, now, sessionStart)
+        // 02c — every positioning / volatility / global input relative to its own normal
+        val rel = baselines.analyze(s, now, sessionStart, norm, st, op, fu, vx)
+        val gl = global.analyze(s, now, sessionStart, rel.globalTypical)
         val mc = macro.analyze(s, now, sessionStart)
         val fl = quality.gate(flows.analyze(s), dq)
         // 21 — GIFT Nifty: opening factor (pre-open implied gap → gap behaviour in the first hour).
@@ -136,11 +184,12 @@ class NiftyDirectionEngine(val config: EngineConfig = EngineConfig()) {
             if (gift.impliedOpenForPricing.isNaN()) b else b.copy(nifty = gift.impliedOpenForPricing, futures = s.giftNifty?.last ?: b.futures)
         }
         // News is point-in-time against the wall clock (overnight/pre-open news must be visible before 09:15).
+        val newsHorizon = NewsHorizon.forMinutes(config.horizonMinutes)
         val nw = eventIntel.process(
             s.news, s.eventAnalyses, wall,
             market = liveBaseline,
             prevCloseBaseline = EventIntelligenceEngine.baselineFrom(s, sessionStart, usePrevClose = true),
-            niftySeries = st.series, decisionHorizon = NewsHorizon.forMinutes(config.horizonMinutes),
+            niftySeries = st.series, decisionHorizon = newsHorizon,
         )
         // Stale/invalid inputs stop acting as live drivers; degraded ones are down-weighted.
         val stSig = quality.gate(st.signal, dq); val hwSig = quality.gate(hw.signal, dq); val secSig = quality.gate(sec.signal, dq)
@@ -149,6 +198,20 @@ class NiftyDirectionEngine(val config: EngineConfig = EngineConfig()) {
 
         val derivatives = blend("Derivatives", fuSig, opSig, 0.5)
         val sectorDriver = blend("Sector+heavyweight", hwSig, secSig, 0.5)
+
+        // 23 — what the market expects for the near future, and how that expectation is changing
+        val fe = expectationEngine.analyze(FutureExpectationEngine.Inputs(
+            s, sessionStart, norm, stSig, br, sectorDriver, nw.events, nw.horizons, newsHorizon, rel, gift.report), now)
+        val expSig = EngineSignal("Future expectation", fe.driverScore, fe.driverConfidence,
+            listOf("EXP_${fe.expectation.state.name}"), fe.expectation.components.map {
+                com.niftyengine.engine.model.Detail(it.name, "%+.2f · %s".format(it.score, it.note))
+            } + com.niftyengine.engine.model.Detail("Current / expected / Δ30m",
+                "%+.2f / %+.2f / %+.2f".format(fe.expectation.current, fe.expectation.expected, fe.expectation.change)))
+        // 24 — what changed: event surprises and market moves in units of normal
+        val vixC15 = s.vix?.let { norm.features(it, now, sessionStart, 5.0).c15m } ?: Double.NaN
+        val shock = shockEngine.analyze(InformationShockEngine.Inputs(
+            s, sessionStart, norm, nw.events, rel, gift.report, fe.expectation, st.c15m, vixC15), now)
+
         val inputs = listOf(
             DriverInput(Driver.PRICE, stSig.score, stSig.confidence),
             DriverInput(Driver.DERIVATIVES, derivatives.score, derivatives.confidence),
@@ -160,22 +223,29 @@ class NiftyDirectionEngine(val config: EngineConfig = EngineConfig()) {
             DriverInput(Driver.FLOWS, fl.score, fl.confidence),
             DriverInput(Driver.NEWS, nwSig.score, nwSig.confidence),
             DriverInput(Driver.GIFT_NIFTY, giftSig.score, giftSig.confidence),
+            DriverInput(Driver.EXPECTATION, fe.driverScore, fe.driverConfidence),
         )
         val prelim = direction.preliminary(inputs)
         val rg = regime.classify(MarketRegimeEngine.Inputs(prelim, st, fu, op, vx, br.score, derivatives.score,
             hw.report.fakeBreadth,
             newsShock = nw.shock?.let { "Fresh unpriced ${it.type.label} event (${it.stage.label}): ${it.title.take(50)}" },
             newsContradicted = nw.contradicted.isNotEmpty()), now)
+        // 12b — primary regime (selects the weight table and the strategy family)
+        val rv5In = RegimeEngineV5.Inputs(rg, inputs, st.adx, vx, op.rangeEvidence, shock, fe.expectation, rel, nw.shock != null, dq.score)
+        var rv5 = regimeV5.classify(rv5In, now)
         val insideOr = !st.orHigh.isNaN() && s.nifty.last <= st.orHigh && s.nifty.last >= st.orLow
         val hwr = hw.report
         val prevClose = s.nifty.prevClose.takeIf { it > 0 } ?: s.nifty.last
         val concentration = if (abs(hwr.totalContributionPts) > prevClose * 0.003 && (hwr.fakeBreadth || abs(hwr.heavyweightDependence) > 0.8))
             0.08 to "Heavyweight concentration: top 5 carry %.0f%% of a %+.0f pt move".format(hwr.heavyweightDependence * 100, hwr.totalContributionPts)
         else null
-        val rawDir = direction.compute(inputs, rg.regime, rg.regimeClass,
-            DirectionProbabilityEngine.RangeInputs(st.adx, op.rangeEvidence, vx.state, insideOr),
-            qualityScore = dq.score, concentration = concentration)
-        // 19 — calibrated probabilities per horizon (raw scores flagged uncalibrated until enough outcomes).
+        val rangeIn = DirectionProbabilityEngine.RangeInputs(st.adx, op.rangeEvidence, vx.state, insideOr)
+        val trial = direction.compute(inputs, rg.regime, rv5.weightTable, rangeIn, commit = false, qualityScore = dq.score, concentration = concentration)
+        if (trial.conflictLevel == ConfidenceLevel.HIGH && rv5.primary in CONFLICT_PRONE)
+            rv5 = regimeV5.toConflict(rv5, rv5In, now, "Driver conflict %.0f%% in the direction engine".format(trial.conflict * 100))
+        val rawDir = direction.compute(inputs, rg.regime, rv5.weightTable, rangeIn, qualityScore = dq.score, concentration = concentration)
+        regimeV5.commit(rv5, now)
+        // 19 — calibrated probabilities per horizon (full when enough outcomes, partial while they accumulate).
         val dir = rawDir.copy(
             horizons = calibration.allHorizons(rawDir.pBull, rawDir.pBear, rawDir.pRange, ProbabilityCalibrator.HORIZONS),
             calibration = calibration.info,
@@ -187,34 +257,85 @@ class NiftyDirectionEngine(val config: EngineConfig = EngineConfig()) {
         val em = move.compute(ExpectedMoveEngine.Inputs(
             spot = s.nifty.last, horizonMinutes = horizon, vix = vx.level, atmIv = op.atmIv,
             realizedVol = st.realizedVolAnnual, histVol = st.histVolAnnual,
-            eventShock = rg.regime == com.niftyengine.engine.model.Regime.EVENT_SHOCK, vixState = vx.state,
+            eventShock = rg.regime == Regime.EVENT_SHOCK, vixState = vx.state,
             freshMajorEvent = nw.events.any { (it.analysis?.severity ?: 0.0) >= 0.6 && now - it.lastInfoAt <= 90 * 60_000L && it.surpriseMagnitude * it.unpriced >= 0.2 },
-            globalStress = gl.globalVolStress, momentum = st.pressure,
+            globalStress = gl.globalVolStress, momentum = st.pressure, shockScore = shock.score,
         ), dir)
-        val oa = optionSelect.analyze(s.optionChain, s.optionChain?.underlying?.takeIf { it > 0 } ?: s.nifty.last, wall, dir, em, op.atmIv,
-            dir.decisionProbs(em.horizonMinutes))
+        val probs = dir.decisionProbs(em.horizonMinutes)
+        // 14b — five scenarios and the move distribution they imply
+        val scen = scenarioEngine.compute(ScenarioEngine.Inputs(
+            spot = s.nifty.last, horizonMinutes = em.horizonMinutes, sigma = em.sigmaPoints, eventMultiplier = em.eventMultiplier,
+            probs = probs, rawBull = rawDir.pBull, rawBear = rawDir.pBear, rawRange = rawDir.pRange,
+            pressure = st.pressure, adx = st.adx, structureTags = st.signal.tags, trend = st.trend,
+            futuresDay = fu.dayState, futuresIntraday = fu.intradayState, regime = rv5, shock = shock, expectation = fe.expectation,
+            rangeEvidence = op.rangeEvidence,
+        ), calibration)
+        val dist = ScenarioDistribution(scen)
+        val optSpot = s.optionChain?.underlying?.takeIf { it > 0 } ?: s.nifty.last
+        // 15 — option selector (strike), priced over the scenario distribution
+        val oa = optionSelect.analyze(s.optionChain, optSpot, wall, dir, em, op.atmIv, probs, dist)
+        // 26 — strategy selector
+        val creditHold = if (Session.isOpen(wall)) riskEngine.minutesToTimeExit(wall).coerceAtLeast(em.horizonMinutes) else em.horizonMinutes
+        val plan = strategySelector.select(StrategySelector.Inputs(
+            s.optionChain, optSpot, wall, em.horizonMinutes, scen, dist, rv5, oa, rel.ivRel, oa.atmIv, op.callWall, op.putWall,
+            fe.expectation, shock, creditHold))
+        // 25 — trade quality gate · 27 — risk engine
+        val tq = qualityGate.assess(dir, probs, rv5, plan.chosen, shadow.current)
+        val risk = riskEngine.assess(plan.chosen, wall, em.horizonMinutes, shadow.current, oa.atmIv, shock,
+            fe.expectation.eventRiskAhead, Session.isOpen(wall))
         val shockAge = nw.shock?.let { (now - it.lastInfoAt) / 60_000.0 }
         // Event-risk regime: a fresh major event, or a scheduled high-severity event still ahead (outcome unknown).
         val majorEvent = nw.events.any { e ->
             val sev = e.analysis?.severity ?: 0.0
             (sev >= 0.7 && now - e.lastInfoAt <= 120 * 60_000L && e.newsConfidence >= 0.3) ||
-                (sev >= 0.7 && e.stage == com.niftyengine.engine.model.EventStage.EXPECTED && now - e.lastInfoAt <= 86_400_000L)
+                (sev >= 0.7 && e.stage == EventStage.EXPECTED && now - e.lastInfoAt <= 86_400_000L)
         }
-        val td = decision.decide(dir, rg, em, oa, Session.isOpen(wall), shockAge, dq, majorEvent)
+        val td = decision.decide(dir, rg, em, oa, Session.isOpen(wall), shockAge, dq, majorEvent,
+            TradeDecisionEngine.V5(rv5, scen, plan, tq, risk))
+
+        // 28 — execution in shadow mode (virtual fills, stops, targets, emergency exits)
+        val side = plan.chosen?.type?.directional ?: 0
+        val sideProb = when {
+            side > 0 -> probs.pBull; side < 0 -> probs.pBear
+            plan.chosen?.type == StrategyType.IRON_CONDOR -> plan.chosen.probProfit
+            else -> probs.top
+        }
+        val shadowSummary = shadow.update(ShadowTrader.Context(wall, optSpot, s.optionChain, td.decision, plan, risk, rv5, tq, sideProb,
+            fe.expectation, shock, dq.circuitBreaker.isNotEmpty(), Session.isOpen(wall)))
 
         val signals = linkedMapOf(
             stSig.name to stSig, hwSig.name to hwSig, secSig.name to secSig,
             br.name to br, fuSig.name to fuSig, opSig.name to opSig, vxSig.name to vxSig,
             glSig.name to glSig, mc.signal.name to mc.signal, fl.name to fl, nwSig.name to nwSig, giftSig.name to giftSig,
+            expSig.name to expSig,
         )
         val feed = LinkedHashMap(s.feedStatus)
         feed["Coverage"] = "%.0f%%".format(health.coverage * 100) + if (health.missing.isEmpty()) "" else " (missing: ${health.missing.joinToString()})"
+
+        // 16 — the complete decision object
+        val dirName = when { probs.pBull >= probs.pBear && probs.pBull >= probs.pRange -> "UP"; probs.pBear >= probs.pRange -> "DOWN"; else -> "RANGE" }
+        val rawP = when (dirName) { "UP" -> rawDir.pBull; "DOWN" -> rawDir.pBear; else -> rawDir.pRange }
+        val calP = if (probs.calibrated || probs.partial) when (dirName) { "UP" -> probs.pBull; "DOWN" -> probs.pBear; else -> probs.pRange } else null
+        val ds = DecisionState(
+            timestamp = wall, spot = s.nifty.last, regime = rv5.primary.name, regimeQuality = rv5.quality,
+            direction = dirName, rawProbability = rawP, calibratedProbability = calP, calibration = probs.level,
+            confidence = dir.confidenceValue, scenarios = scen.scenarios.associate { it.key to it.probability },
+            futureExpectation = fe.expectation.expected, expectationChange = fe.expectation.change, expectationState = fe.expectation.state.name,
+            informationShock = shock.score, shockDirection = shock.direction,
+            tradeQuality = tq.score, qualityTier = tq.tier.name,
+            instrument = plan.chosen?.instrument ?: "–", strategy = plan.type.name, lots = risk.lots, riskAtStop = risk.riskAtStop,
+            stop = risk.exit?.stopText ?: "", target = risk.exit?.targetText ?: "",
+            action = td.decision.name,
+            reasons = (if (td.reasons.isEmpty()) plan.rationale else td.reasons).take(6),
+        )
         return EngineOutput(
             timestamp = wall, spot = s.nifty.last, spotChangePct = s.nifty.changePct,
             signals = signals, regime = rg, direction = dir, expectedMove = em, options = oa, decision = td,
             heavyweights = hw.report, sectors = sec.rows, events = nw.events,
             dataSource = s.source, feedStatus = feed, dataQuality = dq.copy(warnings = dq.warnings + gift.warnings), engineVersion = ENGINE_VERSION,
             newsHorizons = nw.horizons, pendingEventAnalysis = nw.pending, gift = gift.report,
+            normalized = rel.state, regimeV5 = rv5, expectation = fe.expectation, shock = shock, scenarios = scen,
+            quality = tq, strategy = plan, risk = risk, shadow = shadowSummary, decisionState = ds,
         )
     }
 
@@ -231,5 +352,10 @@ class NiftyDirectionEngine(val config: EngineConfig = EngineConfig()) {
         val den = wA + wB
         if (den <= 0) return EngineSignal.unavailable(name, "no data")
         return EngineSignal(name, (wA * a.score + wB * b.score) / den, maxOf(a.confidence, b.confidence) * (0.7 + 0.3 * minOf(a.confidence, b.confidence)))
+    }
+
+    companion object {
+        /** Regimes that the direction engine's own high driver conflict turns into CONFLICT. */
+        private val CONFLICT_PRONE = setOf(PrimaryRegime.TREND_UP, PrimaryRegime.TREND_DOWN, PrimaryRegime.RANGE, PrimaryRegime.REVERSAL_RISK)
     }
 }

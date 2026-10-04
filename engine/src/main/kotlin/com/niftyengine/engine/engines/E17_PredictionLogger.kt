@@ -97,6 +97,27 @@ data class PredictionRecord(
     // ---- v4 event intelligence
     val newsHorizons: Map<String, Double> = emptyMap(),
     val events: List<EventAudit> = emptyList(),
+    // ---- v5 decision state
+    val primaryRegime: String = "",
+    val regimeQuality: Double = Double.NaN,
+    /** RAW scenario probabilities keyed by [com.niftyengine.engine.model.Scenario] name (scenario calibration is fitted on these). */
+    val scenarioProbs: Map<String, Double> = emptyMap(),
+    val calScenarioProbs: Map<String, Double> = emptyMap(),
+    val rangeBand: Double = 0.0,
+    val breakoutBand: Double = 0.0,
+    val expectation: Double = Double.NaN,
+    val expectationChange: Double = Double.NaN,
+    val expectationState: String = "",
+    val shockScore: Double = Double.NaN,
+    val shockDirection: Double = Double.NaN,
+    val tradeQuality: Double = Double.NaN,
+    val qualityTier: String = "",
+    val strategy: String = "",
+    val instrument: String = "",
+    val strategyProbProfit: Double = Double.NaN,
+    val strategyEv: Double = Double.NaN,
+    val riskApproved: Boolean = false,
+    val lots: Int = 0,
 ) {
     val predictedClass: Int get() = when {
         pBull >= pBear && pBull >= pRange -> 1
@@ -165,6 +186,16 @@ class PredictionLogger(private val store: PredictionStore, val horizons: List<In
                     e.expectations.lastOrNull()?.probability ?: Double.NaN, e.surprise, e.pricedIn, e.unpriced,
                     e.reaction.agreement, e.newsConfidence, e.effectiveImpact, e.horizonImpacts.mapKeys { it.key.name }, e.flags)
             },
+            primaryRegime = o.regimeV5.primary.name, regimeQuality = o.regimeV5.quality,
+            scenarioProbs = o.scenarios.scenarios.associate { it.scenario.name to it.rawProbability },
+            calScenarioProbs = if (o.scenarios.calibration == "NONE") emptyMap() else o.scenarios.scenarios.associate { it.scenario.name to it.probability },
+            rangeBand = o.scenarios.rangeBand, breakoutBand = o.scenarios.breakoutBand,
+            expectation = o.expectation.expected, expectationChange = o.expectation.change, expectationState = o.expectation.state.name,
+            shockScore = o.shock.score, shockDirection = o.shock.direction,
+            tradeQuality = o.quality.score, qualityTier = o.quality.tier.name,
+            strategy = o.strategy.type.name, instrument = o.strategy.chosen?.instrument ?: "",
+            strategyProbProfit = o.strategy.chosen?.probProfit ?: Double.NaN, strategyEv = o.strategy.chosen?.expectedValue ?: Double.NaN,
+            riskApproved = o.risk.approved, lots = o.risk.lots,
         )
         store.append(r)
         return r
@@ -227,6 +258,10 @@ object PerformanceStats {
         val driverHitRates: Map<String, Double>,
         /** Option-outcome model: predicted P(profit) vs realised net option profit. */
         val optionBuckets: List<Bucket>,
+        /** v5: every scenario probability vs whether that scenario happened (pooled reliability), at the record's horizon. */
+        val scenarioBuckets: List<Bucket> = emptyList(),
+        /** v5: realised frequency per scenario vs average predicted probability. */
+        val scenarioRates: List<Bucket> = emptyList(),
     )
 
     /** The bucket edges requested for calibration review. */
@@ -242,6 +277,15 @@ object PerformanceStats {
             if (sel.isEmpty()) Double.NaN else sel.count { it.second }.toDouble() / sel.size)
     }
 
+    private val SCEN_EDGES = listOf(0.0 to 0.05, 0.05 to 0.10, 0.10 to 0.20, 0.20 to 0.30, 0.30 to 0.45, 0.45 to 1.01)
+
+    private fun scenarioBucketize(points: List<Pair<Double, Boolean>>): List<Bucket> = SCEN_EDGES.map { (lo, hi) ->
+        val sel = points.filter { it.first >= lo && it.first < hi }
+        Bucket(if (hi > 1.0) "%.0f%%+".format(lo * 100) else "%.0f–%.0f%%".format(lo * 100, hi * 100), sel.size,
+            if (sel.isEmpty()) Double.NaN else sel.map { it.first }.average(),
+            if (sel.isEmpty()) Double.NaN else sel.count { it.second }.toDouble() / sel.size)
+    }
+
     fun summarize(records: List<PredictionRecord>, horizon: Int = 30): Summary {
         val done = records.mapNotNull { r -> r.outcomes.firstOrNull { it.minutes == horizon }?.let { r to it } }
         val opt = records.mapNotNull { r ->
@@ -251,6 +295,19 @@ object PerformanceStats {
             r.probProfit to (o.optionPrice - r.premium - (if (r.optionCost.isNaN()) 0.0 else r.optionCost) > 0)
         }
         if (done.isEmpty()) return Summary(horizon, 0, Double.NaN, Double.NaN, Double.NaN, 0, Double.NaN, emptyList(), emptyList(), emptyMap(), bucketize(opt))
+        // scenario reliability: records whose own horizon equals this horizon
+        val scen = done.filter { (r, _) -> r.horizonMinutes == horizon && r.scenarioProbs.isNotEmpty() && r.rangeBand > 0 }.map { (r, o) ->
+            r to ScenarioEngine.realized(o.move, r.rangeBand, r.breakoutBand)
+        }
+        val scenPoints = scen.flatMap { (r, real) ->
+            val probs = r.calScenarioProbs.ifEmpty { r.scenarioProbs }
+            probs.map { (k, p) -> p to (k == real.name) }
+        }
+        val scenRates = com.niftyengine.engine.model.Scenario.values().map { sc ->
+            val ps = scen.mapNotNull { (r, _) -> (r.calScenarioProbs.ifEmpty { r.scenarioProbs })[sc.name] }
+            Bucket(sc.name, scen.size, if (ps.isEmpty()) Double.NaN else ps.average(),
+                if (scen.isEmpty()) Double.NaN else scen.count { it.second == sc }.toDouble() / scen.size)
+        }
         val acc = done.count { (r, o) -> r.predictedClass == o.realized }.toDouble() / done.size
         val brier = done.map { (r, o) ->
             val y = doubleArrayOf(if (o.realized == 1) 1.0 else 0.0, if (o.realized == -1) 1.0 else 0.0, if (o.realized == 0) 1.0 else 0.0)
@@ -273,6 +330,7 @@ object PerformanceStats {
             val sel = done.filter { abs(it.first.driverScores[d.name] ?: 0.0) > 0.2 }
             d.label to if (sel.size < 5) Double.NaN else sel.count { (r, o) -> M.clamp(r.driverScores.getValue(d.name)) * o.move > 0 }.toDouble() / sel.size
         }
-        return Summary(horizon, done.size, acc, brier, dirHit, trades.size, tradeWin, bucketize(raw), bucketize(cal), driverHits, bucketize(opt))
+        return Summary(horizon, done.size, acc, brier, dirHit, trades.size, tradeWin, bucketize(raw), bucketize(cal), driverHits, bucketize(opt),
+            if (scenPoints.isEmpty()) emptyList() else scenarioBucketize(scenPoints), if (scen.isEmpty()) emptyList() else scenRates)
     }
 }

@@ -2,6 +2,7 @@ package com.niftyengine.engine.engines
 
 import com.niftyengine.engine.core.BlackScholes
 import com.niftyengine.engine.core.M
+import com.niftyengine.engine.core.OptionClock
 import com.niftyengine.engine.core.Session
 import com.niftyengine.engine.core.TransactionCosts
 import com.niftyengine.engine.model.HorizonProb
@@ -49,9 +50,14 @@ class OptionSelectionEngine(
         val otmSteps: Int = 6,
     )
 
+    /**
+     * @param dist v5 scenario distribution: when given, EV and P(profit) integrate over the five scenarios
+     * (breakout / continuation / range / reversal / sharp decline) instead of three point scenarios.
+     */
     fun analyze(
         chain: OptionChain?, spot: Double, now: Long, dir: DirectionResult, move: ExpectedMove, atmIvPct: Double,
         probs: HorizonProb = HorizonProb(move.horizonMinutes, dir.pBull, dir.pBear, dir.pRange, false),
+        dist: ScenarioDistribution? = null,
     ): OptionAnalysis {
         if (chain == null || chain.rows.isEmpty()) return OptionAnalysis(null, null, emptyList(), atmIvPct, 0.0, listOf("Option chain unavailable"))
         val notes = mutableListOf<String>()
@@ -59,8 +65,9 @@ class OptionSelectionEngine(
         val step = rows.zipWithNext { a, b -> b.strike - a.strike }.filter { it > 0 }.minOrNull() ?: chain.strikeStep
         val atm = rows.minBy { abs(it.strike - spot) }.strike
         val tYears = Session.yearsToExpiry(now, chain.expiryMillis)
-        val hYears = move.horizonMinutes / (60.0 * 24 * 365)
-        val t2 = (tYears - hYears).coerceAtLeast(1.0 / (365 * 24 * 60))
+        // horizon value in trading time with variance-consistent IV (see OptionClock)
+        val clock = OptionClock.of(now, chain.expiryMillis)
+        val t2 = clock.after(move.horizonMinutes)
         val dte = tYears * 365
         val atmIv = if (!atmIvPct.isNaN() && atmIvPct > 0) atmIvPct / 100 else move.annualVolUsed
         val preferred = if (probs.pBull >= probs.pBear) OptionType.CE else OptionType.PE
@@ -79,7 +86,7 @@ class OptionSelectionEngine(
             val hi = if (isCall) atm + f.otmSteps * step else atm + f.itmSteps * step
             for (r in rows.filter { it.strike in lo..hi }) {
                 val leg = if (isCall) r.call else r.put
-                candidate(type, r.strike, leg, spot, tYears, t2, atmIv, sigmaH, drift, scenarios, probs, move)?.let { out += it }
+                candidate(type, r.strike, leg, spot, tYears, t2, atmIv, sigmaH, drift, scenarios, probs, move, dist?.takeIf { !it.isEmpty }, clock.volScale)?.let { out += it }
             }
         }
         val ranked = out.sortedByDescending { it.score }
@@ -92,6 +99,9 @@ class OptionSelectionEngine(
     private fun candidate(
         type: OptionType, k: Double, leg: OptionLeg, spot: Double, tYears: Double, t2: Double, atmIv: Double,
         sigmaH: Double, drift: Double, scenarios: List<Pair<Double, Double>>, dir: HorizonProb, move: ExpectedMove,
+        dist: ScenarioDistribution? = null,
+        /** Calendar-IV → trading-time-IV factor for horizon repricing (1.0 = legacy calendar repricing). */
+        volScale: Double = 1.0,
     ): OptionCandidate? {
         val isCall = type == OptionType.CE
         val ltp = leg.ltp
@@ -104,15 +114,17 @@ class OptionSelectionEngine(
             else -> BlackScholes.impliedVol(isCall, spot, k, tYears, mid).takeIf { !it.isNaN() } ?: atmIv
         }
         val g = BlackScholes.price(isCall, spot, k, tYears, iv)
+        val ivH = iv * volScale
         val halfSpread = if (spreadPct.isNaN()) premium * 0.005 else (leg.ask - leg.bid) / 2
 
         // Scenario repricing at the horizon (exit at bid ≈ model − half-spread).
-        val grossEv = scenarios.sumOf { (s, p) -> p * (BlackScholes.price(isCall, s, k, t2, iv).price - halfSpread - premium) }
+        val grossEv = dist?.expect { m -> BlackScholes.price(isCall, spot + m, k, t2, ivH).price - halfSpread - premium }
+            ?: scenarios.sumOf { (s, p) -> p * (BlackScholes.price(isCall, s, k, t2, ivH).price - halfSpread - premium) }
         // Charges + slippage per unit, evaluated at the expected exit price.
         val cost = costs.perUnit(premium, (premium + grossEv).coerceAtLeast(0.0))
         val ev = grossEv - cost
         val target = scenarios[if (isCall) 0 else 1].first
-        val valueAtTarget = BlackScholes.price(isCall, target, k, t2, iv).price
+        val valueAtTarget = BlackScholes.price(isCall, target, k, t2, ivH).price
 
         // Net breakeven spot at horizon (value − half-spread = premium + costs), by bisection.
         val hurdle = premium + cost
@@ -120,17 +132,21 @@ class OptionSelectionEngine(
         var b = if (isCall) spot + 6 * sigmaH + premium else spot
         repeat(50) {
             val m = (a + b) / 2
-            val v = BlackScholes.price(isCall, m, k, t2, iv).price - halfSpread
+            val v = BlackScholes.price(isCall, m, k, t2, ivH).price - halfSpread
             if (isCall) { if (v > hurdle) b = m else a = m } else { if (v > hurdle) a = m else b = m }
         }
         val breakeven = (a + b) / 2
         val sd = sigmaH.coerceAtLeast(1e-6)
-        val probProfit = if (isCall) 1 - M.normCdf((breakeven - spot - drift) / sd) else M.normCdf((breakeven - spot - drift) / sd)
+        val probProfit = when {
+            dist != null -> if (isCall) dist.probAbove(breakeven - spot) else dist.probBelow(breakeven - spot)
+            isCall -> 1 - M.normCdf((breakeven - spot - drift) / sd)
+            else -> M.normCdf((breakeven - spot - drift) / sd)
+        }
         val itm = if (isCall) spot >= k else spot <= k
         val probReach = if (itm) 1.0 else {
-            val dist = abs(ln(k / spot)) / (sd / spot)
+            val distSd = abs(ln(k / spot)) / (sd / spot)
             val adj = (if (isCall) drift else -drift) / sd
-            M.clamp(2 * (1 - M.normCdf(dist - adj)), 0.0, 1.0)
+            M.clamp(2 * (1 - M.normCdf(distSd - adj)), 0.0, 1.0)
         }
         val sq = sqrt(tYears)
         val d2 = (ln(spot / k) + (0.065 - iv * iv / 2) * tYears) / (iv * sq)

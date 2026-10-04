@@ -2,6 +2,7 @@ package com.niftyengine.engine.core
 
 import com.niftyengine.engine.model.Driver
 import com.niftyengine.engine.model.OptionChain
+import com.niftyengine.engine.model.PrimaryRegime
 import com.niftyengine.engine.model.Regime
 
 /**
@@ -21,6 +22,10 @@ class EngineState(private val maxTicks: Int = 2000) {
     val driverHistory = HashMap<Driver, ArrayDeque<Double>>()
     val regimeHistory = ArrayDeque<Pair<Long, Regime>>()
     val directionHistory = ArrayDeque<Pair<Long, Double>>()
+    /** v5: expected-future score over time (what the market is pricing), for "what changed". */
+    val expectationHistory = ArrayDeque<Pair<Long, Double>>()
+    /** v5: primary regime over time (regime stability / quality). */
+    val primaryHistory = ArrayDeque<Pair<Long, PrimaryRegime>>()
     var sessionDay: Long = -1
 
     fun record(symbol: String, t: Long, price: Double, volume: Double = 0.0) {
@@ -49,6 +54,22 @@ class EngineState(private val maxTicks: Int = 2000) {
         while (directionHistory.size > keep) directionHistory.removeFirst()
     }
 
+    fun pushExpectation(t: Long, e: Double, keep: Int = 240) {
+        if (expectationHistory.isNotEmpty() && expectationHistory.last().first >= t) expectationHistory.removeLast()
+        expectationHistory.addLast(t to e)
+        while (expectationHistory.size > keep) expectationHistory.removeFirst()
+    }
+
+    /** Value at or before [t] (the earliest value if history starts later but is at least [minAgeMs] old). */
+    fun expectationAt(t: Long, now: Long, minAgeMs: Long): Double? =
+        expectationHistory.lastOrNull { it.first <= t }?.second
+            ?: expectationHistory.firstOrNull()?.takeIf { now - it.first >= minAgeMs }?.second
+
+    fun pushPrimary(t: Long, r: PrimaryRegime, keep: Int = 30) {
+        primaryHistory.addLast(t to r)
+        while (primaryHistory.size > keep) primaryHistory.removeFirst()
+    }
+
     /** Reset intraday memory when a new session day begins. */
     fun rollDay(now: Long) {
         val day = Session.zdt(now).toLocalDate().toEpochDay()
@@ -57,6 +78,7 @@ class EngineState(private val maxTicks: Int = 2000) {
             ticks.clear(); futures.clear()
             previousChain = null; openingChain = null
             driverHistory.clear(); regimeHistory.clear(); directionHistory.clear()
+            expectationHistory.clear(); primaryHistory.clear()
         }
     }
 }

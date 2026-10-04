@@ -29,6 +29,8 @@ class ExpectedMoveEngine {
         val freshMajorEvent: Boolean,
         val globalStress: Double,
         val momentum: Double,
+        /** v5 information-shock score 0..1: a fresh shock widens the distribution immediately. */
+        val shockScore: Double = 0.0,
     )
 
     fun compute(i: Inputs, dir: DirectionResult): ExpectedMove {
@@ -48,6 +50,8 @@ class ExpectedMoveEngine {
         if (i.vixState == VixState.SPIKING) mult *= 1.25 else if (i.vixState == VixState.RISING) mult *= 1.08
         if (i.freshMajorEvent) mult *= 1.15
         mult *= 1 + 0.2 * i.globalStress
+        if (i.shockScore > 0.05) mult *= 1 + 0.5 * i.shockScore
+        mult = mult.coerceAtMost(2.5)
         comps += Detail("Event/vol multiplier", "×%.2f".format(mult))
 
         val h = i.horizonMinutes.coerceAtLeast(5)

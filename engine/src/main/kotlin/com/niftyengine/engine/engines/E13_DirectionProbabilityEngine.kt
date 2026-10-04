@@ -34,27 +34,43 @@ class DirectionProbabilityEngine(private val state: EngineState, private val par
     data class RangeInputs(val adx: Double, val wallRangeEvidence: Double, val vixState: VixState, val insideOpeningRange: Boolean)
 
     companion object {
-        /** Starting engineering weights (spec §20/§21) — not empirically optimal; tune from logged predictions. */
+        /**
+         * Starting engineering weights per regime family — not empirically optimal; tune from logged predictions.
+         * v5: future expectation is a first-class driver; event/reversal regimes lean on it and on news, while
+         * lagging price structure gets less weight there (it is still the anchor in trends and ranges).
+         * PRICE covers structure + momentum. GIFT's confidence decays to 0 after the first hour, so its weight
+         * effectively redistributes during the session.
+         */
         val WEIGHTS: Map<RegimeClass, Map<Driver, Double>> = mapOf(
             RegimeClass.NORMAL to mapOf(
-                Driver.PRICE to 20.0, Driver.DERIVATIVES to 18.0, Driver.SECTOR to 15.0, Driver.GLOBAL to 12.0,
-                Driver.BREADTH to 10.0, Driver.VIX to 8.0, Driver.MACRO to 7.0, Driver.FLOWS to 5.0, Driver.NEWS to 5.0,
-                Driver.GIFT_NIFTY to 10.0,
+                Driver.PRICE to 25.0, Driver.DERIVATIVES to 17.0, Driver.EXPECTATION to 15.0, Driver.SECTOR to 10.0,
+                Driver.GLOBAL to 10.0, Driver.BREADTH to 10.0, Driver.NEWS to 8.0, Driver.VIX to 6.0, Driver.MACRO to 5.0,
+                Driver.FLOWS to 4.0, Driver.GIFT_NIFTY to 10.0,
             ),
             RegimeClass.TREND to mapOf(
-                Driver.PRICE to 25.0, Driver.DERIVATIVES to 20.0, Driver.SECTOR to 15.0, Driver.GLOBAL to 12.0,
-                Driver.BREADTH to 10.0, Driver.VIX to 6.0, Driver.MACRO to 7.0, Driver.FLOWS to 0.0, Driver.NEWS to 5.0,
-                Driver.GIFT_NIFTY to 8.0,
+                Driver.PRICE to 30.0, Driver.DERIVATIVES to 15.0, Driver.EXPECTATION to 15.0, Driver.GLOBAL to 10.0,
+                Driver.BREADTH to 10.0, Driver.NEWS to 10.0, Driver.SECTOR to 8.0, Driver.MACRO to 5.0, Driver.VIX to 4.0,
+                Driver.FLOWS to 0.0, Driver.GIFT_NIFTY to 8.0,
             ),
             RegimeClass.EVENT to mapOf(
-                Driver.NEWS to 25.0, Driver.GLOBAL to 15.0, Driver.VIX to 15.0, Driver.DERIVATIVES to 15.0,
-                Driver.PRICE to 15.0, Driver.SECTOR to 8.0, Driver.BREADTH to 4.0, Driver.MACRO to 3.0, Driver.FLOWS to 0.0,
-                Driver.GIFT_NIFTY to 10.0,
+                Driver.NEWS to 25.0, Driver.EXPECTATION to 20.0, Driver.PRICE to 20.0, Driver.DERIVATIVES to 15.0,
+                Driver.GLOBAL to 10.0, Driver.VIX to 8.0, Driver.BREADTH to 5.0, Driver.SECTOR to 5.0, Driver.MACRO to 5.0,
+                Driver.FLOWS to 0.0, Driver.GIFT_NIFTY to 10.0,
             ),
             RegimeClass.RANGE to mapOf(
-                Driver.PRICE to 25.0, Driver.DERIVATIVES to 20.0, Driver.VIX to 15.0, Driver.BREADTH to 10.0,
-                Driver.SECTOR to 8.0, Driver.GLOBAL to 7.0, Driver.MACRO to 5.0, Driver.NEWS to 5.0, Driver.FLOWS to 5.0,
-                Driver.GIFT_NIFTY to 8.0,
+                Driver.PRICE to 25.0, Driver.DERIVATIVES to 22.0, Driver.VIX to 12.0, Driver.BREADTH to 10.0,
+                Driver.EXPECTATION to 10.0, Driver.SECTOR to 8.0, Driver.GLOBAL to 7.0, Driver.MACRO to 5.0, Driver.NEWS to 5.0,
+                Driver.FLOWS to 4.0, Driver.GIFT_NIFTY to 8.0,
+            ),
+            RegimeClass.VOLATILE to mapOf(
+                Driver.PRICE to 22.0, Driver.DERIVATIVES to 15.0, Driver.EXPECTATION to 15.0, Driver.VIX to 15.0,
+                Driver.GLOBAL to 12.0, Driver.NEWS to 12.0, Driver.BREADTH to 6.0, Driver.SECTOR to 5.0, Driver.MACRO to 3.0,
+                Driver.FLOWS to 0.0, Driver.GIFT_NIFTY to 8.0,
+            ),
+            RegimeClass.REVERSAL to mapOf(
+                Driver.EXPECTATION to 22.0, Driver.DERIVATIVES to 20.0, Driver.PRICE to 15.0, Driver.BREADTH to 14.0,
+                Driver.NEWS to 10.0, Driver.GLOBAL to 8.0, Driver.SECTOR to 8.0, Driver.VIX to 6.0, Driver.MACRO to 4.0,
+                Driver.FLOWS to 3.0, Driver.GIFT_NIFTY to 8.0,
             ),
         )
     }

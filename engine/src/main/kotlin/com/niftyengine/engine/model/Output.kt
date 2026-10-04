@@ -15,6 +15,8 @@ enum class Driver(val label: String) {
     FLOWS("FPI / DII"),
     NEWS("News / events"),
     GIFT_NIFTY("GIFT Nifty / opening"),
+    /** v5 — what the market is pricing for the near future, and how that expectation is changing. */
+    EXPECTATION("Future expectation"),
 }
 
 /**
@@ -52,9 +54,9 @@ enum class Regime(val label: String, val bias: Int) {
     TRANSITION("Transition", 0);
 }
 
-/** Weight table selected by regime (section 21 of the spec). */
+/** Weight table selected by regime (v5: one table per primary regime family). */
 @Serializable
-enum class RegimeClass { NORMAL, TREND, EVENT, RANGE }
+enum class RegimeClass { NORMAL, TREND, EVENT, RANGE, VOLATILE, REVERSAL }
 
 @Serializable
 data class RegimeResult(
@@ -99,9 +101,12 @@ data class DirectionResult(
     /** Confidence cap applied because of data quality (1.0 = none). */
     val qualityCap: Double = 1.0,
 ) {
-    /** Probabilities for the decision horizon: calibrated if available, else raw model score. */
-    fun decisionProbs(h: Int): HorizonProb = horizons.filter { it.calibrated }.minByOrNull { kotlin.math.abs(it.minutes - h) }
-        ?.takeIf { it.minutes == h } ?: HorizonProb(h, pBull, pBear, pRange, false)
+    /**
+     * Probabilities for the decision horizon: fully calibrated if available, else partially calibrated
+     * (shrunk toward observed frequencies while outcomes accumulate), else the raw model score.
+     */
+    fun decisionProbs(h: Int): HorizonProb = horizons.firstOrNull { it.minutes == h && (it.calibrated || it.partial) }
+        ?: HorizonProb(h, pBull, pBear, pRange, false)
 
     val bias: Int get() = when {
         pBull > pBear && pBull > pRange -> 1
@@ -112,8 +117,13 @@ data class DirectionResult(
 }
 
 @Serializable
-data class HorizonProb(val minutes: Int, val pBull: Double, val pBear: Double, val pRange: Double, val calibrated: Boolean) {
+data class HorizonProb(
+    val minutes: Int, val pBull: Double, val pBear: Double, val pRange: Double, val calibrated: Boolean,
+    /** Partially calibrated: fewer outcomes than required, blended with the raw score by sample share. */
+    val partial: Boolean = false,
+) {
     val top: Double get() = maxOf(pBull, pBear, pRange)
+    val level: String get() = when { calibrated -> "FULL"; partial -> "PARTIAL"; else -> "NONE" }
 }
 
 @Serializable
@@ -250,6 +260,17 @@ data class EngineOutput(
     /** Events waiting for (re-)analysis by the AI analyst. */
     val pendingEventAnalysis: List<AnalysisRequest> = emptyList(),
     val gift: GiftNiftyReport? = null,
+    // ---- v5 decision pipeline
+    val normalized: NormalizedState = NormalizedState(),
+    val regimeV5: RegimeAssessment = RegimeAssessment(),
+    val expectation: FutureExpectation = FutureExpectation(),
+    val shock: InformationShock = InformationShock(),
+    val scenarios: ScenarioSet = ScenarioSet(),
+    val quality: TradeQuality = TradeQuality(),
+    val strategy: StrategyPlan = StrategyPlan(),
+    val risk: RiskAssessment = RiskAssessment(),
+    val shadow: ShadowSummary = ShadowSummary(),
+    val decisionState: DecisionState = DecisionState(),
 )
 
 @Serializable

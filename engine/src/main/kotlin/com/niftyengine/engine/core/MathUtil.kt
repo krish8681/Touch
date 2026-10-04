@@ -117,6 +117,70 @@ object M {
     }
 
     fun normPdf(x: Double): Double = exp(-x * x / 2.0) / sqrt(2 * Math.PI)
+
+    /** Inverse standard normal CDF (Acklam's rational approximation, |error| < 1.2e-9). */
+    fun normInv(p: Double): Double {
+        if (p <= 0.0) return Double.NEGATIVE_INFINITY
+        if (p >= 1.0) return Double.POSITIVE_INFINITY
+        val a = doubleArrayOf(-3.969683028665376e1, 2.209460984245205e2, -2.759285104469687e2, 1.383577518672690e2, -3.066479806614716e1, 2.506628277459239)
+        val b = doubleArrayOf(-5.447609879822406e1, 1.615858368580409e2, -1.556989798598866e2, 6.680131188771972e1, -1.328068155288572e1)
+        val c = doubleArrayOf(-7.784894002430293e-3, -3.223964580411365e-1, -2.400758277161838, -2.549732539343734, 4.374664141464968, 2.938163982698783)
+        val d = doubleArrayOf(7.784695709041462e-3, 3.224671290700398e-1, 2.445134137142996, 3.754408661907416)
+        val lo = 0.02425
+        return when {
+            p < lo -> { val q = sqrt(-2 * ln(p)); (((((c[0] * q + c[1]) * q + c[2]) * q + c[3]) * q + c[4]) * q + c[5]) / ((((d[0] * q + d[1]) * q + d[2]) * q + d[3]) * q + 1) }
+            p > 1 - lo -> { val q = sqrt(-2 * ln(1 - p)); -(((((c[0] * q + c[1]) * q + c[2]) * q + c[3]) * q + c[4]) * q + c[5]) / ((((d[0] * q + d[1]) * q + d[2]) * q + d[3]) * q + 1) }
+            else -> { val q = p - 0.5; val r = q * q; (((((a[0] * r + a[1]) * r + a[2]) * r + a[3]) * r + a[4]) * r + a[5]) * q / (((((b[0] * r + b[1]) * r + b[2]) * r + b[3]) * r + b[4]) * r + 1) }
+        }
+    }
+
+    /** Normal CDF of N([mu], [sd]²) at [x], with ±∞ handled. */
+    fun cdf(x: Double, mu: Double, sd: Double): Double = when {
+        x == Double.NEGATIVE_INFINITY -> 0.0
+        x == Double.POSITIVE_INFINITY -> 1.0
+        else -> normCdf((x - mu) / sd.coerceAtLeast(1e-9))
+    }
+
+    /** E[X | lo < X < hi] for X ~ N([mu], [sd]²). Falls back to the bucket midpoint/edge when the mass is negligible. */
+    fun truncMean(lo: Double, hi: Double, mu: Double, sd: Double): Double {
+        val s = sd.coerceAtLeast(1e-9)
+        val a = if (lo.isInfinite()) Double.NEGATIVE_INFINITY else (lo - mu) / s
+        val b = if (hi.isInfinite()) Double.POSITIVE_INFINITY else (hi - mu) / s
+        val mass = (if (b.isInfinite()) 1.0 else normCdf(b)) - (if (a.isInfinite()) 0.0 else normCdf(a))
+        if (mass < 1e-9) return when {
+            lo.isInfinite() -> hi - 0.5 * s
+            hi.isInfinite() -> lo + 0.5 * s
+            else -> (lo + hi) / 2
+        }
+        val pa = if (a.isInfinite()) 0.0 else normPdf(a)
+        val pb = if (b.isInfinite()) 0.0 else normPdf(b)
+        return mu + s * (pa - pb) / mass
+    }
+}
+
+/**
+ * Variance-consistent option clock. Market IVs (and India VIX) are quoted in calendar time, but NIFTY's variance is
+ * realised during trading hours — the engine's expected move scales with trading minutes. Repricing an option at a
+ * horizon with calendar time would charge only 1/24 of a day's decay per trading hour (≈4–5× too little theta
+ * intraday), flattering option buyers and hiding the edge of option sellers. So the horizon value is computed in
+ * trading time with the IV rescaled to keep today's total variance (and therefore today's price) unchanged.
+ */
+data class OptionClock(val tCal: Double, val tTrd: Double) {
+    /** Multiply a calendar-time IV by this to get the equivalent trading-time IV. */
+    val volScale: Double get() = kotlin.math.sqrt(tCal / tTrd)
+
+    /** Trading-time years left after [minutes] more trading minutes. */
+    fun after(minutes: Int): Double = (tTrd - minutes / (Session.SESSION_MINUTES * Session.TRADING_DAYS)).coerceAtLeast(MIN_T)
+
+    companion object {
+        private const val MIN_T = 30.0 / (Session.SESSION_MINUTES * Session.TRADING_DAYS)
+
+        fun of(now: Long, expiryMillis: Long): OptionClock {
+            val cal = Session.yearsToExpiry(now, expiryMillis)
+            val trd = (Session.tradingMinutesUntil(now, expiryMillis) / (Session.SESSION_MINUTES * Session.TRADING_DAYS)).coerceAtLeast(MIN_T)
+            return OptionClock(cal, trd)
+        }
+    }
 }
 
 /** Black-Scholes (no dividends) for European index options. */

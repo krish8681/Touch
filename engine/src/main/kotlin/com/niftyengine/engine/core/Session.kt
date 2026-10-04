@@ -46,6 +46,43 @@ object Session {
         return (days / 365.0).coerceAtLeast(30.0 / (365.0 * 24 * 60))
     }
 
+    private val dateFormats = listOf("yyyy-MM-dd", "dd-MMM-yyyy", "dd-MM-yyyy", "ddMMMyyyy")
+        .map { java.time.format.DateTimeFormatter.ofPattern(it, java.util.Locale.ENGLISH) }
+
+    /** Parses exchange date strings ("2026-10-27", "27-Oct-2026", …); null if unrecognised. */
+    fun parseDate(s: String): LocalDate? {
+        val t = s.trim()
+        if (t.isEmpty()) return null
+        return dateFormats.firstNotNullOfOrNull { f -> runCatching { LocalDate.parse(t, f) }.getOrNull() }
+            ?: runCatching { LocalDate.parse(t.take(10)) }.getOrNull()
+    }
+
+    /** Minutes after midnight IST. */
+    fun minuteOfDay(millis: Long): Int = zdt(millis).let { it.hour * 60 + it.minute }
+
+    /** Epoch millis of [minuteOfDay] IST on the same calendar day as [millis]. */
+    fun atMinuteOfDay(millis: Long, minuteOfDay: Int): Long =
+        zdt(millis).toLocalDate().atStartOfDay(IST).plusMinutes(minuteOfDay.toLong()).toInstant().toEpochMilli()
+
+    /** NSE session minutes between [from] and [expiryMillis] (weekdays 09:15–15:30; exchange holidays not modelled). */
+    fun tradingMinutesUntil(from: Long, expiryMillis: Long): Double {
+        if (expiryMillis <= from) return 0.0
+        var total = 0.0
+        var d = zdt(from).toLocalDate()
+        val last = zdt(expiryMillis).toLocalDate()
+        var guard = 0
+        while (!d.isAfter(last) && guard++ < 400) {
+            if (d.dayOfWeek.value < 6) {
+                val o = d.atTime(OPEN).atZone(IST).toInstant().toEpochMilli()
+                val c = d.atTime(CLOSE).atZone(IST).toInstant().toEpochMilli()
+                val a = maxOf(o, from); val b = minOf(c, expiryMillis)
+                if (b > a) total += (b - a) / 60_000.0
+            }
+            d = d.plusDays(1)
+        }
+        return total
+    }
+
     fun hhmm(millis: Long): String {
         val z = zdt(millis)
         return "%02d:%02d".format(z.hour, z.minute)

@@ -23,16 +23,21 @@ class GlobalRiskEngine(private val norm: DataNormalizer) {
 
     data class Result(val signal: EngineSignal, val perAsset: Map<GlobalAsset, Double>, val globalVolStress: Double)
 
-    fun analyze(s: MarketSnapshot, now: Long, sessionStart: Long): Result {
+    /**
+     * @param typical per-asset typical daily move (%) from the relative-baseline layer (v5); assets without
+     * history fall back to the static [GlobalAsset.typicalDailyMovePct].
+     */
+    fun analyze(s: MarketSnapshot, now: Long, sessionStart: Long, typical: Map<GlobalAsset, Double> = emptyMap()): Result {
         val per = LinkedHashMap<GlobalAsset, Double>()
         var num = 0.0; var den = 0.0
         for ((asset, w) in weights) {
             val d = s.global[asset] ?: continue
             if (d.prevClose <= 0) continue
-            val f = norm.features(d, now, sessionStart, asset.typicalDailyMovePct)
+            val move = typical[asset]?.takeIf { it > 0.01 } ?: asset.typicalDailyMovePct
+            val f = norm.features(d, now, sessionStart, move)
             // Live intraday drift counts extra for markets trading now; otherwise the 1D (overnight) change.
             val intra = DataNormalizer.nz(f.c1h)
-            val z = (f.c1d + 0.5 * intra) / asset.typicalDailyMovePct
+            val z = (f.c1d + 0.5 * intra) / move
             val c = asset.riskSign * M.squash(z, 1.2)
             per[asset] = c
             num += w * c; den += w

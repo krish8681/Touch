@@ -26,6 +26,10 @@ class OptionsPositionEngine(private val state: EngineState) {
         val maxPain: Double,
         /** 0..1 evidence that walls pin the market in a range. */
         val rangeEvidence: Double,
+        /** OI put/call ratio near spot (v5: compared with its own normal by the relative-baseline layer). */
+        val pcr: Double = Double.NaN,
+        /** ~2 % OTM put IV − call IV (vol points). */
+        val skew: Double = Double.NaN,
     )
 
     fun analyze(s: MarketSnapshot, now: Long): Result {
@@ -126,7 +130,7 @@ class OptionsPositionEngine(private val state: EngineState) {
                 Detail("Concentration CE / PE", "%.0f%% / %.0f%%".format(ceConc * 100, peConc * 100)),
                 Detail("Volume/OI", "%.2f".format(volOi)),
             )),
-            callWall, putWall, atmIv, straddle, maxPain, rangeEvidence,
+            callWall, putWall, atmIv, straddle, maxPain, rangeEvidence, pcr, skew,
         )
     }
 
