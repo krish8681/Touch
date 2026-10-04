@@ -6,7 +6,9 @@ import com.niftyengine.engine.model.DataQualityReport
 import com.niftyengine.engine.model.Decision
 import com.niftyengine.engine.model.DirectionResult
 import com.niftyengine.engine.model.ExpectedMove
+import com.niftyengine.engine.model.HealthTier
 import com.niftyengine.engine.model.HorizonProb
+import com.niftyengine.engine.model.ModelHealth
 import com.niftyengine.engine.model.LegAction
 import com.niftyengine.engine.model.OptionAnalysis
 import com.niftyengine.engine.model.PrimaryRegime
@@ -33,7 +35,9 @@ import kotlin.math.abs
  *  • The chosen structure's own P(profit) and EV (net of costs) are checked separately from direction.
  *  • Trade quality gate and the deterministic risk engine must both pass.
  *  • Hysteresis: the same strategy must hold for N consecutive cycles before TRADE.
- *  • Everything passes except calibration ⇒ PAPER_TRADE (shadow-trade only, no real money).
+ *  • v5.1 model health: below the shadow threshold ⇒ NO TRADE (no signal); in the shadow band ⇒ PAPER TRADE at best.
+ *  • v5.1 regime selectivity: regimes with a weak realised record need a higher probability.
+ *  • Everything passes except calibration / health ⇒ PAPER_TRADE (shadow-trade only, no real money).
  */
 class TradeDecisionEngine(private val p: Params = Params()) {
     data class Params(
@@ -58,6 +62,10 @@ class TradeDecisionEngine(private val p: Params = Params()) {
         val strategy: StrategyPlan,
         val quality: TradeQuality,
         val risk: RiskAssessment,
+        /** v5.1 model health gate. null = not evaluated (legacy callers). */
+        val health: ModelHealth? = null,
+        /** v5.1 extra probability required in this regime (weak realised record). */
+        val regimeBump: Double = 0.0,
     )
 
     fun decide(
@@ -84,7 +92,8 @@ class TradeDecisionEngine(private val p: Params = Params()) {
         val side = when (sideInt) { 1 -> "BULL"; -1 -> "BEAR"; else -> "RANGE" }
         val dirProb = when (sideInt) { 1 -> probs.pBull; -1 -> probs.pBear; else -> probs.pRange }
         val eventRisk = regime.regime == Regime.EVENT_SHOCK || majorEventRisk || v5?.regime?.primary == PrimaryRegime.EVENT_DRIVEN
-        val minProb = p.minProbability + if (eventRisk) p.eventThresholdBump else 0.0
+        val regimeBump = v5?.regimeBump ?: 0.0
+        val minProb = p.minProbability + (if (eventRisk) p.eventThresholdBump else 0.0) + regimeBump
         val probLabel = when { probs.calibrated -> "calibrated"; probs.partial -> "partly calibrated"; else -> "model score" }
         val rg = v5?.regime
 
@@ -101,8 +110,10 @@ class TradeDecisionEngine(private val p: Params = Params()) {
                 "range %.0f%% $probLabel vs bull %.0f%% / bear %.0f%%".format(probs.pRange * 100, probs.pBull * 100, probs.pBear * 100))
         } else {
             checks += Check("Direction probability", dirProb >= minProb && dirProb > probs.pRange,
-                "$side %.0f%% $probLabel (need ≥ %.0f%%%s, range %.0f%%)".format(dirProb * 100, minProb * 100,
-                    if (eventRisk) " — event regime" else "", probs.pRange * 100))
+                "$side %.0f%% $probLabel (need ≥ %.0f%%%s%s, range %.0f%%)".format(dirProb * 100, minProb * 100,
+                    if (eventRisk) " — event regime" else "",
+                    if (regimeBump > 0) " — +%.0f pts: weak record in %s".format(regimeBump * 100, rg?.primary?.label ?: "this regime") else "",
+                    probs.pRange * 100))
         }
         checks += Check("Confidence", dir.confidence.ordinal >= p.minConfidence.ordinal,
             "${dir.confidence} (%.2f), need ${p.minConfidence}".format(dir.confidenceValue))
@@ -160,16 +171,25 @@ class TradeDecisionEngine(private val p: Params = Params()) {
         val persist = Check("Signal persistence", streak >= p.confirmCycles, "$streak / ${p.confirmCycles} consecutive cycles")
         val calib = Check("Probability calibrated", !p.requireCalibration || probs.calibrated,
             if (probs.calibrated) "yes (${move.horizonMinutes}m)" else dir.calibration.note)
-        val all = checks + persist + calib
+        // v5.1 model health: ≥ eligible → may TRADE; shadow band → PAPER TRADE at best; below → no signal at all
+        val health = v5?.health
+        val healthCheck = health?.let { h ->
+            Check("Model health", h.tier == HealthTier.ELIGIBLE, "%.0f/100 · %s".format(h.score, h.tier.label) +
+                (h.notes.firstOrNull()?.let { " · $it" } ?: ""))
+        }
+        val all = checks + persist + listOfNotNull(healthCheck) + calib
         val failed = all.filter { !it.passed }
+        val shadowOnly = failed.isNotEmpty() && failed.all { it === calib || it === healthCheck }
 
         val conflictWait = rg?.primary == PrimaryRegime.CONFLICT
         // NO TRADE = no edge at all (the strategy layer found nothing the regime supports); otherwise WAIT for checks.
         val noEdge = !conflictWait && if (v5 != null) plan.preferredByRegime == StrategyType.NO_TRADE
             else !checks.first { it.name == "Direction probability" }.passed && (dirProb < 0.5 || probs.pRange >= dirProb)
+        val noSignal = health?.tier == HealthTier.NO_SIGNAL
         val decision = when {
+            noSignal -> Decision.NO_TRADE
             failed.isEmpty() -> Decision.TRADE
-            failed.size == 1 && failed[0] === calib -> Decision.PAPER_TRADE
+            shadowOnly -> Decision.PAPER_TRADE
             noEdge -> Decision.NO_TRADE
             else -> Decision.WAIT
         }
@@ -180,8 +200,11 @@ class TradeDecisionEngine(private val p: Params = Params()) {
         val lots = v5?.risk?.lots?.takeIf { it > 0 }?.let { " × $it lot(s)" } ?: ""
         val headline = when (decision) {
             Decision.TRADE -> "TRADE · $what$lots"
-            Decision.PAPER_TRADE -> "PAPER TRADE · $what$lots (uncalibrated — shadow only)"
-            Decision.NO_TRADE -> "NO TRADE · " + (plan.rationale.firstOrNull() ?: "no directional edge")
+            Decision.PAPER_TRADE -> "PAPER TRADE · $what$lots (" +
+                listOfNotNull("uncalibrated".takeIf { !calib.passed }, "model health %.0f — shadow only".format(health?.score ?: 0.0).takeIf { healthCheck?.passed == false })
+                    .joinToString(", ") + ")"
+            Decision.NO_TRADE -> if (noSignal) "NO TRADE · model health %.0f/100 — no signal".format(health!!.score)
+                else "NO TRADE · " + (plan.rationale.firstOrNull() ?: "no directional edge")
             Decision.WAIT -> if (conflictWait) "WAIT · conflicting information blocks" else "WAIT · $side bias, ${failed.size} check(s) failing"
             Decision.DATA_ERROR -> "DATA ERROR — NO TRADE"
         }

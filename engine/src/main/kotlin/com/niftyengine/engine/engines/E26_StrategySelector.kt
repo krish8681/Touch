@@ -314,6 +314,26 @@ class StrategySelector(private val costs: TransactionCosts = TransactionCosts(),
     }
 
     companion object {
+        /**
+         * v5.1 benchmark instrument: the ATM option in the direction of recent momentum, bought at the ask — what a naive
+         * trader would do at the same moment. Used only by the shadow benchmark book.
+         */
+        fun atmLong(chain: OptionChain?, spot: Double, side: Int, costs: TransactionCosts): StrategyCandidate? {
+            val row = chain?.rows?.minByOrNull { abs(it.strike - spot) } ?: return null
+            val type = if (side >= 0) OptionType.CE else OptionType.PE
+            val l = if (type == OptionType.CE) row.call else row.put
+            val ask = if (l.ask > 0) l.ask else l.ltp
+            if (ask <= 0) return null
+            val mid = if (l.bid > 0 && l.ask > 0) (l.bid + l.ask) / 2 else l.ltp
+            val spreadPct = if (l.bid > 0 && l.ask > 0 && mid > 0) (l.ask - l.bid) / mid * 100 else -1.0
+            val leg = StrategyLeg(LegAction.BUY, type, row.strike, chain.expiry, ask, l.bid, l.ask, l.iv, Double.NaN, spreadPct, l.oi, l.volume)
+            val cost = costs.perUnit(ask, ask)
+            return StrategyCandidate(if (type == OptionType.CE) StrategyType.BUY_CALL else StrategyType.BUY_PUT, listOf(leg), ask,
+                if (type == OptionType.CE) Double.NaN else row.strike - ask - cost, ask + cost,
+                listOf(if (type == OptionType.CE) row.strike + ask else row.strike - ask),
+                Double.NaN, Double.NaN, Double.NaN, cost, Double.NaN, Double.NaN, 1.0, true)
+        }
+
         /** Cheap hedge wings quote 0.05/0.10: judge them by the absolute spread (≤ 4 ticks), everything else by %. */
         const val MAX_ABS_SPREAD = 0.20
 

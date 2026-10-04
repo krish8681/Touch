@@ -53,18 +53,22 @@ class TradeQualityEngine(private val p: Params = Params()) {
         )
         val gm = exp(comps.sumOf { ln(it.value.coerceAtLeast(1e-3)) } / comps.size)
 
-        // track record of this strategy in shadow mode (shrunk toward zero with few trades)
+        // track record in shadow mode (R multiples shrunk toward zero with few trades): this strategy, and — v5.1 —
+        // this regime, so the engine becomes more selective where it has been losing
+        fun factor(l: List<com.niftyengine.engine.model.ShadowTrade>) =
+            if (l.size < p.minTradesForTrackRecord) 1.0 else M.clamp(1 + 0.5 * l.sumOf { it.rMultiple } / (l.size + 10), 0.75, 1.10)
         val mine = book.closed.filter { it.position.strategy == strategy.type }
-        val track = if (mine.size < p.minTradesForTrackRecord) 1.0 else {
-            val shrunkR = mine.sumOf { it.rMultiple } / (mine.size + 10)
-            M.clamp(1 + 0.5 * shrunkR, 0.75, 1.10)
-        }
+        val inRegime = book.closed.filter { it.position.regime == regime.primary.name }
+        val stratF = factor(mine)
+        val regimeF = factor(inRegime)
+        val track = M.clamp(stratF * regimeF, 0.6, 1.15)
         val score = M.clamp(gm * track, 0.0, 1.0)
         val below = comps.filter { it.value < it.floor }
         val tier = when { score >= 0.75 -> QualityTier.HIGH; score >= 0.62 -> QualityTier.MEDIUM; else -> QualityTier.LOW }
         val notes = ArrayList<String>()
         below.forEach { notes += "${it.name} " + "%.0f%% below floor %.0f%%".format(it.value * 100, it.floor * 100) + " (${it.detail})" }
-        if (track != 1.0) notes += "Track record ×%.2f from ${mine.size} shadow ${strategy.type.label} trades".format(track)
+        if (stratF != 1.0) notes += "Strategy track record ×%.2f from ${mine.size} shadow ${strategy.type.label} trades".format(stratF)
+        if (regimeF != 1.0) notes += "Regime track record ×%.2f from ${inRegime.size} shadow trades in ${regime.primary.label}".format(regimeF)
         val passed = below.isEmpty() && score >= p.minScore
         if (!passed && below.isEmpty()) notes += "Score %.0f%% below minimum %.0f%%".format(score * 100, p.minScore * 100)
         return TradeQuality(score, tier, comps, track, passed, comps.minBy { it.value / it.floor.coerceAtLeast(1e-6) }.name, notes)

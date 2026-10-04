@@ -131,9 +131,35 @@ fun DecisionStateCard(o: EngineOutput) {
                 Label(if (ds.lots > 0) "${ds.lots} · ₹%,.0f".format(ds.riskAtStop) else "–", color = C.white, size = 12.sp)
             }
         }
+        Label("MODEL HEALTH %.0f/100 · %s".format(o.health.score, o.health.tier.label), color = healthColor(o.health.tier), size = 11.sp,
+            weight = FontWeight.Bold)
         if (ds.stop.isNotBlank()) Label("Stop ${ds.stop} · target ${ds.target}", color = C.text, size = 10.sp, mono = false)
         o.decision.reasons.take(3).forEach { Label("• $it", color = C.dim, size = 10.sp, mono = false) }
         Label("AI reads the news; probabilities, strategy, risk and execution are deterministic code. Shadow mode places no real orders.",
+            color = C.dim, size = 9.sp, mono = false)
+    }
+}
+
+// ------------------------------------------------------------------ model health (v5.1)
+
+fun healthColor(t: com.niftyengine.engine.model.HealthTier) = when (t) {
+    com.niftyengine.engine.model.HealthTier.ELIGIBLE -> C.green
+    com.niftyengine.engine.model.HealthTier.SHADOW_ONLY -> C.amber
+    com.niftyengine.engine.model.HealthTier.NO_SIGNAL -> C.red
+}
+
+@Composable
+fun ModelHealthCard(o: EngineOutput) {
+    val h = o.health
+    if (h.components.isEmpty()) return
+    Card("Model health %.0f/100".format(h.score), trailing = { Chip(h.tier.label.uppercase(), healthColor(h.tier)) }) {
+        h.components.forEach { c ->
+            WideBar(c.name, c.value, if (c.value >= 0.75) C.green else if (c.value >= 0.5) C.amber else C.red,
+                trailing = "%.0f%%".format(c.value * 100), labelWidth = 150)
+            Label("   weight %.0f · ".format(c.weight) + c.detail, color = C.dim, size = 9.sp, mono = false)
+        }
+        h.notes.forEach { Label("• $it", color = C.amber, size = 10.sp, mono = false) }
+        Label("≥ %.0f eligible to trade · %.0f–%.0f shadow only (PAPER TRADE at best) · below %.0f no signal.".format(h.eligibleAt, h.shadowAt, h.eligibleAt - 1, h.shadowAt),
             color = C.dim, size = 9.sp, mono = false)
     }
 }
@@ -355,16 +381,31 @@ fun StrategyCandidatesCard(o: EngineOutput) {
 
 // ------------------------------------------------------------------ shadow tab
 
+/** Expectancy, profit factor and drawdown first; win rate is secondary. */
+@Composable
+fun StatsBlock(st: com.niftyengine.engine.model.TradeStats) {
+    fun money(x: Double) = if (x.isNaN()) "–" else "₹%,.0f".format(x)
+    KV("Expectancy / trade", money(st.expectancy), C.signed(if (st.expectancy.isNaN()) 0.0 else st.expectancy, 1.0))
+    KV("Profit factor", if (st.profitFactor.isNaN()) (if (st.trades > 0) "no losses yet" else "–") else "%.2f".format(st.profitFactor),
+        if (st.profitFactor.isNaN()) C.text else C.signed(st.profitFactor - 1, 0.05))
+    KV("Max drawdown", money(st.maxDrawdown))
+    KV("Avg win / avg loss", "${money(st.avgWin)} / ${money(st.avgLoss)}" + if (st.payoff.isNaN()) "" else " (payoff %.2f)".format(st.payoff))
+    KV("Average R multiple", if (st.avgR.isNaN()) "–" else "%+.2f".format(st.avgR))
+    KV("Sharpe (daily, annualised)", if (st.sharpe.isNaN()) "needs ≥ 5 trading days (${st.days})" else "%.2f".format(st.sharpe))
+    KV("Win rate (secondary)", pct0(st.winRate))
+}
+
 @Composable
 private fun GroupTable(title: String, rows: List<GroupStat>) {
     if (rows.isEmpty()) return
     Spacer(Modifier.height(6.dp))
     Label(title, color = C.dim, size = 10.sp)
-    TableHeader("Group" to 1.5f, "N" to 0.5f, "Win" to 0.6f, "Avg ₹" to 0.9f, "R" to 0.6f)
+    TableHeader("Group" to 1.4f, "N" to 0.4f, "Exp ₹" to 0.8f, "PF" to 0.5f, "R" to 0.5f, "Win" to 0.5f)
     rows.take(8).forEach { g ->
-        TableRow(Triple(g.key.replace('_', ' '), 1.5f, C.white), Triple("${g.n}", 0.5f, C.text),
-            Triple(pct0(g.winRate), 0.6f, if (g.winRate >= 0.55) C.green else if (g.winRate < 0.45) C.red else C.amber),
-            Triple("%,.0f".format(g.avgPnl), 0.9f, C.signed(g.avgPnl, 1.0)), Triple("%+.2f".format(g.avgR), 0.6f, C.signed(g.avgR, 0.01)))
+        TableRow(Triple(g.key.replace('_', ' '), 1.4f, C.white), Triple("${g.n}", 0.4f, C.text),
+            Triple("%,.0f".format(g.avgPnl), 0.8f, C.signed(g.avgPnl, 1.0)),
+            Triple(if (g.profitFactor.isNaN()) "–" else "%.2f".format(g.profitFactor), 0.5f, if (g.profitFactor.isNaN()) C.dim else C.signed(g.profitFactor - 1, 0.05)),
+            Triple("%+.2f".format(g.avgR), 0.5f, C.signed(g.avgR, 0.01)), Triple(pct0(g.winRate), 0.5f, C.text))
     }
 }
 
@@ -392,12 +433,26 @@ fun ShadowScreen(ui: UiState, onReset: () -> Unit, onShareDecision: () -> Unit) 
                 Label("${sh.trades} · ${pct0(sh.winRate)}", color = C.white, size = 18.sp, weight = FontWeight.Bold)
             }
         }
-        KV("Expectancy / trade", if (sh.expectancy.isNaN()) "–" else "₹%,.0f".format(sh.expectancy), C.signed(if (sh.expectancy.isNaN()) 0.0 else sh.expectancy, 1.0))
-        KV("Average R multiple", if (sh.avgR.isNaN()) "–" else "%+.2f".format(sh.avgR))
-        KV("Max drawdown", "₹%,.0f".format(sh.maxDrawdown))
+        StatsBlock(sh.stats)
         sh.events.forEach { Label("• $it", color = C.blue, size = 10.sp, mono = false) }
         Text(if (confirmReset) "Tap again to clear the shadow book" else "Reset shadow book", color = C.red, fontSize = 12.sp,
             modifier = Modifier.padding(top = 6.dp).clickable { if (confirmReset) { onReset(); confirmReset = false } else confirmReset = true })
+    }
+    Card("Benchmark · does v5 beat a naive trade?") {
+        Label(sh.benchmarkLabel + " — what v5's strategy and strike choice add, after costs.", color = C.dim, size = 10.sp, mono = false)
+        val m = sh.stats; val b = sh.benchmark
+        TableHeader("" to 1.2f, "v5" to 1f, "Benchmark" to 1f)
+        @Composable fun row(name: String, a: String, bb: String, better: Boolean?) = TableRow(Triple(name, 1.2f, C.text),
+            Triple(a, 1f, when (better) { true -> C.green; false -> C.red; null -> C.white }), Triple(bb, 1f, C.white))
+        fun money(x: Double) = if (x.isNaN()) "–" else "₹%,.0f".format(x)
+        fun num(x: Double) = if (x.isNaN()) "–" else "%.2f".format(x)
+        row("Trades", "${m.trades}", "${b.trades}", null)
+        row("Net P&L", money(m.totalPnl), money(b.totalPnl), if (b.trades == 0) null else m.totalPnl > b.totalPnl)
+        row("Expectancy", money(m.expectancy), money(b.expectancy), if (m.expectancy.isNaN() || b.expectancy.isNaN()) null else m.expectancy > b.expectancy)
+        row("Profit factor", num(m.profitFactor), num(b.profitFactor), if (m.profitFactor.isNaN() || b.profitFactor.isNaN()) null else m.profitFactor > b.profitFactor)
+        row("Max drawdown", money(m.maxDrawdown), money(b.maxDrawdown), if (b.trades == 0) null else m.maxDrawdown < b.maxDrawdown)
+        row("Win rate", pct0(m.winRate), pct0(b.winRate), null)
+        Label("If v5 does not beat this after costs over enough trades, the extra complexity is not earning its keep.", color = C.dim, size = 9.sp, mono = false)
     }
     Card("Open positions (${sh.open.size})") {
         if (sh.open.isEmpty()) Label("Flat.", color = C.dim, size = 11.sp)

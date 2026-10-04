@@ -61,11 +61,12 @@ fun StatsCard(title: String, summaries: List<PerformanceStats.Summary>) {
             Label("No evaluated predictions yet. Outcomes are attached 5/15/30/60 min after each logged prediction.", color = C.dim, size = 11.sp)
             return@Card
         }
-        TableHeader("Horizon" to 1f, "N" to 0.6f, "Acc" to 0.7f, "Dir hit" to 0.8f, "Brier" to 0.8f, "Trades" to 0.9f)
+        TableHeader("H" to 0.6f, "N" to 0.6f, "Acc" to 0.6f, "Dir hit" to 0.7f, "Brier" to 0.7f, "LogL" to 0.6f, "Trades" to 0.9f)
         summaries.forEach { s ->
             TableRow(
-                Triple("${s.horizon}m", 1f, C.white), Triple("${s.n}", 0.6f, C.text), Triple(pct(s.accuracy), 0.7f, C.text),
-                Triple(pct(s.directionalHitRate), 0.8f, C.text), Triple(if (s.brier.isNaN()) "–" else "%.3f".format(s.brier), 0.8f, C.text),
+                Triple("${s.horizon}m", 0.6f, C.white), Triple("${s.n}", 0.6f, C.text), Triple(pct(s.accuracy), 0.6f, C.text),
+                Triple(pct(s.directionalHitRate), 0.7f, C.text), Triple(if (s.brier.isNaN()) "–" else "%.3f".format(s.brier), 0.7f, C.text),
+                Triple(if (s.logLoss.isNaN()) "–" else "%.2f".format(s.logLoss), 0.6f, C.text),
                 Triple("${s.tradeCount}·${pct(s.tradeWinRate)}", 0.9f, C.text),
             )
         }
@@ -97,13 +98,26 @@ fun StatsCard(title: String, summaries: List<PerformanceStats.Summary>) {
             Label("OPTION OUTCOME MODEL · ${sel.horizon}m · P(profit) vs realised net option profit", color = C.dim, size = 10.sp)
             BucketTable(sel.optionBuckets, "P(prof)", "won")
         }
+        if (sel.regimes.isNotEmpty()) {
+            Spacer(Modifier.height(6.dp))
+            Label("BY REGIME · ${sel.horizon}m · directional calls (predicted vs realised)", color = C.dim, size = 10.sp)
+            TableHeader("Regime" to 1.3f, "N" to 0.5f, "pred" to 0.6f, "real" to 0.6f, "Brier" to 0.7f, "bar +" to 0.6f)
+            sel.regimes.forEach { r ->
+                TableRow(Triple(r.regime.replace('_', ' '), 1.3f, C.white), Triple("${r.n}", 0.5f, C.text), Triple(pct(r.avgPredicted), 0.6f, C.text),
+                    Triple(pct(r.hitRate), 0.6f, if (r.hitRate >= r.avgPredicted - 0.05) C.green else C.red),
+                    Triple("%.3f".format(r.brier), 0.7f, C.text),
+                    Triple(if (r.thresholdBump > 0) "+%.0f".format(r.thresholdBump * 100) else "–", 0.6f, if (r.thresholdBump > 0) C.amber else C.dim))
+            }
+            Label("Regimes that keep over-stating their probability (vs the model overall, n ≥ 30) need a higher probability before a trade ('bar +' pts).",
+                color = C.dim, size = 9.sp, mono = false)
+        }
         val dh = sel.driverHitRates.filterValues { !it.isNaN() }
         if (dh.isNotEmpty()) {
             Spacer(Modifier.height(6.dp))
             Label("DRIVER SIGN HIT RATE (${sel.horizon}m)", color = C.dim, size = 10.sp)
             dh.forEach { (k, v) -> KV(k, pct(v), if (v > 0.55) C.green else if (v < 0.45) C.red else C.amber) }
         }
-        Label("Goal: 'real' ≈ 'pred' in every bucket (gap within ±5). Brier: 0 = perfect, ≈0.667 = uninformed 3-way guess. Gaps with n < 20 are greyed — too few samples.",
+        Label("Goal: 'real' ≈ 'pred' in every bucket (gap within ±5). Brier: 0 = perfect, ≈0.667 = uninformed 3-way guess; log loss ≈1.10 = uninformed. Gaps with n < 20 are greyed — too few samples.",
             color = C.dim, size = 9.sp, mono = false)
     }
 }
@@ -115,16 +129,24 @@ fun CalibrationCard(info: com.niftyengine.engine.model.CalibrationInfo, optionSa
     }) {
         Label(info.note, color = C.text, size = 11.sp, mono = false)
         Spacer(Modifier.height(4.dp))
-        TableHeader("Horizon" to 0.8f, "Outcomes" to 1.1f, "Brier raw" to 1f, "Brier cal" to 1f)
+        TableHeader("H" to 0.5f, "Outcomes" to 1f, "Brier raw→cal" to 1.3f, "LogL raw→cal" to 1.3f, "" to 0.8f)
         com.niftyengine.engine.engines.ProbabilityCalibrator.HORIZONS.forEach { hz ->
             val raw = info.holdoutBrierRaw[hz]; val cal = info.holdoutBrierCalibrated[hz]
-            TableRow(Triple("${hz}m", 0.8f, C.white), Triple("${info.samples[hz] ?: 0} / ${info.minSamples}", 1.1f,
+            val lr = info.holdoutLogLossRaw[hz]; val lc = info.holdoutLogLossCalibrated[hz]
+            val acc = info.accepted[hz]
+            TableRow(Triple("${hz}m", 0.5f, C.white), Triple("${info.samples[hz] ?: 0}/${info.minSamples}", 1f,
                 if ((info.samples[hz] ?: 0) >= info.minSamples) C.green else C.amber),
-                Triple(raw?.let { "%.3f".format(it) } ?: "–", 1f, C.text),
-                Triple(cal?.let { "%.3f".format(it) } ?: "–", 1f, if (raw != null && cal != null && cal < raw) C.green else C.text))
+                Triple(if (raw == null || cal == null) "–" else "%.3f→%.3f".format(raw, cal), 1.3f, if (raw != null && cal != null && cal < raw) C.green else C.text),
+                Triple(if (lr == null || lc == null) "–" else "%.2f→%.2f".format(lr, lc), 1.3f, if (lr != null && lc != null && lc <= lr) C.green else C.text),
+                Triple(when (acc) { true -> "accepted"; false -> "REJECTED"; null -> "–" }, 0.8f, when (acc) { true -> C.green; false -> C.red; null -> C.dim }))
         }
-        KV("Option-outcome samples", "$optionSamples / 100")
-        Label("Isotonic regression per horizon and class, refitted from the log every 10 min. Brier columns are walk-forward: fitted on the oldest 70%, scored on the newest 30%.",
+        if (!info.scenarioBrierRaw.isNaN()) KV("Scenarios (n=${info.scenarioSamples})", "Brier %.3f→%.3f · LogL %.2f→%.2f · %s".format(
+            info.scenarioBrierRaw, info.scenarioBrierCalibrated, info.scenarioLogLossRaw, info.scenarioLogLossCalibrated,
+            if (info.scenarioAccepted) "accepted" else "REJECTED"), if (info.scenarioAccepted) C.green else C.red)
+        KV("Option-outcome samples", "$optionSamples / 100" + if (info.optionBrierRaw.isNaN()) "" else
+            " · Brier %.3f→%.3f %s".format(info.optionBrierRaw, info.optionBrierCalibrated, if (info.optionAccepted) "accepted" else "REJECTED"))
+        Label("Walk-forward acceptance: each calibration is fitted on the oldest 70% of outcomes and scored on the newest 30% it never saw. " +
+            "It is applied only if it lowers the Brier score without worsening log loss — otherwise the raw score is kept and labelled as such.",
             color = C.dim, size = 9.sp, mono = false)
         if (onRefit != null) TextButtonLike("Refit now", onRefit)
     }
@@ -342,6 +364,8 @@ fun SettingsScreen(current: AppSettings, onSave: (AppSettings) -> Unit, onKiteLo
     var stratLong by remember(current) { mutableStateOf(current.enableLongOptions) }
     var stratSpread by remember(current) { mutableStateOf(current.enableSpreads) }
     var stratCondor by remember(current) { mutableStateOf(current.enableCondor) }
+    var healthEligible by remember(current) { mutableStateOf(current.healthEligible.toInt().toString()) }
+    var healthShadow by remember(current) { mutableStateOf(current.healthShadow.toInt().toString()) }
 
     fun build() = current.copy(
         mode = mode, refreshSeconds = num(refresh, 30.0).toInt().coerceIn(5, 600),
@@ -371,6 +395,8 @@ fun SettingsScreen(current: AppSettings, onSave: (AppSettings) -> Unit, onKiteLo
         maxIvPct = num(maxIv, 35.0).coerceIn(5.0, 150.0), longStopPct = num(stopPct, 35.0).coerceIn(5.0, 90.0),
         longTargetPct = num(targetPct, 60.0).coerceIn(5.0, 500.0), minTradeQuality = (num(minQuality, 65.0) / 100).coerceIn(0.0, 0.99),
         enableLongOptions = stratLong, enableSpreads = stratSpread, enableCondor = stratCondor,
+        healthEligible = num(healthEligible, 75.0).coerceIn(10.0, 100.0),
+        healthShadow = num(healthShadow, 60.0).coerceIn(0.0, 100.0).coerceAtMost(num(healthEligible, 75.0).coerceIn(10.0, 100.0)),
     )
 
     Card("Data source") {
@@ -447,6 +473,8 @@ fun SettingsScreen(current: AppSettings, onSave: (AppSettings) -> Unit, onKiteLo
         Row { Column(Modifier.weight(1f).padding(end = 4.dp)) { Field("Long option stop %", stopPct) { stopPct = it } }
             Column(Modifier.weight(1f)) { Field("Long option target %", targetPct) { targetPct = it } } }
         Field("Min trade quality (%)", minQuality, KeyboardType.Number) { minQuality = it }
+        Row { Column(Modifier.weight(1f).padding(end = 4.dp)) { Field("Model health: eligible ≥", healthEligible, KeyboardType.Number) { healthEligible = it } }
+            Column(Modifier.weight(1f)) { Field("Model health: shadow ≥", healthShadow, KeyboardType.Number) { healthShadow = it } } }
         Label("Strategies the selector may use", color = C.dim, size = 11.sp)
         Toggle("Buy call / buy put (strong directional)", stratLong) { stratLong = it }
         Toggle("Bull call / bear put debit spreads (moderate, or rich IV)", stratSpread) { stratSpread = it }

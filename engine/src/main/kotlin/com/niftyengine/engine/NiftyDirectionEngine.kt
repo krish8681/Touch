@@ -20,6 +20,7 @@ import com.niftyengine.engine.engines.IndiaMacroEngine
 import com.niftyengine.engine.engines.InformationShockEngine
 import com.niftyengine.engine.engines.MarketRegimeEngine
 import com.niftyengine.engine.engines.MarketStructureEngine
+import com.niftyengine.engine.engines.ModelHealthEngine
 import com.niftyengine.engine.engines.NiftyWeightEngine
 import com.niftyengine.engine.engines.OptionSelectionEngine
 import com.niftyengine.engine.engines.OptionsPositionEngine
@@ -41,6 +42,7 @@ import com.niftyengine.engine.model.Driver
 import com.niftyengine.engine.model.EngineOutput
 import com.niftyengine.engine.model.EngineSignal
 import com.niftyengine.engine.model.EventStage
+import com.niftyengine.engine.model.InformationShock
 import com.niftyengine.engine.model.MarketSnapshot
 import com.niftyengine.engine.model.NewsHorizon
 import com.niftyengine.engine.model.PrimaryRegime
@@ -77,9 +79,13 @@ data class EngineConfig(
     val enableLongOptions: Boolean = true,
     val enableSpreads: Boolean = true,
     val enableCondor: Boolean = true,
+    // ---- v5.1
+    /** Model health ≥ this may TRADE; between [healthShadow] and this → shadow only; below [healthShadow] → no signal. */
+    val healthEligible: Double = 75.0,
+    val healthShadow: Double = 60.0,
 )
 
-const val ENGINE_VERSION = "5.0.0"
+const val ENGINE_VERSION = "5.1.0"
 
 /**
  * NIFTY Direction Engine v5 — one cycle of the decision pipeline:
@@ -137,6 +143,7 @@ class NiftyDirectionEngine(val config: EngineConfig = EngineConfig()) {
     private val riskEngine = RiskEngine(config.risk.copy(maxSpreadPct = config.maxSpreadPct), config.costs)
     /** 28 — shadow execution book. State persisted by the app. */
     val shadow = ShadowTrader(config.costs, config.shadowMode)
+    private val healthEngine = ModelHealthEngine(config.healthEligible, config.healthShadow)
     private var prevSpot = Double.NaN
     private var prevSpotT = 0L
 
@@ -144,19 +151,23 @@ class NiftyDirectionEngine(val config: EngineConfig = EngineConfig()) {
     var calibration: CalibrationModel = CalibrationModel()
         set(value) { field = value; optionSelect.optionCalibrator = value.optionFn() }
 
-    fun process(raw: MarketSnapshot): EngineOutput {
-        val wall = raw.timestamp
+    fun process(input: MarketSnapshot): EngineOutput {
+        val wall = input.timestamp
+        // v5.1 leakage guard: nothing timestamped after the decision instant enters the cycle, whatever the feed sent.
+        val raw = pointInTime(input)
         // Outside market hours analyse the most recent session (last bar), not an empty "today".
         val lastBar = raw.nifty.intraday.lastOrNull()?.t
         val now = if (!Session.isOpen(wall) && lastBar != null && lastBar < wall && wall - lastBar < 5 * 86_400_000L) lastBar else wall
         state.rollDay(now)
         val sessionStart = Session.sessionStart(now)
         val sessionDay = Session.zdt(now).toLocalDate()
-        // Daily history must end before the analysed session (previous-day levels, percentiles).
+        // Daily history must end before the analysed session (previous-day levels, percentiles, normals).
+        // By DATE: some feeds stamp daily candles at 00:00, which is earlier than 09:15 of the same day.
+        fun priorDays(d: com.niftyengine.engine.model.InstrumentData) = d.copy(daily = d.daily.filter { Session.zdt(it.t).toLocalDate() < sessionDay })
         val s = raw.copy(
-            // By DATE: some feeds stamp daily candles at 00:00, which is earlier than 09:15 of the same day.
-            nifty = raw.nifty.copy(daily = raw.nifty.daily.filter { Session.zdt(it.t).toLocalDate() < sessionDay }),
-            vix = raw.vix?.let { v -> v.copy(daily = v.daily.filter { Session.zdt(it.t).toLocalDate() < sessionDay }) },
+            nifty = priorDays(raw.nifty), vix = raw.vix?.let(::priorDays), bankNifty = raw.bankNifty?.let(::priorDays),
+            constituents = raw.constituents.mapValues { priorDays(it.value) }, sectors = raw.sectors.mapValues { priorDays(it.value) },
+            global = raw.global.mapValues { priorDays(it.value) },
         )
         recordTicks(s, now)
         val health = DataCollector.health(s)
@@ -283,6 +294,9 @@ class NiftyDirectionEngine(val config: EngineConfig = EngineConfig()) {
         val tq = qualityGate.assess(dir, probs, rv5, plan.chosen, shadow.current)
         val risk = riskEngine.assess(plan.chosen, wall, em.horizonMinutes, shadow.current, oa.atmIv, shock,
             fe.expectation.eventRiskAhead, Session.isOpen(wall))
+        // 29 — model health (freshness, completeness, regime stability, calibration quality, news, options)
+        val mh = healthEngine.assess(ModelHealthEngine.Inputs(dq, health.coverage, rv5, probs, calibration.info, em.horizonMinutes,
+            nw.events, s.optionChain, optSpot, oa.atmIv))
         val shockAge = nw.shock?.let { (now - it.lastInfoAt) / 60_000.0 }
         // Event-risk regime: a fresh major event, or a scheduled high-severity event still ahead (outcome unknown).
         val majorEvent = nw.events.any { e ->
@@ -291,7 +305,7 @@ class NiftyDirectionEngine(val config: EngineConfig = EngineConfig()) {
                 (sev >= 0.7 && e.stage == EventStage.EXPECTED && now - e.lastInfoAt <= 86_400_000L)
         }
         val td = decision.decide(dir, rg, em, oa, Session.isOpen(wall), shockAge, dq, majorEvent,
-            TradeDecisionEngine.V5(rv5, scen, plan, tq, risk))
+            TradeDecisionEngine.V5(rv5, scen, plan, tq, risk, mh, calibration.regimeBump(rv5.primary.name)))
 
         // 28 — execution in shadow mode (virtual fills, stops, targets, emergency exits)
         val side = plan.chosen?.type?.directional ?: 0
@@ -300,8 +314,13 @@ class NiftyDirectionEngine(val config: EngineConfig = EngineConfig()) {
             plan.chosen?.type == StrategyType.IRON_CONDOR -> plan.chosen.probProfit
             else -> probs.top
         }
+        // benchmark for the shadow book: naive momentum ATM option, sized by the same risk budget and exit rules
+        val benchmark = StrategySelector.atmLong(s.optionChain, optSpot, if (st.pressure >= 0) 1 else -1, config.costs)?.let { b ->
+            val r = riskEngine.assess(b, wall, em.horizonMinutes, shadow.benchmarkBook, oa.atmIv, InformationShock(), 0.0, true)
+            b to r
+        }
         val shadowSummary = shadow.update(ShadowTrader.Context(wall, optSpot, s.optionChain, td.decision, plan, risk, rv5, tq, sideProb,
-            fe.expectation, shock, dq.circuitBreaker.isNotEmpty(), Session.isOpen(wall)))
+            fe.expectation, shock, dq.circuitBreaker.isNotEmpty(), Session.isOpen(wall), benchmark))
 
         val signals = linkedMapOf(
             stSig.name to stSig, hwSig.name to hwSig, secSig.name to secSig,
@@ -325,6 +344,7 @@ class NiftyDirectionEngine(val config: EngineConfig = EngineConfig()) {
             tradeQuality = tq.score, qualityTier = tq.tier.name,
             instrument = plan.chosen?.instrument ?: "–", strategy = plan.type.name, lots = risk.lots, riskAtStop = risk.riskAtStop,
             stop = risk.exit?.stopText ?: "", target = risk.exit?.targetText ?: "",
+            modelHealth = mh.score, healthTier = mh.tier.name,
             action = td.decision.name,
             reasons = (if (td.reasons.isEmpty()) plan.rationale else td.reasons).take(6),
         )
@@ -335,7 +355,27 @@ class NiftyDirectionEngine(val config: EngineConfig = EngineConfig()) {
             dataSource = s.source, feedStatus = feed, dataQuality = dq.copy(warnings = dq.warnings + gift.warnings), engineVersion = ENGINE_VERSION,
             newsHorizons = nw.horizons, pendingEventAnalysis = nw.pending, gift = gift.report,
             normalized = rel.state, regimeV5 = rv5, expectation = fe.expectation, shock = shock, scenarios = scen,
-            quality = tq, strategy = plan, risk = risk, shadow = shadowSummary, decisionState = ds,
+            quality = tq, strategy = plan, risk = risk, shadow = shadowSummary, decisionState = ds, health = mh,
+        )
+    }
+
+    /**
+     * Strips every item timestamped after the snapshot's own time T: intraday bars (all instruments), futures OI bars,
+     * news published after T and event analyses made after T. Feeds and the replay engine already do this; the engine
+     * enforces it again so no future data can reach a decision even if a source misbehaves.
+     */
+    fun pointInTime(s: MarketSnapshot): MarketSnapshot {
+        val t = s.timestamp
+        fun clip(d: com.niftyengine.engine.model.InstrumentData) =
+            if (d.intraday.none { it.t > t } && d.daily.none { it.t > t }) d
+            else d.copy(intraday = d.intraday.filter { it.t <= t }, daily = d.daily.filter { it.t <= t })
+        return s.copy(
+            nifty = clip(s.nifty), bankNifty = s.bankNifty?.let(::clip), vix = s.vix?.let(::clip),
+            constituents = s.constituents.mapValues { clip(it.value) }, sectors = s.sectors.mapValues { clip(it.value) },
+            global = s.global.mapValues { clip(it.value) },
+            futures = s.futures?.let { f -> if (f.intraday.none { it.t > t }) f else f.copy(intraday = f.intraday.filter { it.t <= t }) },
+            news = if (s.news.none { it.publishedAt > t }) s.news else s.news.filter { it.publishedAt <= t },
+            eventAnalyses = if (s.eventAnalyses.none { it.analyzedAt > t }) s.eventAnalyses else s.eventAnalyses.filter { it.analyzedAt <= t },
         )
     }
 

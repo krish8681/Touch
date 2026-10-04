@@ -70,6 +70,9 @@ data class AppSettings(
     val enableLongOptions: Boolean = true,
     val enableSpreads: Boolean = true,
     val enableCondor: Boolean = true,
+    // ---- v5.1 model health gate (score 0–100)
+    val healthEligible: Double = 75.0,
+    val healthShadow: Double = 60.0,
 ) {
     val geminiActive get() = geminiEnabled && geminiApiKey.isNotBlank() && mode != DataMode.SIMULATED
 
@@ -106,6 +109,7 @@ data class AppSettings(
         ),
         shadowMode = shadowMode, minTradeQuality = minTradeQuality,
         enableLongOptions = enableLongOptions, enableSpreads = enableSpreads, enableCondor = enableCondor,
+        healthEligible = healthEligible, healthShadow = healthShadow,
     )
 
     /** Key settings copied into each logged prediction (audit trail). */
@@ -119,6 +123,7 @@ data class AppSettings(
         "shadow" to "$shadowMode", "capital" to "$capital", "riskPct" to "$maxRiskPerTradePct", "dailyLossPct" to "$maxDailyLossPct",
         "maxPositions" to "$maxOpenPositions", "maxTrades" to "$maxTradesPerDay", "maxIv" to "$maxIvPct",
         "stopPct" to "$longStopPct", "targetPct" to "$longTargetPct", "minQuality" to "$minTradeQuality",
+        "health" to "$healthShadow/$healthEligible",
         "strategies" to listOfNotNull("long".takeIf { enableLongOptions }, "spread".takeIf { enableSpreads }, "condor".takeIf { enableCondor }).joinToString("+"),
     )
 }
@@ -179,6 +184,8 @@ class SettingsStore(context: Context) {
             enableLongOptions = p.getBoolean("stratLong", def.enableLongOptions),
             enableSpreads = p.getBoolean("stratSpread", def.enableSpreads),
             enableCondor = p.getBoolean("stratCondor", def.enableCondor),
+            healthEligible = d("healthElig", def.healthEligible),
+            healthShadow = d("healthShadow", def.healthShadow),
             macro = MacroInputs(
                 repoRate = d("m_repo", def.macro.repoRate),
                 lastPolicyChangeBps = d("m_policy", def.macro.lastPolicyChangeBps),
@@ -219,6 +226,7 @@ class SettingsStore(context: Context) {
             .putString("stopPct", s.longStopPct.toString()).putString("targetPct", s.longTargetPct.toString())
             .putString("minQuality", s.minTradeQuality.toString())
             .putBoolean("stratLong", s.enableLongOptions).putBoolean("stratSpread", s.enableSpreads).putBoolean("stratCondor", s.enableCondor)
+            .putString("healthElig", s.healthEligible.toString()).putString("healthShadow", s.healthShadow.toString())
             .also { e -> MACRO_DATE_KEYS.forEach { k -> e.putString("md_$k", s.macroDates[k] ?: "") } }
             .apply()
     }

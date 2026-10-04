@@ -47,6 +47,7 @@ fun DashboardScreen(ui: UiState) {
     }
     if (o.dataQuality.circuitBreaker.isNotEmpty()) DataErrorBanner(o)
     DecisionStateCard(o)
+    ModelHealthCard(o)
     o.gift?.let { GiftCard(it, o.signals["GIFT Nifty"]) }
     // Direction (calibrated probabilities when available, otherwise clearly labelled model scores)
     val hp = d.decisionProbs(o.expectedMove.horizonMinutes)

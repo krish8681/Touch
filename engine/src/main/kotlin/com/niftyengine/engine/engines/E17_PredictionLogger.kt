@@ -262,6 +262,10 @@ object PerformanceStats {
         val scenarioBuckets: List<Bucket> = emptyList(),
         /** v5: realised frequency per scenario vs average predicted probability. */
         val scenarioRates: List<Bucket> = emptyList(),
+        /** v5.1: multi-class log loss of the raw scores (uninformed 3-way guess ≈ 1.099). */
+        val logLoss: Double = Double.NaN,
+        /** v5.1: directional calls by regime — predicted vs realised, Brier, log loss, threshold bump. */
+        val regimes: List<RegimeRecord> = emptyList(),
     )
 
     /** The bucket edges requested for calibration review. */
@@ -330,7 +334,9 @@ object PerformanceStats {
             val sel = done.filter { abs(it.first.driverScores[d.name] ?: 0.0) > 0.2 }
             d.label to if (sel.size < 5) Double.NaN else sel.count { (r, o) -> M.clamp(r.driverScores.getValue(d.name)) * o.move > 0 }.toDouble() / sel.size
         }
+        val logLoss = done.map { (r, o) -> ProbabilityCalibrator.logLoss(r.pBull, r.pBear, r.pRange, o.realized) }.average()
         return Summary(horizon, done.size, acc, brier, dirHit, trades.size, tradeWin, bucketize(raw), bucketize(cal), driverHits, bucketize(opt),
-            if (scenPoints.isEmpty()) emptyList() else scenarioBucketize(scenPoints), if (scen.isEmpty()) emptyList() else scenRates)
+            if (scenPoints.isEmpty()) emptyList() else scenarioBucketize(scenPoints), if (scen.isEmpty()) emptyList() else scenRates,
+            logLoss, ProbabilityCalibrator.regimeRecords(records, horizon).values.sortedByDescending { it.n })
     }
 }

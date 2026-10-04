@@ -25,8 +25,10 @@ class DataQualityEngine(
     data class Limits(val liveSec: Double, val staleSec: Double)
 
     companion object {
+        // v5.1: critical feeds go STALE (⇒ DATA ERROR — NO TRADE) after 5–7 min instead of 10–15 min — strict for a trade
+        // gate, still tolerant of 30 s polling and NSE's minute-stamped chain/futures snapshots.
         val LIMITS = mapOf(
-            "NIFTY" to Limits(120.0, 600.0), "Futures" to Limits(180.0, 900.0), "Options" to Limits(240.0, 900.0),
+            "NIFTY" to Limits(120.0, 300.0), "Futures" to Limits(180.0, 420.0), "Options" to Limits(240.0, 420.0),
             "India VIX" to Limits(300.0, 1200.0), "Constituents" to Limits(240.0, 900.0), "Sectors" to Limits(300.0, 1200.0),
             "NIFTY bars" to Limits(300.0, 1800.0),
         )

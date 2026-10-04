@@ -137,6 +137,20 @@ data class CalibrationInfo(
     val holdoutBrierCalibrated: Map<Int, Double> = emptyMap(),
     val fittedAt: Long = 0L,
     val note: String = "Uncalibrated: probabilities are model scores until enough outcomes are logged",
+    // ---- v5.1: calibration is applied only when it proves itself on the unseen (later) 30 %
+    val holdoutLogLossRaw: Map<Int, Double> = emptyMap(),
+    val holdoutLogLossCalibrated: Map<Int, Double> = emptyMap(),
+    /** Per horizon: did the hold-out accept the calibration? (absent = not enough outcomes to judge). */
+    val accepted: Map<Int, Boolean> = emptyMap(),
+    val scenarioSamples: Int = 0,
+    val scenarioBrierRaw: Double = Double.NaN,
+    val scenarioBrierCalibrated: Double = Double.NaN,
+    val scenarioLogLossRaw: Double = Double.NaN,
+    val scenarioLogLossCalibrated: Double = Double.NaN,
+    val scenarioAccepted: Boolean = false,
+    val optionBrierRaw: Double = Double.NaN,
+    val optionBrierCalibrated: Double = Double.NaN,
+    val optionAccepted: Boolean = false,
 )
 
 /** P(NIFTY move over the horizon ≥ +pts) or ≤ −pts. */
@@ -271,6 +285,7 @@ data class EngineOutput(
     val risk: RiskAssessment = RiskAssessment(),
     val shadow: ShadowSummary = ShadowSummary(),
     val decisionState: DecisionState = DecisionState(),
+    val health: ModelHealth = ModelHealth(),
 )
 
 @Serializable

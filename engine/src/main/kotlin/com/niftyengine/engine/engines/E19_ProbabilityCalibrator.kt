@@ -4,6 +4,7 @@ import com.niftyengine.engine.model.CalibrationInfo
 import com.niftyengine.engine.model.HorizonProb
 import com.niftyengine.engine.model.Scenario
 import kotlinx.serialization.Serializable
+import kotlin.math.ln
 import kotlin.math.pow
 
 /**
@@ -71,7 +72,12 @@ data class CalibrationModel(
     val scenario: Map<String, IsoModel> = emptyMap(),
     val scenarioWeight: Double = 0.0,
     val scenarioSamples: Int = 0,
+    /** v5.1 realised performance per primary regime (drives regime selectivity). */
+    val regimes: Map<String, RegimeRecord> = emptyMap(),
 ) {
+    /** Extra probability required in a regime where the model has been more over-confident than overall. */
+    fun regimeBump(regime: String): Double = regimes[regime]?.thresholdBump ?: 0.0
+
     fun apply(pBull: Double, pBear: Double, pRange: Double, h: Int): HorizonProb {
         val m = horizons[h] ?: return HorizonProb(h, pBull, pBear, pRange, false)
         val b = m.bull.predict(pBull).coerceAtLeast(1e-4)
@@ -108,6 +114,23 @@ data class CalibrationModel(
     fun optionFn(): ((Double) -> Double)? = option?.let { m -> { p: Double -> m.predict(p) } }
 }
 
+/** Realised performance of directional calls made in one regime (at each record's own horizon). */
+@Serializable
+data class RegimeRecord(
+    val regime: String,
+    val n: Int,
+    /** Mean top (bull/bear) probability of the directional calls. */
+    val avgPredicted: Double,
+    /** Share of those calls whose class was realised. */
+    val hitRate: Double,
+    val brier: Double,
+    val logLoss: Double,
+    /** Over-confidence in this regime beyond the model's overall over-confidence, shrunk by sample size. */
+    val excessGap: Double,
+    /** Probability-threshold bump applied to new calls in this regime (0 = none). */
+    val thresholdBump: Double,
+)
+
 object ProbabilityCalibrator {
     val HORIZONS = listOf(5, 15, 30, 60)
 
@@ -115,66 +138,162 @@ object ProbabilityCalibrator {
         (pb - if (realized == 1) 1.0 else 0.0).pow(2) + (pd - if (realized == -1) 1.0 else 0.0).pow(2) +
             (pr - if (realized == 0) 1.0 else 0.0).pow(2)
 
+    /** Multi-class log loss of the realised class (probabilities floored at 1e-4). */
+    fun logLoss(pb: Double, pd: Double, pr: Double, realized: Int): Double =
+        -ln(maxOf(1e-4, when (realized) { 1 -> pb; -1 -> pd; else -> pr }))
+
     private fun fitClasses(rows: List<Pair<PredictionRecord, Outcome>>): ClassModels = ClassModels(
         IsoModel.fit(rows.map { (r, o) -> r.pBull to if (o.realized == 1) 1.0 else 0.0 }, 1.0 / 3),
         IsoModel.fit(rows.map { (r, o) -> r.pBear to if (o.realized == -1) 1.0 else 0.0 }, 1.0 / 3),
         IsoModel.fit(rows.map { (r, o) -> r.pRange to if (o.realized == 0) 1.0 else 0.0 }, 1.0 / 3),
     )
 
-    /** Fewest outcomes before a partial (progressive) calibration is applied. */
-    const val MIN_PARTIAL = 30
+    /** Fewest outcomes before a partial (progressive) calibration can be judged and applied. */
+    const val MIN_PARTIAL = 34
+    /** Hold-out slice must have at least this many outcomes to accept a calibration. */
+    const val MIN_HOLDOUT = 10
+    const val MIN_REGIME = 30
 
+    /** Chronological split: earlier 70 % to fit, later 30 % (never seen by the fit) to judge. */
+    private fun <T> split(rows: List<T>): Pair<List<T>, List<T>> {
+        val cut = (rows.size * 0.7).toInt()
+        return rows.subList(0, cut) to rows.subList(cut, rows.size)
+    }
+
+    private fun scenarioScores(probs: Map<Scenario, Double>, real: Scenario): Pair<Double, Double> =
+        Scenario.values().sumOf { (probs.getValue(it) - if (it == real) 1.0 else 0.0).pow(2) } to -ln(maxOf(1e-4, probs.getValue(real)))
+
+    private fun rawScenario(r: PredictionRecord): Map<Scenario, Double>? {
+        val m = Scenario.values().associateWith { r.scenarioProbs[it.name] ?: return null }
+        val s = m.values.sum()
+        return if (s <= 0) null else m.mapValues { it.value / s }
+    }
+
+    /**
+     * Fits every calibration and ACCEPTS it only if, fitted on the earlier 70 % of outcomes, it beats the raw model on the
+     * later 30 % (lower Brier and no worse log loss). Rejected calibrations are not applied — the raw score is kept and
+     * labelled as such. Outcomes are all in the past (attached only after their horizon elapsed), so nothing leaks.
+     */
     fun fit(records: List<PredictionRecord>, minSamples: Int = 150, minOptionSamples: Int = 100, now: Long = System.currentTimeMillis()): CalibrationModel {
         val models = HashMap<Int, ClassModels>()
         val partial = HashMap<Int, ClassModels>()
         val partialW = HashMap<Int, Double>()
         val samples = HashMap<Int, Int>()
         val brRaw = HashMap<Int, Double>(); val brCal = HashMap<Int, Double>()
+        val llRaw = HashMap<Int, Double>(); val llCal = HashMap<Int, Double>()
+        val accepted = HashMap<Int, Boolean>()
+        val rejectedNotes = ArrayList<String>()
         for (h in HORIZONS) {
             val rows = records.mapNotNull { r -> r.outcomes.firstOrNull { it.minutes == h }?.let { r to it } }.sortedBy { it.first.timestamp }
             samples[h] = rows.size
             if (rows.size < 20) continue
-            // walk-forward: fit on the earlier 70 %, evaluate on the later 30 %
-            val cut = (rows.size * 0.7).toInt()
-            val train = rows.subList(0, cut); val test = rows.subList(cut, rows.size)
-            if (test.size >= 10) {
-                val m = CalibrationModel(mapOf(h to fitClasses(train)))
-                brRaw[h] = test.map { (r, o) -> brier(r.pBull, r.pBear, r.pRange, o.realized) }.average()
-                brCal[h] = test.map { (r, o) -> m.apply(r.pBull, r.pBear, r.pRange, h).let { p -> brier(p.pBull, p.pBear, p.pRange, o.realized) } }.average()
-            }
+            val (train, test) = split(rows)
+            if (test.size < MIN_HOLDOUT) continue
+            // what will be deployed: the full fit at ≥ minSamples, a partial blend (weight = share of minSamples) below
+            val w = (rows.size.toDouble() / minSamples).coerceAtMost(1.0)
+            val m = if (rows.size >= minSamples) CalibrationModel(mapOf(h to fitClasses(train)))
+                else CalibrationModel(partial = mapOf(h to fitClasses(train)), partialWeight = mapOf(h to w))
+            brRaw[h] = test.map { (r, o) -> brier(r.pBull, r.pBear, r.pRange, o.realized) }.average()
+            llRaw[h] = test.map { (r, o) -> logLoss(r.pBull, r.pBear, r.pRange, o.realized) }.average()
+            val calP = test.map { (r, o) -> m.applyProgressive(r.pBull, r.pBear, r.pRange, h) to o.realized }
+            brCal[h] = calP.map { (p, y) -> brier(p.pBull, p.pBear, p.pRange, y) }.average()
+            llCal[h] = calP.map { (p, y) -> logLoss(p.pBull, p.pBear, p.pRange, y) }.average()
+            val ok = brCal.getValue(h) < brRaw.getValue(h) && llCal.getValue(h) <= llRaw.getValue(h) + 1e-9
+            if (rows.size < MIN_PARTIAL) continue
+            accepted[h] = ok
+            if (!ok) { rejectedNotes += "${h}m rejected (hold-out Brier %.3f vs raw %.3f)".format(brCal.getValue(h), brRaw.getValue(h)); continue }
             if (rows.size >= minSamples) models[h] = fitClasses(rows)
-            else if (rows.size >= MIN_PARTIAL) { partial[h] = fitClasses(rows); partialW[h] = rows.size.toDouble() / minSamples }
+            else { partial[h] = fitClasses(rows); partialW[h] = w }
         }
-        // v5 scenario calibration: raw scenario probability vs the realised bucket at the record's own horizon
+
+        // v5 scenario calibration: raw scenario probabilities vs the realised bucket at the record's own horizon
         val scenRows = records.mapNotNull { r ->
-            if (r.scenarioProbs.isEmpty() || r.rangeBand <= 0 || r.breakoutBand <= 0) return@mapNotNull null
+            if (r.rangeBand <= 0 || r.breakoutBand <= 0) return@mapNotNull null
+            val raw = rawScenario(r) ?: return@mapNotNull null
             val o = r.outcomes.firstOrNull { it.minutes == r.horizonMinutes } ?: return@mapNotNull null
-            r to ScenarioEngine.realized(o.move, r.rangeBand, r.breakoutBand)
+            Triple(r.timestamp, raw, ScenarioEngine.realized(o.move, r.rangeBand, r.breakoutBand))
+        }.sortedBy { it.first }
+        fun fitScenarios(rows: List<Triple<Long, Map<Scenario, Double>, Scenario>>) = Scenario.values().associate { sc ->
+            sc.name to IsoModel.fit(rows.map { (_, p, real) -> p.getValue(sc) to if (real == sc) 1.0 else 0.0 }, 0.2)
         }
-        val scenModels = if (scenRows.size >= MIN_PARTIAL) Scenario.values().associate { sc ->
-            sc.name to IsoModel.fit(scenRows.mapNotNull { (r, real) -> r.scenarioProbs[sc.name]?.let { it to if (real == sc) 1.0 else 0.0 } }, 0.2)
-        } else emptyMap()
+        var scenModels: Map<String, IsoModel> = emptyMap()
+        var sBrRaw = Double.NaN; var sBrCal = Double.NaN; var sLlRaw = Double.NaN; var sLlCal = Double.NaN; var sOk = false
+        val scenW = (scenRows.size.toDouble() / minSamples).coerceAtMost(1.0)
+        if (scenRows.size >= MIN_PARTIAL) {
+            val (train, test) = split(scenRows)
+            if (test.size >= MIN_HOLDOUT) {
+                val m = CalibrationModel(scenario = fitScenarios(train), scenarioWeight = scenW)
+                val rawS = test.map { (_, p, real) -> scenarioScores(p, real) }
+                val calS = test.map { (_, p, real) -> scenarioScores(m.applyScenarios(p)!!.first, real) }
+                sBrRaw = rawS.map { it.first }.average(); sLlRaw = rawS.map { it.second }.average()
+                sBrCal = calS.map { it.first }.average(); sLlCal = calS.map { it.second }.average()
+                sOk = sBrCal < sBrRaw && sLlCal <= sLlRaw + 1e-9
+                if (sOk) scenModels = fitScenarios(scenRows)
+                else rejectedNotes += "scenarios rejected (hold-out Brier %.3f vs raw %.3f)".format(sBrCal, sBrRaw)
+            }
+        }
+
         // option-outcome calibration: model P(profit) vs realised net P&L > 0 at the record's own horizon
         val optRows = records.mapNotNull { r ->
             if (r.probProfit.isNaN() || r.premium.isNaN()) return@mapNotNull null
             val o = r.outcomes.firstOrNull { it.minutes == r.horizonMinutes } ?: r.outcomes.maxByOrNull { it.minutes } ?: return@mapNotNull null
             if (o.optionPrice.isNaN()) return@mapNotNull null
-            r.probProfit to if (o.optionPrice - r.premium - (if (r.optionCost.isNaN()) 0.0 else r.optionCost) > 0) 1.0 else 0.0
+            Triple(r.timestamp, r.probProfit, if (o.optionPrice - r.premium - (if (r.optionCost.isNaN()) 0.0 else r.optionCost) > 0) 1.0 else 0.0)
+        }.sortedBy { it.first }
+        var optModel: IsoModel? = null
+        var oBrRaw = Double.NaN; var oBrCal = Double.NaN; var oOk = false
+        if (optRows.size >= minOptionSamples) {
+            val (train, test) = split(optRows)
+            val m = IsoModel.fit(train.map { it.second to it.third }, 0.5)
+            oBrRaw = test.map { (it.second - it.third).pow(2) }.average()
+            oBrCal = test.map { (m.predict(it.second) - it.third).pow(2) }.average()
+            oOk = oBrCal < oBrRaw
+            if (oOk) optModel = IsoModel.fit(optRows.map { it.second to it.third }, 0.5)
+            else rejectedNotes += "option P(profit) rejected (hold-out Brier %.3f vs raw %.3f)".format(oBrCal, oBrRaw)
         }
-        val optModel = if (optRows.size >= minOptionSamples) IsoModel.fit(optRows, 0.5) else null
+
         val calibrated = models.isNotEmpty()
         return CalibrationModel(
             models, optModel, optRows.size, partial = partial, partialWeight = partialW,
-            scenario = scenModels, scenarioWeight = if (scenModels.isEmpty()) 0.0 else (scenRows.size.toDouble() / minSamples).coerceAtMost(1.0),
-            scenarioSamples = scenRows.size,
-            info =
-            CalibrationInfo(
+            scenario = scenModels, scenarioWeight = if (scenModels.isEmpty()) 0.0 else scenW,
+            scenarioSamples = scenRows.size, regimes = regimeRecords(records),
+            info = CalibrationInfo(
                 calibrated = calibrated, samples = samples, minSamples = minSamples,
                 holdoutBrierRaw = brRaw, holdoutBrierCalibrated = brCal, fittedAt = now,
-                note = if (calibrated) "Calibrated on ${models.keys.sorted().joinToString { "${it}m n=${samples[it]}" }}"
+                note = (if (calibrated) "Calibrated on ${models.keys.sorted().joinToString { "${it}m n=${samples[it]}" }}"
                 else "Uncalibrated: ${samples.entries.sortedBy { it.key }.joinToString { "${it.key}m ${it.value}/$minSamples" }} outcomes — probabilities are model scores" +
-                    if (partial.isNotEmpty()) " (partial calibration on ${partial.keys.sorted().joinToString { "${it}m" }})" else "",
+                    if (partial.isNotEmpty()) " (partial calibration on ${partial.keys.sorted().joinToString { "${it}m" }})" else "") +
+                    if (rejectedNotes.isEmpty()) "" else " · " + rejectedNotes.joinToString("; "),
+                holdoutLogLossRaw = llRaw, holdoutLogLossCalibrated = llCal, accepted = accepted,
+                scenarioSamples = scenRows.size, scenarioBrierRaw = sBrRaw, scenarioBrierCalibrated = sBrCal,
+                scenarioLogLossRaw = sLlRaw, scenarioLogLossCalibrated = sLlCal, scenarioAccepted = sOk,
+                optionBrierRaw = oBrRaw, optionBrierCalibrated = oBrCal, optionAccepted = oOk,
             ),
         )
+    }
+
+    /**
+     * v5.1 regime selectivity: for each primary regime, how over-confident the directional calls made in it were,
+     * relative to the model overall. A regime that keeps over-stating its probability gets a higher bar for new calls.
+     */
+    fun regimeRecords(records: List<PredictionRecord>, horizon: Int? = null): Map<String, RegimeRecord> {
+        val rows = records.mapNotNull { r ->
+            val o = r.outcomes.firstOrNull { it.minutes == (horizon ?: r.horizonMinutes) } ?: return@mapNotNull null
+            if (r.predictedClass == 0) return@mapNotNull null
+            Triple(r.primaryRegime.ifBlank { r.regime }, r, o)
+        }
+        if (rows.isEmpty()) return emptyMap()
+        fun top(r: PredictionRecord) = maxOf(r.pBull, r.pBear)
+        val globalGap = rows.map { top(it.second) }.average() - rows.count { it.third.realized == it.second.predictedClass }.toDouble() / rows.size
+        return rows.groupBy { it.first }.mapValues { (reg, l) ->
+            val n = l.size
+            val avgP = l.map { top(it.second) }.average()
+            val hit = l.count { it.third.realized == it.second.predictedClass }.toDouble() / n
+            val excess = ((avgP - hit) - globalGap) * n / (n + 30.0)
+            RegimeRecord(reg, n, avgP, hit,
+                l.map { brier(it.second.pBull, it.second.pBear, it.second.pRange, it.third.realized) }.average(),
+                l.map { logLoss(it.second.pBull, it.second.pBear, it.second.pRange, it.third.realized) }.average(),
+                excess, if (n >= MIN_REGIME) excess.coerceIn(0.0, 0.10) else 0.0)
+        }
     }
 }

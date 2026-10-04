@@ -1,4 +1,4 @@
-# NIFTY Direction Engine v5.0 — Android
+# NIFTY Direction Engine v5.1 — Android
 
 A **NIFTY market-intelligence, probability and trade-selection engine** for Android. v5 replaces
 "indicators → score → direction → option" with a decision pipeline that asks, in order:
@@ -14,8 +14,26 @@ A **NIFTY market-intelligence, probability and trade-selection engine** for Andr
 > optima. The app never places real orders: approved decisions are executed in **shadow mode** (virtual trades) so the
 > whole pipeline can be measured before any money is risked.
 
-**Install:** `release/NiftyDirectionEngine-v5.0.0.apk` (Android 8.0+, sideload / "install unknown apps"). Installs over v4.x
+**Install:** `release/NiftyDirectionEngine-v5.1.0.apk` (Android 8.0+, sideload / "install unknown apps"). Installs over v4.x / v5.0
 (same signing key). It opens in **Simulator** mode (synthetic data, works offline/after hours). Switch to live data in **Setup**.
+
+## v5.1 — correctness, validation and data integrity (no new architecture)
+
+| Fix | What changed |
+|-----|--------------|
+| **Walk-forward calibration acceptance** | Direction (per horizon), scenario and option-outcome calibrations are each fitted on the oldest 70 % of outcomes and scored on the newest 30 % they never saw. A calibration is **applied only if it lowers the hold-out Brier score without worsening log loss**; otherwise it is rejected, the raw score is kept and labelled as such (Log → calibration shows raw→calibrated Brier and log loss and ACCEPTED / REJECTED). Previously the direction hold-out was only reported and scenario calibration had no hold-out. |
+| **Future-data leakage guard** | The engine strips everything stamped after the decision instant from every snapshot — intraday bars of all instruments, daily candles (all instruments, by date), futures OI bars, news published later, analyses made later — so a misbehaving feed cannot leak the future. Test: injecting future bars/candles/news/analyses into 60 consecutive snapshots leaves every output byte-identical (and the test fails without the guard). |
+| **Prediction vs outcome time** | Already separated (outcomes attach only after T + horizon, from prices in (T, T + horizon]); now covered by an explicit test. |
+| **Stale-data gate** | Critical feeds (NIFTY, futures, option chain) go STALE ⇒ DATA ERROR — NO TRADE after 5–7 min instead of 10–15 min (realistic for 30 s polling and NSE's minute-stamped snapshots). |
+| **Model health gate** | One 0–100 score: data freshness 25 · completeness 15 · regime stability 15 · calibration quality 20 (rejected calibration scores low) · news reliability 10 · options quality 15. **≥ 75 eligible · 60–74 shadow only (PAPER TRADE at best) · < 60 no signal (NO TRADE)**; thresholds in Setup. |
+| **Log loss** | Reported next to Brier for every horizon, the calibration hold-out and per regime. |
+| **Regime-specific performance → selectivity** | Directional calls are tracked per v5 regime (predicted vs realised, Brier, log loss). A regime that keeps over-stating its probability more than the model overall (n ≥ 30, shrunk by sample size) needs up to +10 pts more probability before a trade; the shadow book's R-multiple per regime also scales trade quality. |
+| **Shadow metrics + benchmark** | Expectancy, profit factor, max drawdown, average win/loss and payoff, average R and daily Sharpe first — win rate second. A **benchmark book** opens a naive momentum ATM option at the same moments with the same risk budget and exit rules, so the Shadow tab shows whether v5's strategy and strike choice beat a simple trade after costs. |
+
+Already in v5.0 and unchanged: separate direction / scenario / option-profit probabilities, risk-adjusted option selection with
+liquidity, spread, stale-price and slippage filters, EV net of all charges, news de-duplication (EVENT_ID) with
+event-specific decay, Gemini never overriding data/risk/liquidity/execution, and the failed-check list behind every WAIT /
+NO TRADE ("why not trade").
 
 ## v5.0 — State → Regime → Expectation → Shock → Scenario → Probability → Quality → Option → Strategy → Risk → Shadow
 
@@ -50,7 +68,8 @@ DATA ─→ NORMALIZED STATE ─→ MARKET STATE ENGINES ─→ FUTURE EXPECTATI
   "future_expectation": 0.34, "expectation_change": -0.05, "expectation_state": "CONFIRMING",
   "information_shock": 0.12, "trade_quality": 0.81, "quality_tier": "HIGH",
   "instrument": "NIFTY 24500 CE", "strategy": "BUY_CALL", "lots": 1, "risk_at_stop": 2340,
-  "stop": "premium −35% (₹65.0)", "target": "premium +60% (₹160.0)", "action": "TRADE"
+  "stop": "premium −35% (₹65.0)", "target": "premium +60% (₹160.0)",
+  "model_health": 86, "health_tier": "ELIGIBLE", "action": "TRADE"
 }
 ```
 
@@ -196,7 +215,8 @@ release/  prebuilt APK
 | 25 | `TradeQualityEngine` | probability edge × confidence × regime quality × liquidity × R:R with floors |
 | 26 | `StrategySelector` | buy call/put, debit spreads, iron condor or no trade — from regime, scenario shape and IV |
 | 27 | `RiskEngine` | deterministic sizing, limits and exit plan |
-| 28 | `ShadowTrader` | virtual execution, exits, net P&L, learning statistics |
+| 28 | `ShadowTrader` | virtual execution, exits, net P&L, learning statistics, benchmark book |
+| 29 | `ModelHealthEngine` | 0–100 health score; eligible / shadow only / no signal |
 
 `NiftyDirectionEngine` orchestrates one cycle; `sim/SimulatedMarket` generates a consistent synthetic market for demo/tests.
 

@@ -430,10 +430,36 @@ data class ShadowTrade(
 data class ShadowBook(
     val open: List<ShadowPosition> = emptyList(),
     val closed: List<ShadowTrade> = emptyList(),
+    /** v5.1 benchmark book: naive momentum ATM option opened at the same moments, same risk budget and exits. */
+    val benchOpen: List<ShadowPosition> = emptyList(),
+    val benchClosed: List<ShadowTrade> = emptyList(),
 )
 
 @Serializable
-data class GroupStat(val key: String, val n: Int, val winRate: Double, val avgPnl: Double, val totalPnl: Double, val avgR: Double)
+data class GroupStat(
+    val key: String, val n: Int, val winRate: Double, val avgPnl: Double, val totalPnl: Double, val avgR: Double,
+    /** Gross profits ÷ gross losses (NaN when there are no losses). */
+    val profitFactor: Double = Double.NaN,
+)
+
+/** Trade statistics where expectancy, profit factor and drawdown come first and win rate second. */
+@Serializable
+data class TradeStats(
+    val trades: Int = 0,
+    val totalPnl: Double = 0.0,
+    val expectancy: Double = Double.NaN,
+    val profitFactor: Double = Double.NaN,
+    val maxDrawdown: Double = 0.0,
+    val avgWin: Double = Double.NaN,
+    val avgLoss: Double = Double.NaN,
+    /** avg win ÷ |avg loss|. */
+    val payoff: Double = Double.NaN,
+    val avgR: Double = Double.NaN,
+    val winRate: Double = Double.NaN,
+    /** Annualised Sharpe of daily P&L (NaN with fewer than 5 trading days). */
+    val sharpe: Double = Double.NaN,
+    val days: Int = 0,
+)
 
 @Serializable
 data class ShadowSummary(
@@ -455,6 +481,33 @@ data class ShadowSummary(
     val byProbability: List<GroupStat> = emptyList(),
     val byExpectation: List<GroupStat> = emptyList(),
     val byExitReason: List<GroupStat> = emptyList(),
+    // ---- v5.1
+    val stats: TradeStats = TradeStats(),
+    /** Same entry moments, naive momentum ATM option, same risk budget and exit rules. */
+    val benchmark: TradeStats = TradeStats(),
+    val benchmarkLabel: String = "Momentum ATM option at the same entry times, same risk budget and exits",
+)
+
+// ------------------------------------------------------------------ model health (v5.1)
+
+@Serializable
+enum class HealthTier(val label: String) {
+    ELIGIBLE("Eligible to trade"), SHADOW_ONLY("Shadow only"), NO_SIGNAL("No signal"),
+}
+
+@Serializable
+data class HealthComponent(val name: String, val value: Double, val weight: Double, val detail: String)
+
+/** One gate over everything that makes the model's output trustworthy right now. */
+@Serializable
+data class ModelHealth(
+    /** 0..100. */
+    val score: Double = 0.0,
+    val tier: HealthTier = HealthTier.NO_SIGNAL,
+    val components: List<HealthComponent> = emptyList(),
+    val eligibleAt: Double = 75.0,
+    val shadowAt: Double = 60.0,
+    val notes: List<String> = emptyList(),
 )
 
 // ------------------------------------------------------------------ final decision object
@@ -488,6 +541,8 @@ data class DecisionState(
     @SerialName("risk_at_stop") val riskAtStop: Double = 0.0,
     @SerialName("stop") val stop: String = "",
     @SerialName("target") val target: String = "",
+    @SerialName("model_health") val modelHealth: Double = 0.0,
+    @SerialName("health_tier") val healthTier: String = HealthTier.NO_SIGNAL.name,
     @SerialName("action") val action: String = Decision.WAIT.name,
     @SerialName("reasons") val reasons: List<String> = emptyList(),
 )
