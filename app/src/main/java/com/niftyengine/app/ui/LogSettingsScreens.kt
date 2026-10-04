@@ -169,7 +169,7 @@ private fun AuditDetail(r: com.niftyengine.engine.engines.PredictionRecord) {
 }
 
 @Composable
-fun LogScreen(ui: UiState, vm: MainViewModel, onExport: () -> Unit, onShare: (File) -> Unit = {}) {
+fun LogScreen(ui: UiState, vm: EngineController, onExport: () -> Unit, onShare: (File) -> Unit = {}) {
     BacktestCard(ui.backtest, vm, onShare)
     CalibrationCard(ui.calibration, ui.optionCalibrationSamples) { vm.refitCalibration() }
     StatsCard("Prediction performance (this data mode)", ui.stats)
@@ -199,7 +199,7 @@ fun LogScreen(ui: UiState, vm: MainViewModel, onExport: () -> Unit, onShare: (Fi
 }
 
 @Composable
-fun ReplayCard(ui: UiState, vm: MainViewModel) {
+fun ReplayCard(ui: UiState, vm: EngineController) {
     var mode by remember { mutableStateOf(ReplayMode.FULL_INFORMATION) }
     val rp = ui.replay
     Card("Historical replay") {
@@ -282,6 +282,7 @@ fun SettingsScreen(current: AppSettings, onSave: (AppSettings) -> Unit, onKiteLo
     var notify by remember(current) { mutableStateOf(current.notifyOnTrade) }
     var record by remember(current) { mutableStateOf(current.recordSessions) }
     var screenOn by remember(current) { mutableStateOf(current.keepScreenOn) }
+    var background by remember(current) { mutableStateOf(current.runInBackground) }
     var kKey by remember(current) { mutableStateOf(current.kiteApiKey) }
     var kSecret by remember(current) { mutableStateOf(current.kiteApiSecret) }
     var kToken by remember(current) { mutableStateOf(current.kiteAccessToken) }
@@ -319,7 +320,7 @@ fun SettingsScreen(current: AppSettings, onSave: (AppSettings) -> Unit, onKiteLo
         horizonMinutes = num(horizon, 60.0).toInt().coerceIn(5, 375),
         minProbability = (num(minProb, 65.0) / 100).coerceIn(0.34, 0.99), minConfidence = minConf,
         minExpectedMovePts = num(minMove, 40.0), maxSpreadPct = num(maxSpread, 3.0), minOi = num(minOi, 2000.0),
-        minVolume = num(minVol, 500.0), notifyOnTrade = notify, recordSessions = record, keepScreenOn = screenOn,
+        minVolume = num(minVol, 500.0), notifyOnTrade = notify, recordSessions = record, keepScreenOn = screenOn, runInBackground = background,
         kiteApiKey = kKey.trim(), kiteApiSecret = kSecret.trim(), kiteAccessToken = kToken.trim(),
         macro = m.copy(repoRate = numOrNaN(repo), lastPolicyChangeBps = num(policy, 0.0), cpiYoY = numOrNaN(cpi), cpiPrevYoY = numOrNaN(cpiPrev),
             gdpGrowth = numOrNaN(gdp), gdpPrevGrowth = numOrNaN(gdpPrev), pmiManufacturing = numOrNaN(pmi),
@@ -441,6 +442,7 @@ fun SettingsScreen(current: AppSettings, onSave: (AppSettings) -> Unit, onKiteLo
         Toggle("Notify when trade filter passes", notify) { notify = it }
         Toggle("Record live sessions for replay", record) { record = it }
         Toggle("Keep screen on", screenOn) { screenOn = it }
+        Toggle("Run in background (keeps working when minimised)", background) { background = it }
     }
     Button(onClick = { onSave(build()) }, modifier = Modifier.fillMaxWidth().height(48.dp),
         colors = ButtonDefaults.buttonColors(containerColor = C.green)) { Text("Save settings", color = androidx.compose.ui.graphics.Color.Black, fontWeight = FontWeight.Bold) }
@@ -448,7 +450,7 @@ fun SettingsScreen(current: AppSettings, onSave: (AppSettings) -> Unit, onKiteLo
 }
 
 @Composable
-fun BacktestCard(bt: BacktestState, vm: MainViewModel, onShare: (File) -> Unit) {
+fun BacktestCard(bt: BacktestState, vm: EngineController, onShare: (File) -> Unit) {
     Card("Kite historical backtest (market-only)") {
         Label("Replays real NIFTY minute data every 5 min through the engine (no look-ahead), with walk-forward calibration, " +
             "and compares it with two baselines: base rates (climatology) and 30-min momentum. Needs today's Kite login. " +

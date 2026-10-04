@@ -1,4 +1,4 @@
-# NIFTY Direction Engine v4.2 — Android
+# NIFTY Direction Engine v4.3 — Android
 
 A **NIFTY market-intelligence and probability engine** for Android. It answers four questions in order:
 
@@ -10,8 +10,20 @@ A **NIFTY market-intelligence and probability engine** for Android. It answers f
 > Decision support only — not investment advice. Weights are starting engineering values, not validated
 > optima; use the prediction log and replay tools to measure before risking capital.
 
-**Install:** `release/NiftyDirectionEngine-v4.2.0.apk` (Android 8.0+, sideload / "install unknown apps").
+**Install:** `release/NiftyDirectionEngine-v4.3.0.apk` (Android 8.0+, sideload / "install unknown apps").
 It opens in **Simulator** mode (synthetic data, works offline/after hours). Switch to live data in **Setup**.
+
+## v4.3 — keeps running in the background
+
+- The engine loop moved out of the screen (`MainViewModel` → application-scoped `ui/EngineController`), so
+  minimising the app, switching apps or turning the screen off no longer stops it.
+- `EngineService`: a foreground service with an ongoing "Engine running" notification (live spot, Bull/Bear %,
+  last update, **Stop engine** action) and a partial wake lock. If Android kills the process, the service is restarted
+  (`START_STICKY`) and the loop resumes. Pressing ❚❚ in the app or "Stop engine" ends both.
+- Battery: live modes poll at the configured rate from 08:45 to 15:45 IST on weekdays, and every 5 minutes outside
+  that window. A banner asks for "unrestricted battery" (battery-optimisation exemption) while it is missing.
+  On Xiaomi/Oppo/Vivo/Realme/OnePlus also enable **Autostart** and set the app's battery to **No restrictions**.
+- Setup → App → "Run in background" (on by default).
 
 ## v4.2 — Kite historical backtest (market-only)
 

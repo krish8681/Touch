@@ -1,8 +1,7 @@
 package com.niftyengine.app.ui
 
 import android.app.Application
-import androidx.lifecycle.AndroidViewModel
-import androidx.lifecycle.viewModelScope
+import com.niftyengine.app.EngineService
 import com.niftyengine.app.Notifier
 import com.niftyengine.app.data.KiteClient
 import com.niftyengine.app.data.LiveSnapshotProvider
@@ -35,7 +34,9 @@ import com.niftyengine.engine.model.EngineOutput
 import com.niftyengine.engine.model.MarketSnapshot
 import com.niftyengine.engine.model.OptionChain
 import com.niftyengine.engine.sim.SimulatedMarket
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -87,7 +88,12 @@ data class BacktestState(
     val error: String? = null,
 )
 
-class MainViewModel(app: Application) : AndroidViewModel(app) {
+/**
+ * Owns the engine loop. Application-scoped (one per process, held by [com.niftyengine.app.NiftyApp]) so it keeps
+ * running when the Activity is minimised or destroyed; [com.niftyengine.app.EngineService] keeps the process alive.
+ */
+class EngineController(private val app: Application) {
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private val settingsStore = SettingsStore(app)
     private val _settings = MutableStateFlow(settingsStore.load())
     val settings: StateFlow<AppSettings> = _settings
@@ -129,17 +135,17 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     private fun makeProvider(): SnapshotProvider = when (_settings.value.mode) {
         DataMode.SIMULATED -> SimulatedMarket(seed = System.currentTimeMillis() / 86_400_000L)
-        else -> LiveSnapshotProvider(File(getApplication<Application>().cacheDir, "kite")) { _settings.value }
+        else -> LiveSnapshotProvider(File(app.cacheDir, "kite")) { _settings.value }
     }
 
     fun start() {
         if (loop?.isActive == true) return
         _ui.update { it.copy(running = true) }
-        loop = viewModelScope.launch {
+        if (_settings.value.runInBackground) EngineService.start(app)
+        loop = scope.launch {
             while (isActive) {
                 cycle()
-                val s = _settings.value
-                delay(if (s.mode == DataMode.SIMULATED) s.simSecondsPerMinute * 1000L else s.refreshSeconds * 1000L)
+                delay(nextDelayMs(_settings.value, System.currentTimeMillis()))
             }
         }
     }
@@ -147,9 +153,11 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     fun stop() {
         loop?.cancel(); loop = null
         _ui.update { it.copy(running = false) }
+        saveEventState(force = true)
+        EngineService.stop(app)
     }
 
-    fun refreshNow() = viewModelScope.launch { cycle() }
+    fun refreshNow() = scope.launch { cycle() }
 
     private suspend fun cycle() {
         if (_ui.value.busy) return
@@ -241,7 +249,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         analystBusy = true
         analystNextAllowed = now + s.geminiMinIntervalSec * 1000L
         updateAnalystStatus()
-        viewModelScope.launch(Dispatchers.IO) {
+        scope.launch(Dispatchers.IO) {
             try {
                 countCall()
                 val res = GeminiEventAnalyst(s.geminiApiKey, s.geminiModel).analyze(reqs, briefs, System.currentTimeMillis())
@@ -276,7 +284,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    override fun onCleared() { saveEventState(force = true); super.onCleared() }
+    /** Persist event memory now (service teardown / engine stop). */
+    fun persist() = saveEventState(force = true)
 
     /** 19 — refit the probability calibrator from logged outcomes and hand it to the engine. */
     fun refitCalibration() {
@@ -308,6 +317,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         val old = _settings.value
         settingsStore.save(new)
         _settings.value = new
+        if (old.runInBackground != new.runInBackground && loop?.isActive == true) {
+            if (new.runInBackground) EngineService.start(app) else EngineService.stop(app)
+        }
         if (old.kiteAccessToken != new.kiteAccessToken && new.mode == DataMode.LIVE_KITE) refreshNow()
         if (old.mode != new.mode || old.engineConfig() != new.engineConfig() || old.minCalibrationSamples != new.minCalibrationSamples) {
             // Keep the event memory when only thresholds change; start clean when switching data family.
@@ -322,7 +334,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    fun completeKiteLogin(requestToken: String) = viewModelScope.launch {
+    fun completeKiteLogin(requestToken: String) = scope.launch {
         val s = _settings.value
         try {
             val token = withContext(Dispatchers.IO) { KiteClient.createSession(s.kiteApiKey, s.kiteApiSecret, requestToken) }
@@ -337,7 +349,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     /** 18 — replay a recorded live session (or a freshly simulated day when [file] is null). */
     fun runReplay(file: File?, mode: ReplayMode) {
         if (_ui.value.replay.running) return
-        viewModelScope.launch {
+        scope.launch {
             _ui.update { it.copy(replay = ReplayState(running = true, label = file?.name ?: "Simulated session")) }
             try {
                 val result = withContext(Dispatchers.Default) {
@@ -375,20 +387,20 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         }
         backtestCancel = false
         _ui.update { it.copy(backtest = BacktestState(running = true, label = "Starting…")) }
-        viewModelScope.launch(Dispatchers.IO) {
+        scope.launch(Dispatchers.IO) {
             try {
                 val today = Session.zdt(System.currentTimeMillis()).toLocalDate()
                 val to = today.minusDays(1)
                 val from = to.minusMonths(months.toLong())
-                val src = KiteHistoricalSource(KiteApi(s.kiteApiKey, s.kiteAccessToken), File(getApplication<Application>().cacheDir, "kite-hist")) { msg ->
+                val src = KiteHistoricalSource(KiteApi(s.kiteApiKey, s.kiteAccessToken), File(app.cacheDir, "kite-hist")) { msg ->
                     _ui.update { st -> st.copy(backtest = st.backtest.copy(label = msg)) }
                 }
                 val run = HistoricalBacktest(s.engineConfig()).run(src, from, to,
                     onProgress = { msg, p -> _ui.update { st -> st.copy(backtest = st.backtest.copy(label = msg, progress = p)) } },
                     cancelled = { backtestCancel })
-                val csv = File(getApplication<Application>().filesDir, "backtest-$from-$to.csv")
+                val csv = File(app.filesDir, "backtest-$from-$to.csv")
                 writeBacktestCsv(csv, run.records)
-                File(getApplication<Application>().filesDir, "backtest-$from-$to-report.json")
+                File(app.filesDir, "backtest-$from-$to-report.json")
                     .writeText(AppJson.encodeToString(com.niftyengine.engine.engines.BacktestReport.serializer(), run.report))
                 _ui.update { it.copy(backtest = BacktestState(running = false, progress = 1f,
                     label = if (backtestCancel) "Cancelled — partial results" else "Done", report = run.report, sourceNotes = src.notes, csv = csv)) }
@@ -425,7 +437,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
      */
     fun runWalkForward(mode: ReplayMode) {
         if (_ui.value.replay.running) return
-        viewModelScope.launch {
+        scope.launch {
             _ui.update { it.copy(replay = ReplayState(running = true, label = "Walk-forward · all recorded sessions")) }
             try {
                 val wf = withContext(Dispatchers.Default) {
@@ -444,4 +456,22 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             }
         }
     }
+}
+
+/**
+ * Live modes poll at the configured rate from 08:45 (GIFT/pre-open) to 15:45 IST on weekdays and every
+ * 5 minutes otherwise, so a background run overnight or at weekends costs almost no battery or data.
+ */
+internal fun nextDelayMs(s: AppSettings, now: Long): Long {
+    if (s.mode == DataMode.SIMULATED) return s.simSecondsPerMinute * 1000L
+    return if (inActiveWindow(now)) s.refreshSeconds * 1000L else IDLE_POLL_MS
+}
+
+internal const val IDLE_POLL_MS = 5 * 60_000L
+
+internal fun inActiveWindow(now: Long): Boolean {
+    val z = Session.zdt(now)
+    if (z.dayOfWeek == java.time.DayOfWeek.SATURDAY || z.dayOfWeek == java.time.DayOfWeek.SUNDAY) return false
+    val m = z.hour * 60 + z.minute
+    return m in (8 * 60 + 45)..(15 * 60 + 45)
 }

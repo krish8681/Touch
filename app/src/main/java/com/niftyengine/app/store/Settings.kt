@@ -25,6 +25,8 @@ data class AppSettings(
     val notifyOnTrade: Boolean = true,
     val recordSessions: Boolean = true,
     val keepScreenOn: Boolean = false,
+    /** Keep the engine running (foreground service + wake lock) when the app is minimised or the screen is off. */
+    val runInBackground: Boolean = true,
     val kiteApiKey: String = "",
     val kiteApiSecret: String = "",
     val kiteAccessToken: String = "",
@@ -117,6 +119,7 @@ class SettingsStore(context: Context) {
             notifyOnTrade = p.getBoolean("notify", def.notifyOnTrade),
             recordSessions = p.getBoolean("record", def.recordSessions),
             keepScreenOn = p.getBoolean("screenOn", def.keepScreenOn),
+            runInBackground = p.getBoolean("background", def.runInBackground),
             kiteApiKey = p.getString("kiteKey", "")!!,
             kiteApiSecret = p.getString("kiteSecret", "")!!,
             kiteAccessToken = p.getString("kiteToken", "")!!,
@@ -157,7 +160,7 @@ class SettingsStore(context: Context) {
             .putString("minConf", s.minConfidence.name).putString("minMove", s.minExpectedMovePts.toString())
             .putString("maxSpread", s.maxSpreadPct.toString()).putString("minOi", s.minOi.toString())
             .putString("minVol", s.minVolume.toString()).putBoolean("notify", s.notifyOnTrade)
-            .putBoolean("record", s.recordSessions).putBoolean("screenOn", s.keepScreenOn)
+            .putBoolean("record", s.recordSessions).putBoolean("screenOn", s.keepScreenOn).putBoolean("background", s.runInBackground)
             .putString("kiteKey", s.kiteApiKey.trim()).putString("kiteSecret", s.kiteApiSecret.trim())
             .putString("kiteToken", s.kiteAccessToken.trim()).putString("kiteTokenDate", s.kiteTokenDate)
             .putString("m_repo", n(s.macro.repoRate)).putString("m_policy", n(s.macro.lastPolicyChangeBps))

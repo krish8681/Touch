@@ -14,8 +14,8 @@ android {
         applicationId = "com.niftyengine.app"
         minSdk = 26
         targetSdk = 35
-        versionCode = 8
-        versionName = "4.2.0"
+        versionCode = 9
+        versionName = "4.3.0"
     }
 
     signingConfigs {

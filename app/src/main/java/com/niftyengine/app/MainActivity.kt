@@ -2,13 +2,15 @@ package com.niftyengine.app
 
 import android.Manifest
 import android.content.Intent
+import android.net.Uri
 import android.os.Build
+import android.os.PowerManager
+import android.provider.Settings
 import android.os.Bundle
 import android.view.WindowManager
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.activity.viewModels
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
@@ -46,7 +48,7 @@ import com.niftyengine.app.ui.DashboardScreen
 import com.niftyengine.app.ui.DriversScreen
 import com.niftyengine.app.ui.Label
 import com.niftyengine.app.ui.LogScreen
-import com.niftyengine.app.ui.MainViewModel
+import com.niftyengine.app.ui.EngineController
 import com.niftyengine.app.ui.MarketScreen
 import com.niftyengine.app.ui.NewsScreen
 import com.niftyengine.app.ui.NiftyTheme
@@ -54,11 +56,14 @@ import com.niftyengine.app.ui.OptionsScreen
 import com.niftyengine.app.ui.SettingsScreen
 
 class MainActivity : ComponentActivity() {
-    private val vm: MainViewModel by viewModels()
+    private val vm: EngineController get() = (application as NiftyApp).controller
 
     private val kiteLogin = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { r ->
         r.data?.getStringExtra(KiteLoginActivity.EXTRA_REQUEST_TOKEN)?.let { vm.completeKiteLogin(it) }
     }
+    /** Re-checked on every resume: Android may kill a battery-optimised app's background work despite the service. */
+    private var batteryRestricted by mutableStateOf(false)
+
     private val notifPermission = registerForActivityResult(ActivityResultContracts.RequestPermission()) { }
 
     private enum class Tab(val icon: String, val label: String) {
@@ -81,6 +86,13 @@ class MainActivity : ComponentActivity() {
                 Column(Modifier.fillMaxSize().background(C.bg).systemBarsPadding()) {
                     TopBar(ui.output?.dataSource ?: settings.mode.label, ui.running, ui.busy, ui.error,
                         onToggle = { if (ui.running) vm.stop() else vm.start() }, onRefresh = { vm.refreshNow() })
+                    if (settings.runInBackground && batteryRestricted) {
+                        Row(Modifier.fillMaxWidth().background(C.amber.copy(alpha = 0.15f)).clickable { requestBatteryExemption() }
+                            .padding(horizontal = 14.dp, vertical = 8.dp)) {
+                            Label("Battery optimisation may stop the engine in the background — tap to allow unrestricted battery",
+                                color = C.amber, size = 11.sp, weight = FontWeight.Bold, mono = false)
+                        }
+                    }
                     if (settings.kiteLoginNeeded()) {
                         Row(Modifier.fillMaxWidth().background(C.amber.copy(alpha = 0.15f)).clickable {
                             if (settings.kiteApiKey.isNotBlank() && settings.kiteApiSecret.isNotBlank()) startKiteLogin(settings) else tab = Tab.SETTINGS
@@ -113,6 +125,19 @@ class MainActivity : ComponentActivity() {
                     }
                 }
             }
+        }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        batteryRestricted = !getSystemService(PowerManager::class.java).isIgnoringBatteryOptimizations(packageName)
+    }
+
+    @android.annotation.SuppressLint("BatteryLife")
+    private fun requestBatteryExemption() {
+        val direct = Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, Uri.parse("package:$packageName"))
+        runCatching { startActivity(direct) }.onFailure {
+            runCatching { startActivity(Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS)) }
         }
     }
 
@@ -153,7 +178,7 @@ private fun TopBar(source: String, running: Boolean, busy: Boolean, error: Strin
             Spacer(Modifier.width(10.dp))
             Column(Modifier.weight(1f)) {
                 Label("NIFTY Direction Engine", color = C.white, size = 14.sp, weight = FontWeight.Bold, mono = false)
-                Label("v3 · $source", color = C.dim, size = 9.sp, maxLines = 1)
+                Label("v4.3 · $source", color = C.dim, size = 9.sp, maxLines = 1)
             }
             Box(Modifier.size(8.dp).clip(CircleShape).background(if (busy) C.amber else if (running) C.green else C.dim))
             Spacer(Modifier.width(12.dp))
