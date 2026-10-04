@@ -53,7 +53,7 @@ data class AppSettings(
     // ---- v4 event intelligence (Gemini reads news; it never produces trade signals)
     val geminiEnabled: Boolean = true,
     val geminiApiKey: String = "",
-    val geminiModel: String = "gemini-2.5-flash",
+    val geminiModel: String = "gemini-3.8-flash",
     val geminiDailyBudget: Int = 200,
     val geminiMinIntervalSec: Int = 60,
     // ---- v5 strategy, risk and shadow execution (deterministic; the app never places real orders)

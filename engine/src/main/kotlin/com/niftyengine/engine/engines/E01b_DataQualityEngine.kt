@@ -87,8 +87,16 @@ class DataQualityEngine(
         // Market closed (evening, weekend, exchange holiday): judge every feed against the newest critical
         // timestamp of the last session, so a feed lagging the others is still caught. (No holiday calendar:
         // on a weekday holiday during market hours old data correctly reads as STALE — nothing trades anyway.)
-        val ref = if (open) now else listOfNotNull(s.nifty.asOf, s.optionChain?.asOf, s.futures?.asOf)
-            .filter { it in 1..now && now - it < 5 * 86_400_000L }.maxOrNull() ?: referenceTime(now)
+        // v5.1.1: anchored on the CLOSE of the session the newest critical stamp belongs to (that stamp tells which day
+        // the last session was, holidays included). Brokers keep re-stamping quotes after 15:30 at different times
+        // (e.g. NIFTY 17:35, futures 17:01, chain 17:18): those are the session's final values, not "34 min stale".
+        val lastStamp = listOfNotNull(s.nifty.asOf, s.optionChain?.asOf, s.futures?.asOf)
+            .filter { it in 1..now && now - it < 5 * 86_400_000L }.maxOrNull()
+        val ref = when {
+            open -> now
+            lastStamp == null -> referenceTime(now)
+            else -> Session.closeOf(Session.zdt(lastStamp).toLocalDate()).takeIf { it <= now } ?: lastStamp // pre-open: today's stamps
+        }
         val feeds = ArrayList<FeedQuality>()
         val breaker = ArrayList<String>()
         val warnings = ArrayList<String>()
@@ -97,7 +105,9 @@ class DataQualityEngine(
             val lim = LIMITS.getValue(name)
             // No clamping: a future timestamp must never read as "age 0, perfectly fresh".
             val ahead = if (asOf <= 0) 0.0 else (asOf - now) / 1000.0
-            val age = if (asOf <= 0) Double.NaN else (ref - asOf) / 1000.0
+            // Market closed: a stamp after the last close is that session's final value (age 0). This is not the old
+            // future-clamp — anything after the DECISION time was already caught as FUTURE above.
+            val age = if (asOf <= 0) Double.NaN else if (!open && asOf > ref) 0.0 else (ref - asOf) / 1000.0
             val (st, why) = when {
                 ahead * 1000 > futureToleranceMs -> FeedStatus.FUTURE to "stamped ${fmtSkew(ahead)} after the decision time — rejected"
                 invalid != null -> FeedStatus.INVALID to invalid

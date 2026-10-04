@@ -288,6 +288,18 @@ class EngineController(private val app: Application) {
             } catch (e: GeminiException) {
                 analystLastError = e.message
                 if (e.retryAfterSec > 0) analystNextAllowed = System.currentTimeMillis() + e.retryAfterSec * 1000L
+                if (e.modelUnavailable) {
+                    // Retired model: switch to the one the API names (else the newest flash this key lists), keep it in Setup.
+                    val next = e.replacementModel ?: runCatching { GeminiEventAnalyst.latestFlash(s.geminiApiKey) }.getOrNull()
+                    if (next != null && next != s.geminiModel) {
+                        analystLastError = "Model ${s.geminiModel} unavailable — switched to $next"
+                        analystNextAllowed = System.currentTimeMillis()
+                        scope.launch { updateSettings(_settings.value.copy(geminiModel = next)) }
+                    } else {
+                        analystLastError = "${e.message} — set a current model in Setup"
+                        analystNextAllowed = System.currentTimeMillis() + 3_600_000L // don't spend the daily budget on a dead model
+                    }
+                }
             } catch (e: Exception) {
                 analystLastError = e.message ?: e.javaClass.simpleName
             } finally {

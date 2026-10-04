@@ -413,7 +413,7 @@ fun SettingsScreen(current: AppSettings, onSave: (AppSettings) -> Unit, onKiteLo
         minDataQuality = (num(minDq, 70.0) / 100).coerceIn(0.0, 1.0),
         brokeragePerOrder = num(brok, 20.0), sttSellPct = num(stt, 0.1), slippageTicks = num(slip, 1.0),
         lotSize = num(lotSize, 65.0).toInt().coerceAtLeast(1), lots = num(lots, 1.0).toInt().coerceAtLeast(1),
-        geminiEnabled = gemOn, geminiApiKey = gemKey.trim(), geminiModel = gemModel.trim().ifBlank { "gemini-2.5-flash" },
+        geminiEnabled = gemOn, geminiApiKey = gemKey.trim(), geminiModel = gemModel.trim().ifBlank { "gemini-3.8-flash" },
         geminiDailyBudget = num(gemBudget, 200.0).toInt().coerceIn(0, 5000),
         geminiMinIntervalSec = num(gemInterval, 60.0).toInt().coerceIn(10, 3600),
         shadowMode = shadow, capital = num(capital, 200_000.0).coerceAtLeast(10_000.0),

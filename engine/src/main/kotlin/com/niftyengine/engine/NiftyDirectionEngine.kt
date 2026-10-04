@@ -94,7 +94,7 @@ data class EngineConfig(
     val maxCriticalSkewSec: Double = 180.0,
 )
 
-const val ENGINE_VERSION = "5.1.1"
+const val ENGINE_VERSION = "5.1.2"
 
 /**
  * NIFTY Direction Engine v5 — one cycle of the decision pipeline:

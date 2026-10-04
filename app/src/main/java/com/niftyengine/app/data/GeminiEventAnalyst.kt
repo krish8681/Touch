@@ -16,7 +16,13 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.io.IOException
 
-class GeminiException(val code: Int, message: String, val retryAfterSec: Long = 0) : IOException(message)
+class GeminiException(
+    val code: Int, message: String, val retryAfterSec: Long = 0,
+    /** The configured model is retired / unknown (404) — calling it again cannot succeed. */
+    val modelUnavailable: Boolean = false,
+    /** Replacement model named by the API's own error message ("…please use models/X…"), if any. */
+    val replacementModel: String? = null,
+) : IOException(message)
 
 /**
  * Gemini Event Intelligence — reads news and returns a STRUCTURED DESCRIPTION of each event
@@ -30,7 +36,7 @@ class GeminiException(val code: Int, message: String, val retryAfterSec: Long = 
  */
 class GeminiEventAnalyst(
     private val apiKey: String,
-    val model: String = "gemini-2.5-flash",
+    val model: String = "gemini-3.8-flash",
     private val baseUrl: String = "https://generativelanguage.googleapis.com",
 ) {
     fun analyze(requests: List<AnalysisRequest>, active: List<Triple<String, String, EventStage>>, now: Long): List<EventAnalysis> {
@@ -50,7 +56,10 @@ class GeminiEventAnalyst(
                     (0 until d.length()).mapNotNull { d.optJSONObject(it)?.optString("retryDelay")?.takeIf { s -> s.isNotBlank() } }
                         .firstOrNull()?.trimEnd('s')?.toDoubleOrNull()?.toLong()
                 } ?: if (r.code == 429) 60L else 0L
-                throw GeminiException(r.code, "Gemini ${r.code}: ${err?.optString("message")?.take(140) ?: txt.take(140)}", retry)
+                val msg = err?.optString("message")?.takeIf { it.isNotBlank() } ?: txt
+                val unavailable = r.code == 404 || Regex("no longer available|is not found|not supported for generateContent", RegexOption.IGNORE_CASE).containsMatchIn(msg)
+                throw GeminiException(r.code, "Gemini ${r.code}: ${msg.take(140)}", retry, unavailable,
+                    if (unavailable) replacementIn(msg)?.takeIf { it != model } else null)
             }
             val text = JSONObject(txt).getJSONArray("candidates").getJSONObject(0).getJSONObject("content")
                 .getJSONArray("parts").getJSONObject(0).getString("text")
@@ -59,6 +68,30 @@ class GeminiEventAnalyst(
     }
 
     companion object {
+        /** "…Please update your code to use models/gemini-3.8-flash for the latest…" → "gemini-3.8-flash". */
+        fun replacementIn(message: String): String? =
+            Regex("\\buse (?:models/)?(gemini-[a-z0-9.\\-]+[a-z0-9])", RegexOption.IGNORE_CASE).find(message)?.groupValues?.get(1)
+
+        /** Newest stable `gemini-<version>-flash` this key can call (ListModels), or null. */
+        fun latestFlash(apiKey: String, baseUrl: String = "https://generativelanguage.googleapis.com"): String? {
+            val req = Request.Builder().url("$baseUrl/v1beta/models?pageSize=1000").header("x-goog-api-key", apiKey).get().build()
+            return Http.client.newCall(req).execute().use { r -> if (r.isSuccessful) pickFlash(r.body?.string() ?: "") else null }
+        }
+
+        /** From a ListModels reply: the highest-version plain flash model supporting generateContent (no lite/preview/exp/tts/image…). */
+        fun pickFlash(listJson: String): String? {
+            val models = runCatching { JSONObject(listJson).optJSONArray("models") }.getOrNull() ?: return null
+            val plain = Regex("^gemini-(\\d+(?:\\.\\d+)?)-flash(?:-\\d{3})?$")
+            return (0 until models.length()).mapNotNull { i ->
+                val m = models.optJSONObject(i) ?: return@mapNotNull null
+                val name = m.optString("name").removePrefix("models/")
+                val methods = m.optJSONArray("supportedGenerationMethods")
+                val gen = methods != null && (0 until methods.length()).any { methods.optString(it) == "generateContent" }
+                val ver = plain.find(name)?.groupValues?.get(1)?.toDoubleOrNull()
+                if (gen && ver != null) Triple(name, ver, name.length) else null
+            }.sortedWith(compareByDescending<Triple<String, Double, Int>> { it.second }.thenBy { it.third }).firstOrNull()?.first
+        }
+
         private fun ist(t: Long) = Session.zdt(t).let { "%s %02d:%02d".format(it.toLocalDate(), it.hour, it.minute) }
 
         fun prompt(requests: List<AnalysisRequest>, active: List<Triple<String, String, EventStage>>, now: Long): String = buildString {

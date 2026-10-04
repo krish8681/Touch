@@ -1,4 +1,4 @@
-# NIFTY Direction Engine v5.1.1 — Android
+# NIFTY Direction Engine v5.1.2 — Android
 
 A **NIFTY market-intelligence, probability and trade-selection engine** for Android. v5 replaces
 "indicators → score → direction → option" with a decision pipeline that asks, in order:
@@ -14,8 +14,16 @@ A **NIFTY market-intelligence, probability and trade-selection engine** for Andr
 > optima. The app never places real orders: approved decisions are executed in **shadow mode** (virtual trades) so the
 > whole pipeline can be measured before any money is risked.
 
-**Install:** `release/NiftyDirectionEngine-v5.1.1.apk` (Android 8.0+, sideload / "install unknown apps"). Installs over v4.x / v5.x
+**Install:** `release/NiftyDirectionEngine-v5.1.2.apk` (Android 8.0+, sideload / "install unknown apps"). Installs over v4.x / v5.x
 (same signing key). It opens in **Simulator** mode (synthetic data, works offline/after hours). Switch to live data in **Setup**.
+
+## v5.1.2 — fixes from the first live (Kite) run
+
+| Issue seen on the device | Fix |
+|---|---|
+| After hours: **DATA ERROR** "Futures stale 34m / Options stale 17m", model health NO SIGNAL — Kite re-stamps quotes after 15:30 at different times (NIFTY 17:35, futures 17:01, chain 17:18) and each was aged against the newest one | With the market closed, ages are measured against the **close of the last session** (found from the newest critical stamp, so holidays work); a stamp after the close is that session's final value. A feed that froze during the session is still STALE; future stamps are still FUTURE; in-session rules are unchanged. |
+| **Gemini 404** — `gemini-2.5-flash` "no longer available to new users" — every event fell back to rules | A retired/unknown model is detected; the app switches to the replacement the API names (else the newest `gemini-x-flash` the key lists via ListModels), saves it in Setup and retries; with no replacement it backs off 1 h instead of spending the daily budget. Default model is now `gemini-3.8-flash`. |
+| Rules fallback read previews as **confirmed RBI decisions** (severity 0.90, 100 % unpriced) — "Week Ahead… RBI Policy", "Market outlook…", "MPC Meeting Begins Monday; Hike Possible", "Rate hike? …", "Quote on RBI MPC Expectation…" — and "Kotak… new CEO after RBI approval" as RBI policy | Preview / outlook / opinion / question titles without an outcome verb are **EXPECTED** (scheduled, already known — near-zero surprise, still counted as event risk ahead); an unmatched title no longer silently becomes a policy decision through a bare "RBI" mention — RBI_POLICY needs policy wording (repo, MPC, policy rate, governor, rate cut/hike…). |
 
 ## v5.1.1 — point-in-time integrity (five essential fixes, nothing else added)
 

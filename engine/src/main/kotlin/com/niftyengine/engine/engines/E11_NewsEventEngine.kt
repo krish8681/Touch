@@ -90,7 +90,10 @@ class NewsEventEngine {
 
     // ---------------------------------------------------------------- classification
     private val typeRules: List<Pair<EventType, Regex>> = listOf(
-        EventType.RBI_POLICY to Regex("\\brbi\\b|repo rate|monetary policy|mpc|reserve bank|crr\\b|malhotra"),
+        // A bare "RBI" mention is not monetary policy ("…new CEO after RBI approval", "RBI penalises bank"): policy wording required.
+        EventType.RBI_POLICY to Regex("repo rate|reverse repo|monetary policy|\\bmpc\\b|policy rate|\\bcrr\\b|\\bslr\\b|malhotra|" +
+            "\\b(rbi|reserve bank)('s)? (policy|governor|rate|keeps|cuts|hikes|raises|holds|leaves|stance|liquidity)|" +
+            "rate (cut|hike)s?\\b.{0,40}\\b(rbi|reserve bank)\\b|\\b(rbi|reserve bank)\\b.{0,40}rate (cut|hike)"),
         EventType.FED to Regex("\\bfed\\b|fomc|federal reserve|powell|rate cut.*us|us rate"),
         EventType.INFLATION to Regex("inflation|\\bcpi\\b|\\bwpi\\b|consumer price"),
         EventType.GROWTH to Regex("\\bgdp\\b|\\biip\\b|\\bpmi\\b|industrial output|growth rate|economy grew|core sector"),

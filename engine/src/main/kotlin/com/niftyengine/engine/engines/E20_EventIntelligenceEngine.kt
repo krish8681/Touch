@@ -38,10 +38,21 @@ object RuleEventAnalyzer {
         EventStage.EXPECTED to Regex("expected to|economists expect|analysts expect|poll shows|consensus|seen (cutting|hiking|raising)|forecast to|likely to (cut|hike|raise|hold)"),
         EventStage.RUMOUR to Regex("reportedly|sources (said|say)|rumou?r|unconfirmed|speculat"),
         EventStage.LIKELY to Regex("\\b(likely|set to|poised to|plans to|to announce|on track to)\\b"),
-        EventStage.POSSIBLE to Regex("\\b(may|might|could|considers?|weighs|mulls|explor(es|ing)|eyes)\\b"),
+        EventStage.POSSIBLE to Regex("\\b(may|might|could|possible|possibility|considers?|weighs|mulls|explor(es|ing)|eyes)\\b"),
         EventStage.ESCALATING to Regex("escalat|retaliat|widens?|intensif|fresh (attack|strike)s?|more strikes|spreads to"),
         EventStage.CONFIRMED to Regex("\\b(confirm(s|ed)?|announce[sd]?|cuts?|cut by|raises|raised|hikes|hiked|approve[sd]|signs|signed|imposes|imposed|keeps .* unchanged|holds (repo|rates?)|posts|reports|declared?|launch(es|ed)|attack(s|ed)? |struck)\\b"),
     )
+    /**
+     * Previews, outlooks, opinion and question headlines ("Week ahead: RBI policy…", "MPC meeting begins Monday; hike
+     * possible", "Rate hike? …", "Quote on RBI MPC expectation…") discuss a scheduled event — they confirm nothing, and the
+     * market already knows the event is coming. Judged on the TITLE only, and only when the title has no outcome verb
+     * ("RBI cuts repo rate, in line with expectations" stays CONFIRMED).
+     */
+    private val preview = Regex("week ahead|weekly (outlook|wrap)|\\boutlook\\b|what to expect|things to watch|\\bto watch\\b|key triggers|" +
+        "triggers? (for|to watch|next week)|\\bpreview\\b|curtain.?raiser|\\bbegins\\b|kicks off|to decide|decision (due|tomorrow|today)|" +
+        "meeting (begins|starts|today|tomorrow)|\\bexpectations? (from|ahead)|\\bquote on\\b|\\bview:|\\bopinion\\b|explainer|explained|\\?")
+    private val outcomeVerb = Regex("\\b(cuts?|cut by|raises|raised|hikes|hiked|keeps|kept|holds|held|leaves|left|announce[sd]|confirm(s|ed)|" +
+        "unchanged|approve[sd]|signs|signed|imposes|imposed|posts|reports|declared?)\\b")
     private val defaultProb = mapOf(EventStage.RUMOUR to 0.25, EventStage.POSSIBLE to 0.4, EventStage.LIKELY to 0.65, EventStage.EXPECTED to 0.8)
 
     fun channelsFor(t: EventType): List<MarketChannel> = when (t) {
@@ -59,15 +70,17 @@ object RuleEventAnalyzer {
         EventType.MARKET, EventType.OTHER -> listOf(MarketChannel.RISK_SENTIMENT)
     }
 
-    fun stageOf(title: String): EventStage {
-        val t = title.lowercase()
+    fun stageOf(title: String, summary: String = ""): EventStage {
+        val head = title.lowercase()
+        if (preview.containsMatchIn(head) && !outcomeVerb.containsMatchIn(head)) return EventStage.EXPECTED
+        val t = (title + " " + summary).lowercase()
         return stageRules.firstOrNull { it.second.containsMatchIn(t) }?.first ?: EventStage.CONFIRMED
     }
 
     fun analyze(rules: NewsEventEngine, eventId: String, items: List<NewsItem>, now: Long, series: List<Candle>, prevClose: Double, last: Double): EventAnalysis {
         val ne = rules.buildEvent(items.sortedBy { it.publishedAt }, now, series, prevClose, last)
         val latest = items.maxBy { it.publishedAt }
-        val stage = stageOf(latest.title + " " + latest.summary)
+        val stage = stageOf(latest.title, latest.summary)
         val text = items.joinToString(" ") { it.title + " " + it.summary }.lowercase()
         val matches: Boolean? = when {
             ne.expected != "–" && ne.actual != "–" -> ne.expected == ne.actual

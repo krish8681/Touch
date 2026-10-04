@@ -97,6 +97,46 @@ class GeminiAnalystTest {
         }
     }
 
+    /** The exact 404 seen live: the configured model was retired; the API names its replacement. */
+    @Test fun retiredModelIsDetectedWithItsReplacement() {
+        val msg = "This model models/gemini-2.5-flash is no longer available to new users. Please update your code to use " +
+            "models/gemini-3.8-flash for the latest features and improvements."
+        server.enqueue(MockResponse().setResponseCode(404).setBody(JSONObject().put("error", JSONObject().put("code", 404)
+            .put("message", msg).put("status", "NOT_FOUND")).toString()))
+        try {
+            GeminiEventAnalyst("K", "gemini-2.5-flash", server.url("").toString().trimEnd('/')).analyze(listOf(req("E1")), emptyList(), now)
+            fail("expected GeminiException")
+        } catch (e: GeminiException) {
+            assertEquals(404, e.code)
+            assertTrue(e.modelUnavailable)
+            assertEquals("gemini-3.8-flash", e.replacementModel)
+        }
+        // a 404 without a named replacement is still "unavailable" (the controller then asks ListModels)
+        server.enqueue(MockResponse().setResponseCode(404).setBody(JSONObject().put("error", JSONObject()
+            .put("message", "models/gemini-9-flash is not found for API version v1beta")).toString()))
+        try {
+            GeminiEventAnalyst("K", "gemini-9-flash", server.url("").toString().trimEnd('/')).analyze(listOf(req("E1")), emptyList(), now)
+            fail("expected GeminiException")
+        } catch (e: GeminiException) {
+            assertTrue(e.modelUnavailable); assertEquals(null, e.replacementModel)
+        }
+    }
+
+    @Test fun newestPlainFlashIsPickedFromListModels() {
+        fun m(name: String, vararg methods: String) = JSONObject().put("name", "models/$name")
+            .put("supportedGenerationMethods", JSONArray().apply { methods.forEach { put(it) } })
+        val list = JSONObject().put("models", JSONArray()
+            .put(m("gemini-2.5-flash", "generateContent")).put(m("gemini-3.8-flash", "generateContent", "countTokens"))
+            .put(m("gemini-3.8-flash-lite", "generateContent")).put(m("gemini-4.0-flash-preview-05-20", "generateContent"))
+            .put(m("gemini-3.8-flash-tts", "generateContent")).put(m("gemini-5.0-flash", "embedContent"))
+            .put(m("gemini-3.8-pro", "generateContent"))).toString()
+        assertEquals("gemini-3.8-flash", GeminiEventAnalyst.pickFlash(list))
+        server.enqueue(MockResponse().setBody(list))
+        assertEquals("gemini-3.8-flash", GeminiEventAnalyst.latestFlash("K", server.url("").toString().trimEnd('/')))
+        assertEquals("/v1beta/models?pageSize=1000", server.takeRequest().path)
+        assertEquals(null, GeminiEventAnalyst.pickFlash("{}"))
+    }
+
     @Test fun parsedGeminiReadingDrivesTheEngine() {
         val a = GeminiEventAnalyst.parse(modelReply.toString(), setOf("E1"), setOf("E0"), now, "gemini:test")[0]
         val eng = EventIntelligenceEngine()
