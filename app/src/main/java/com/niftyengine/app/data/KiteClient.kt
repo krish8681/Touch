@@ -109,6 +109,20 @@ class KiteApi(private val apiKey: String, private val accessToken: String, priva
 
     fun instrumentsCsv(exchange: String): String = get("/instruments/$exchange")
 
+    /** Streams an instruments dump (several MB) straight to [dest] without holding it in memory. */
+    fun instrumentsToFile(exchange: String, dest: File) {
+        val req = Request.Builder().url("$baseUrl/instruments/$exchange")
+            .header("X-Kite-Version", "3")
+            .header("Authorization", "token $apiKey:$accessToken")
+            .build()
+        Http.client.newCall(req).execute().use { r ->
+            if (!r.isSuccessful) throw KiteClient.parseError(r.code, r.body?.string() ?: "")
+            val tmp = File(dest.parentFile, dest.name + ".part")
+            r.body!!.byteStream().use { input -> tmp.outputStream().use { input.copyTo(it) } }
+            if (!tmp.renameTo(dest)) { tmp.copyTo(dest, overwrite = true); tmp.delete() }
+        }
+    }
+
     companion object {
         private val kiteTs = DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ssZ")
         /** Kite returns e.g. `2026-10-01T09:15:00+0530` (offset without colon); ISO form accepted too. */
@@ -125,8 +139,15 @@ data class KiteInstrument(
 
 object KiteInstruments {
     /** Parses the CSV dump (instrument_token,exchange_token,tradingsymbol,name,last_price,expiry,strike,tick_size,lot_size,instrument_type,segment,exchange). */
-    fun parse(csv: String, filter: (name: String, segment: String) -> Boolean = { _, _ -> true }): List<KiteInstrument> {
-        val lines = csv.lineSequence().iterator()
+    fun parse(csv: String, filter: (name: String, segment: String) -> Boolean = { _, _ -> true }): List<KiteInstrument> =
+        parseLines(csv.lineSequence(), filter)
+
+    /** Line-by-line parse of a dump file — keeps memory flat for the ~100k-row NFO dump. */
+    fun parse(file: File, filter: (name: String, segment: String) -> Boolean = { _, _ -> true }): List<KiteInstrument> =
+        file.bufferedReader().useLines { parseLines(it, filter) }
+
+    private fun parseLines(seq: Sequence<String>, filter: (name: String, segment: String) -> Boolean): List<KiteInstrument> {
+        val lines = seq.iterator()
         if (!lines.hasNext()) return emptyList()
         val header = lines.next().split(',')
         fun idx(n: String) = header.indexOf(n)
@@ -182,11 +203,11 @@ class KiteMarketData(private val api: KiteApi, private val cacheDir: File) {
         if (nfoDay == today && nfo.isNotEmpty()) return nfo
         cacheDir.mkdirs()
         val f = File(cacheDir, "kite-nfo-$today.csv")
-        val csv = if (f.exists() && f.length() > 1000) f.readText() else api.instrumentsCsv("NFO").also { body ->
+        if (!(f.exists() && f.length() > 1000)) {
             cacheDir.listFiles { x -> x.name.startsWith("kite-nfo-") }?.forEach { it.delete() }
-            f.writeText(body)
+            api.instrumentsToFile("NFO", f)
         }
-        nfo = KiteInstruments.parse(csv) { name, seg -> name == "NIFTY" && (seg == "NFO-OPT" || seg == "NFO-FUT") }
+        nfo = KiteInstruments.parse(f) { name, seg -> name == "NIFTY" && (seg == "NFO-OPT" || seg == "NFO-FUT") }
         nfoDay = today
         return nfo
     }

@@ -63,6 +63,8 @@ class MainActivity : ComponentActivity() {
     }
     /** Re-checked on every resume: Android may kill a battery-optimised app's background work despite the service. */
     private var batteryRestricted by mutableStateOf(false)
+    /** Report left by a crash (or a caught internal error) — shown once so it can be shared. */
+    private var crashReport by mutableStateOf<java.io.File?>(null)
 
     private val notifPermission = registerForActivityResult(ActivityResultContracts.RequestPermission()) { }
 
@@ -86,6 +88,16 @@ class MainActivity : ComponentActivity() {
                 Column(Modifier.fillMaxSize().background(C.bg).systemBarsPadding()) {
                     TopBar(ui.output?.dataSource ?: settings.mode.label, ui.running, ui.busy, ui.error,
                         onToggle = { if (ui.running) vm.stop() else vm.start() }, onRefresh = { vm.refreshNow() })
+                    crashReport?.let { f ->
+                        Row(Modifier.fillMaxWidth().background(C.red.copy(alpha = 0.18f)).padding(horizontal = 14.dp, vertical = 8.dp),
+                            verticalAlignment = Alignment.CenterVertically) {
+                            Label("⚠ The app hit an error last time — tap to share the crash report", color = C.red, size = 11.sp,
+                                weight = FontWeight.Bold, mono = false, modifier = Modifier.weight(1f).clickable { shareFile(f) })
+                            Text("✕", color = C.dim, fontSize = 16.sp, modifier = Modifier.clickable {
+                                CrashLog.dismiss(this@MainActivity); crashReport = null
+                            }.padding(start = 12.dp))
+                        }
+                    }
                     if (settings.runInBackground && batteryRestricted) {
                         Row(Modifier.fillMaxWidth().background(C.amber.copy(alpha = 0.15f)).clickable { requestBatteryExemption() }
                             .padding(horizontal = 14.dp, vertical = 8.dp)) {
@@ -130,6 +142,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onResume() {
         super.onResume()
+        crashReport = CrashLog.pending(this)
         batteryRestricted = !getSystemService(PowerManager::class.java).isIgnoringBatteryOptimizations(packageName)
     }
 
@@ -150,7 +163,11 @@ class MainActivity : ComponentActivity() {
         if (!f.exists()) return
         val uri = FileProvider.getUriForFile(this, "$packageName.files", f)
         startActivity(Intent.createChooser(Intent(Intent.ACTION_SEND).apply {
-            type = if (f.name.endsWith(".csv")) "text/csv" else "application/json"
+            type = when {
+                f.name.endsWith(".csv") -> "text/csv"
+                f.name.endsWith(".txt") -> "text/plain"
+                else -> "application/json"
+            }
             putExtra(Intent.EXTRA_STREAM, uri)
             addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
         }, "Share ${f.name}"))
@@ -178,7 +195,7 @@ private fun TopBar(source: String, running: Boolean, busy: Boolean, error: Strin
             Spacer(Modifier.width(10.dp))
             Column(Modifier.weight(1f)) {
                 Label("NIFTY Direction Engine", color = C.white, size = 14.sp, weight = FontWeight.Bold, mono = false)
-                Label("v4.3 · $source", color = C.dim, size = 9.sp, maxLines = 1)
+                Label("v4.3.1 · $source", color = C.dim, size = 9.sp, maxLines = 1)
             }
             Box(Modifier.size(8.dp).clip(CircleShape).background(if (busy) C.amber else if (running) C.green else C.dim))
             Spacer(Modifier.width(12.dp))

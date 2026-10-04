@@ -11,6 +11,7 @@ class NiftyApp : Application() {
 
     override fun onCreate() {
         super.onCreate()
+        CrashLog.install(this)
         val nm = getSystemService(NotificationManager::class.java)
         nm.createNotificationChannel(
             NotificationChannel(Notifier.CHANNEL, "Trade signals", NotificationManager.IMPORTANCE_HIGH).apply {

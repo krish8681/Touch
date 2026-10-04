@@ -61,8 +61,8 @@ class KiteHistoricalSource(
         val today = Session.zdt(System.currentTimeMillis()).toLocalDate()
         cacheDir.mkdirs()
         val f = File(cacheDir, "kite-nse-$today.csv")
-        val csv = if (f.exists() && f.length() > 1000) f.readText() else throttled("instruments NSE") { api.instrumentsCsv("NSE") }.also { f.writeText(it) }
-        val all = KiteInstruments.parse(csv)
+        if (!(f.exists() && f.length() > 1000)) throttled("instruments NSE") { api.instrumentsToFile("NSE", f) }
+        val all = KiteInstruments.parse(f)
         val wanted = Constituents.DEFAULT.map { it.symbol }.toSet()
         val sectors = all.filter { it.segment == "INDICES" && it.tradingSymbol in sectorSymbols }
             .associate { sectorSymbols.getValue(it.tradingSymbol) to it.token }

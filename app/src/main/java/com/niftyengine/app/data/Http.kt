@@ -55,7 +55,9 @@ class Cached<T>(private val ttlMs: Long, private val loader: () -> T) {
     @Synchronized fun get(force: Boolean = false): T? {
         val now = System.currentTimeMillis()
         if (force || now - at > ttlMs) {
-            try { value = loader(); at = now; lastError = null } catch (e: Exception) {
+            try { value = loader(); at = now; lastError = null } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (e: Throwable) { // incl. OutOfMemoryError on a huge response: the feed fails, the app survives
                 lastError = e.message ?: e.javaClass.simpleName
                 at = now - ttlMs + minOf(20_000L, ttlMs) // retry failed loads after ~20s
             }

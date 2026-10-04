@@ -10,8 +10,19 @@ A **NIFTY market-intelligence and probability engine** for Android. It answers f
 > Decision support only — not investment advice. Weights are starting engineering values, not validated
 > optima; use the prediction log and replay tools to measure before risking capital.
 
-**Install:** `release/NiftyDirectionEngine-v4.3.0.apk` (Android 8.0+, sideload / "install unknown apps").
+**Install:** `release/NiftyDirectionEngine-v4.3.1.apk` (Android 8.0+, sideload / "install unknown apps").
 It opens in **Simulator** mode (synthetic data, works offline/after hours). Switch to live data in **Setup**.
+
+## v4.3.1 — Kite login crash fixes
+
+- Kite login screen: non-web URLs (`about:blank`, `intent:`, `data:`) made `Uri.getQueryParameter` throw
+  inside the WebView callback, which killed the app. Token parsing is now string-based and never throws, app deep
+  links go to Android, and a dead WebView renderer is handled. If the in-app browser can't run, login opens in the
+  phone's browser with a box to paste the redirected URL.
+- Engine work (cycles, settings changes, Kite login) runs on one dedicated thread, so a settings change can't race a cycle.
+  Background errors (including out-of-memory) are reported in the top bar instead of crashing the app.
+- The NFO/NSE instrument dumps stream to disk and are parsed line by line (much lower peak memory); `largeHeap` is on.
+- Crash reports: any crash is saved, and the next launch shows a red banner to share it.
 
 ## v4.3 — keeps running in the background
 

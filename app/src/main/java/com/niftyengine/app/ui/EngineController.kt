@@ -1,6 +1,7 @@
 package com.niftyengine.app.ui
 
 import android.app.Application
+import com.niftyengine.app.CrashLog
 import com.niftyengine.app.EngineService
 import com.niftyengine.app.Notifier
 import com.niftyengine.app.data.KiteClient
@@ -34,7 +35,9 @@ import com.niftyengine.engine.model.EngineOutput
 import com.niftyengine.engine.model.MarketSnapshot
 import com.niftyengine.engine.model.OptionChain
 import com.niftyengine.engine.sim.SimulatedMarket
+import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.asCoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.Job
@@ -93,7 +96,17 @@ data class BacktestState(
  * running when the Activity is minimised or destroyed; [com.niftyengine.app.EngineService] keeps the process alive.
  */
 class EngineController(private val app: Application) {
-    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate + CoroutineExceptionHandler { _, e ->
+        // Never let a background failure take the whole app down: report it in the top bar instead.
+        CrashLog.write(app, Thread.currentThread(), e, fatal = false)
+        _ui.update { it.copy(error = "Internal error: ${e.javaClass.simpleName}: ${e.message}", busy = false) }
+    })
+    /**
+     * The engine, its event memory, the provider and the outcome path are not thread-safe: every access to them
+     * runs on this one thread (cycles, settings changes, Kite login) so a settings change can't race a cycle.
+     */
+    private val engineThread = java.util.concurrent.Executors.newSingleThreadExecutor { r -> Thread(r, "nifty-engine") }
+        .asCoroutineDispatcher()
     private val settingsStore = SettingsStore(app)
     private val _settings = MutableStateFlow(settingsStore.load())
     val settings: StateFlow<AppSettings> = _settings
@@ -127,10 +140,12 @@ class EngineController(private val app: Application) {
     private val path = ArrayDeque<Triple<Long, Double, OptionChain?>>()
 
     init {
-        loadEventState()
-        refitCalibration()
-        refreshStats()
-        start()
+        start() // first cycle runs on the engine thread after the initial load below
+        scope.launch(engineThread) {
+            loadEventState()
+            refitCalibration()
+            refreshStats()
+        }
     }
 
     private fun makeProvider(): SnapshotProvider = when (_settings.value.mode) {
@@ -153,7 +168,7 @@ class EngineController(private val app: Application) {
     fun stop() {
         loop?.cancel(); loop = null
         _ui.update { it.copy(running = false) }
-        saveEventState(force = true)
+        persist()
         EngineService.stop(app)
     }
 
@@ -163,7 +178,7 @@ class EngineController(private val app: Application) {
         if (_ui.value.busy) return
         _ui.update { it.copy(busy = true) }
         try {
-            val out = withContext(Dispatchers.Default) {
+            val out = withContext(engineThread) {
                 val raw = withContext(Dispatchers.IO) { provider.collect(System.currentTimeMillis()) }
                 val delivered = generateSequence { analysesQueue.poll() }.toList()
                 val snap = if (delivered.isEmpty()) raw else raw.copy(eventAnalyses = delivered)
@@ -177,7 +192,10 @@ class EngineController(private val app: Application) {
                     .filter { Session.zdt(it.t).toLocalDate() == Session.zdt(out.timestamp).toLocalDate() }.takeLast(400)
                 s.copy(output = out, error = null, lastUpdate = System.currentTimeMillis(), cycles = s.cycles + 1, chart = chart)
             }
-        } catch (e: Exception) {
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (e: Throwable) { // incl. OutOfMemoryError: report and keep going rather than crash
+            if (e !is Exception) CrashLog.write(app, Thread.currentThread(), e, fatal = false)
             _ui.update { it.copy(error = e.message ?: e.javaClass.simpleName) }
         } finally {
             _ui.update { it.copy(busy = false) }
@@ -285,7 +303,7 @@ class EngineController(private val app: Application) {
     }
 
     /** Persist event memory now (service teardown / engine stop). */
-    fun persist() = saveEventState(force = true)
+    fun persist() { scope.launch(engineThread) { saveEventState(force = true) } }
 
     /** 19 — refit the probability calibrator from logged outcomes and hand it to the engine. */
     fun refitCalibration() {
@@ -320,8 +338,19 @@ class EngineController(private val app: Application) {
         if (old.runInBackground != new.runInBackground && loop?.isActive == true) {
             if (new.runInBackground) EngineService.start(app) else EngineService.stop(app)
         }
-        if (old.kiteAccessToken != new.kiteAccessToken && new.mode == DataMode.LIVE_KITE) refreshNow()
-        if (old.mode != new.mode || old.engineConfig() != new.engineConfig() || old.minCalibrationSamples != new.minCalibrationSamples) {
+        val rebuild = old.mode != new.mode || old.engineConfig() != new.engineConfig() || old.minCalibrationSamples != new.minCalibrationSamples
+        if (!rebuild) {
+            if (old.kiteAccessToken != new.kiteAccessToken && new.mode == DataMode.LIVE_KITE) refreshNow()
+            return
+        }
+        scope.launch {
+            withContext(engineThread) { rebuildEngine(old, new) }
+            refreshNow()
+        }
+    }
+
+    private fun rebuildEngine(old: AppSettings, new: AppSettings) {
+        run {
             // Keep the event memory when only thresholds change; start clean when switching data family.
             val keep = if (old.mode != new.mode) null else engine.eventIntel.exportState()
             if (old.mode != new.mode) saveEventState(force = true)
@@ -330,7 +359,6 @@ class EngineController(private val app: Application) {
             if (old.mode != new.mode) { provider = makeProvider(); path.clear(); _ui.update { it.copy(chart = emptyList(), output = null) } }
             refitCalibration()
             refreshStats()
-            refreshNow()
         }
     }
 
