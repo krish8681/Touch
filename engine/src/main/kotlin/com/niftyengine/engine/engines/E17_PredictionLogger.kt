@@ -28,6 +28,19 @@ data class Outcome(
     val optionPrice: Double = Double.NaN,
     /** +1 bull, −1 bear, 0 range — realised class using the record's horizon-scaled threshold. */
     val realized: Int,
+    // ---- v5.1 provenance: which prices produced this outcome, and when it was attached
+    /** Prices strictly after this (= the record's decision time) … */
+    val windowStart: Long = 0L,
+    /** … and at or before this (= decision time + [minutes]). */
+    val windowEnd: Long = 0L,
+    /** Timestamp of the price used as the outcome. */
+    val lastPriceAt: Long = 0L,
+    /** Price points observed inside the window. */
+    val points: Int = 0,
+    /** When the outcome was attached — never before [windowEnd]. */
+    val attachedAt: Long = 0L,
+    /** The range/direction threshold (points) [realized] was classified with. */
+    val threshold: Double = Double.NaN,
 )
 
 @Serializable
@@ -118,6 +131,29 @@ data class PredictionRecord(
     val strategyEv: Double = Double.NaN,
     val riskApproved: Boolean = false,
     val lots: Int = 0,
+    // ---- v5.1 point-in-time audit: the frozen snapshot behind the decision and everything the decision used
+    /** [timestamp] is the decision time (the snapshot's own time); this is the moment analysed (last bar after hours). */
+    val analysedTimestamp: Long = 0L,
+    val snapshotId: String = "",
+    /** Timestamp of every input in the snapshot (0 = input absent). None may be after [timestamp] + [pitToleranceSec]. */
+    val inputTimestamps: Map<String, Long> = emptyMap(),
+    val criticalSkewSec: Double = Double.NaN,
+    val pitToleranceSec: Double = Double.NaN,
+    /** Inputs the point-in-time validator rejected or trimmed (stamped after the decision time). */
+    val pitViolations: List<String> = emptyList(),
+    /** "OK", or the critical-data failure that made this cycle DATA ERROR (such records are never calibrated on). */
+    val criticalData: String = "",
+    val direction: String = "",
+    /** The probabilities the decision actually used, at [calibrationLevel] (FULL / PARTIAL / NONE = raw). */
+    val usedPBull: Double = Double.NaN,
+    val usedPBear: Double = Double.NaN,
+    val usedPRange: Double = Double.NaN,
+    val calibrationLevel: String = "",
+    val calibrationFittedAt: Long = 0L,
+    val modelHealth: Double = Double.NaN,
+    val healthTier: String = "",
+    /** Integrity hash of the prediction-time content (see [PredictionAudit]); blank on records logged before v5.1.1. */
+    val auditHash: String = "",
 ) {
     val predictedClass: Int get() = when {
         pBull >= pBear && pBull >= pRange -> 1
@@ -196,7 +232,15 @@ class PredictionLogger(private val store: PredictionStore, val horizons: List<In
             strategy = o.strategy.type.name, instrument = o.strategy.chosen?.instrument ?: "",
             strategyProbProfit = o.strategy.chosen?.probProfit ?: Double.NaN, strategyEv = o.strategy.chosen?.expectedValue ?: Double.NaN,
             riskApproved = o.risk.approved, lots = o.risk.lots,
-        )
+            analysedTimestamp = o.snapshot.analysedTime, snapshotId = o.snapshot.snapshotId,
+            inputTimestamps = o.snapshot.inputTimes, criticalSkewSec = o.snapshot.criticalSkewSec,
+            pitToleranceSec = o.pointInTime.toleranceSec,
+            pitViolations = o.pointInTime.violations.map { PointInTimeValidator.describe(it) },
+            criticalData = o.snapshot.criticalData.ifBlank { "OK" }, direction = o.decisionState.direction,
+            usedPBull = cal.pBull, usedPBear = cal.pBear, usedPRange = cal.pRange, calibrationLevel = cal.level,
+            calibrationFittedAt = o.snapshot.calibrationFittedAt,
+            modelHealth = o.health.score, healthTier = o.health.tier.name,
+        ).let(PredictionAudit::seal)
         store.append(r)
         return r
     }
@@ -213,14 +257,19 @@ class PredictionLogger(private val store: PredictionStore, val horizons: List<In
             if (missing.isEmpty()) continue
             val path = pathFor(r)
             if (path.isEmpty()) continue
-            val added = missing.mapNotNull { h -> outcomeFor(r, h, path) }
+            val added = missing.mapNotNull { h -> outcomeFor(r, h, path, now) }
             if (added.isNotEmpty()) { store.update(r.copy(outcomes = (r.outcomes + added).sortedBy { it.minutes })); changed++ }
         }
         return changed
     }
 
-    fun outcomeFor(r: PredictionRecord, h: Int, path: List<PricePoint>): Outcome? {
+    /**
+     * The outcome of [r] at horizon [h], or null. [now] is the clock at attachment: an outcome is attached ONLY once the
+     * horizon has fully expired (now ≥ decision time + h), from prices stamped in (decision time, decision time + h].
+     */
+    fun outcomeFor(r: PredictionRecord, h: Int, path: List<PricePoint>, now: Long): Outcome? {
         val end = r.timestamp + h * 60_000L
+        if (now < end) return null
         val tolerance = minOf(5 * 60_000L, (h * 60_000L * 0.4).toLong())
         val window = path.filter { it.t > r.timestamp && it.t <= end }
         if (window.isEmpty() || window.last().t < end - tolerance) return null
@@ -228,7 +277,8 @@ class PredictionLogger(private val store: PredictionStore, val horizons: List<In
         val move = px - r.spot
         val thr = classThreshold(r, h)
         return Outcome(h, px, move, window.maxOf { it.price }, window.minOf { it.price }, window.last().optionPrice,
-            when { move > thr -> 1; move < -thr -> -1; else -> 0 })
+            classify(move, thr), windowStart = r.timestamp, windowEnd = end, lastPriceAt = window.last().t,
+            points = window.size, attachedAt = now, threshold = thr)
     }
 
     companion object {
@@ -237,6 +287,99 @@ class PredictionLogger(private val store: PredictionStore, val horizons: List<In
             val sigmaH = r.sigma * sqrt(h.toDouble() / r.horizonMinutes.coerceAtLeast(1))
             return maxOf(0.35 * sigmaH, r.spot * 0.0004 * sqrt(h / 15.0))
         }
+
+        fun classify(move: Double, threshold: Double): Int = when { move > threshold -> 1; move < -threshold -> -1; else -> 0 }
+    }
+}
+
+/**
+ * v5.1 — prediction / outcome audit.
+ *
+ * At logging time every record is SEALED with a hash of its prediction-time content (decision time, snapshot id and input
+ * timestamps, raw / used / calibrated probabilities, regime, scenarios, selected option and strategy, model health,
+ * decision). [verify] then proves, before a record is used for calibration or statistics:
+ *  • the prediction-time content is unchanged since it was logged (hash);
+ *  • no input of its snapshot was stamped after its decision time (beyond the clock-skew tolerance);
+ *  • every outcome came from prices strictly after the decision time and at or before the horizon end, was attached only
+ *    after the horizon expired, and its class matches its own move and threshold.
+ * The hash detects edits, corruption and pipeline bugs; it is not a cryptographic signature.
+ * Records logged before v5.1.1 carry no hash: they are LEGACY — their outcomes are checked where provenance exists.
+ * Cycles whose critical data failed (DATA ERROR) are kept for the audit trail but never used for calibration.
+ */
+object PredictionAudit {
+    enum class Status { VERIFIED, LEGACY, INVALID }
+    data class Verdict(val status: Status, val problems: List<String> = emptyList()) {
+        val usable: Boolean get() = status != Status.INVALID
+    }
+    data class Counts(val verified: Int, val legacy: Int, val invalid: Int, val dataError: Int) {
+        val excluded: Int get() = invalid + dataError
+    }
+
+    private const val VERSION = "a1"
+
+    /** Canonical text of everything known at prediction time (outcomes, slimmable diagnostics excluded). */
+    private fun canonical(r: PredictionRecord): String {
+        fun d(x: Double) = java.lang.Double.toString(x)
+        fun <V> m(map: Map<String, V>) = map.entries.sortedBy { it.key }.joinToString(",") { "${it.key}=${it.value.let { v -> if (v is Double) d(v) else v.toString() }}" }
+        return listOf(
+            VERSION, r.id, r.timestamp, r.analysedTimestamp, r.snapshotId, m(r.inputTimestamps), d(r.criticalSkewSec),
+            d(r.pitToleranceSec), r.pitViolations.joinToString("|"), r.criticalData, r.engineVersion, d(r.spot),
+            d(r.pBull), d(r.pBear), d(r.pRange), d(r.usedPBull), d(r.usedPBear), d(r.usedPRange),
+            d(r.calPBull), d(r.calPBear), d(r.calPRange), r.calibrated, r.calibrationLevel, r.calibrationFittedAt,
+            r.horizonMinutes, d(r.sigma), d(r.expectedMove), r.regime, r.primaryRegime, d(r.regimeQuality),
+            m(r.scenarioProbs), m(r.calScenarioProbs), d(r.rangeBand), d(r.breakoutBand),
+            r.strategy, r.instrument, d(r.strike), r.optionType, d(r.premium), d(r.probProfit), d(r.strategyProbProfit),
+            d(r.strategyEv), r.riskApproved, r.lots, r.direction, r.decision, d(r.modelHealth), r.healthTier, d(r.dataQuality),
+        ).joinToString("\u001F")
+    }
+
+    fun hash(r: PredictionRecord): String {
+        val dig = java.security.MessageDigest.getInstance("SHA-256").digest(canonical(r).toByteArray(Charsets.UTF_8))
+        return dig.take(12).joinToString("") { "%02x".format(it) }
+    }
+
+    fun seal(r: PredictionRecord): PredictionRecord = r.copy(auditHash = hash(r))
+
+    fun dataError(r: PredictionRecord): Boolean = r.criticalData.isNotBlank() && r.criticalData != "OK"
+
+    fun verify(r: PredictionRecord): Verdict {
+        val sealed = r.auditHash.isNotBlank()
+        val problems = ArrayList<String>()
+        if (sealed) {
+            if (hash(r) != r.auditHash) problems += "prediction content changed after it was logged (hash mismatch)"
+            if (r.snapshotId.isBlank()) problems += "no snapshot id"
+            val tolMs = ((if (r.pitToleranceSec.isNaN()) 0.0 else r.pitToleranceSec) * 1000).toLong()
+            r.inputTimestamps.filter { it.value > r.timestamp + tolMs }.forEach { (k, t) ->
+                problems += "input $k stamped %.0fs after the decision time".format((t - r.timestamp) / 1000.0)
+            }
+        }
+        val seen = HashSet<Int>()
+        for (o in r.outcomes) {
+            val tag = "${o.minutes}m outcome"
+            if (!seen.add(o.minutes)) problems += "$tag attached twice"
+            val hasProvenance = o.windowEnd > 0L
+            if (!hasProvenance) { if (sealed) problems += "$tag has no provenance"; continue }
+            val end = r.timestamp + o.minutes * 60_000L
+            if (o.windowStart != r.timestamp || o.windowEnd != end) problems += "$tag window does not match the decision time + horizon"
+            if (o.attachedAt < o.windowEnd) problems += "$tag attached before its horizon expired"
+            if (o.lastPriceAt <= r.timestamp || o.lastPriceAt > end) problems += "$tag uses a price outside (decision time, horizon end]"
+            if (o.points < 1) problems += "$tag has no observed prices"
+            if (abs(o.move - (o.price - r.spot)) > 1e-6 * maxOf(1.0, abs(o.price))) problems += "$tag move ≠ price − spot"
+            if (!o.threshold.isNaN() && o.realized != PredictionLogger.classify(o.move, o.threshold)) problems += "$tag class does not match its move"
+        }
+        return Verdict(when { problems.isNotEmpty() -> Status.INVALID; sealed -> Status.VERIFIED; else -> Status.LEGACY }, problems)
+    }
+
+    /** Records fit for calibration and statistics: verified or legacy, and not a DATA ERROR cycle. */
+    fun usable(records: List<PredictionRecord>): List<PredictionRecord> = records.filter { !dataError(it) && verify(it).usable }
+
+    fun counts(records: List<PredictionRecord>): Counts {
+        var v = 0; var l = 0; var inv = 0; var de = 0
+        for (r in records) {
+            when (verify(r).status) { Status.VERIFIED -> v++; Status.LEGACY -> l++; Status.INVALID -> inv++ }
+            if (dataError(r)) de++
+        }
+        return Counts(v, l, inv, de)
     }
 }
 
@@ -266,6 +409,8 @@ object PerformanceStats {
         val logLoss: Double = Double.NaN,
         /** v5.1: directional calls by regime — predicted vs realised, Brier, log loss, threshold bump. */
         val regimes: List<RegimeRecord> = emptyList(),
+        /** v5.1: logged records left out (DATA ERROR cycles, records failing the audit). */
+        val excluded: Int = 0,
     )
 
     /** The bucket edges requested for calibration review. */
@@ -290,7 +435,9 @@ object PerformanceStats {
             if (sel.isEmpty()) Double.NaN else sel.count { it.second }.toDouble() / sel.size)
     }
 
-    fun summarize(records: List<PredictionRecord>, horizon: Int = 30): Summary {
+    fun summarize(logged: List<PredictionRecord>, horizon: Int = 30): Summary {
+        val records = PredictionAudit.usable(logged)
+        val excluded = logged.size - records.size
         val done = records.mapNotNull { r -> r.outcomes.firstOrNull { it.minutes == horizon }?.let { r to it } }
         val opt = records.mapNotNull { r ->
             if (r.probProfit.isNaN() || r.premium.isNaN()) return@mapNotNull null
@@ -298,7 +445,8 @@ object PerformanceStats {
             if (o.optionPrice.isNaN()) return@mapNotNull null
             r.probProfit to (o.optionPrice - r.premium - (if (r.optionCost.isNaN()) 0.0 else r.optionCost) > 0)
         }
-        if (done.isEmpty()) return Summary(horizon, 0, Double.NaN, Double.NaN, Double.NaN, 0, Double.NaN, emptyList(), emptyList(), emptyMap(), bucketize(opt))
+        if (done.isEmpty()) return Summary(horizon, 0, Double.NaN, Double.NaN, Double.NaN, 0, Double.NaN, emptyList(), emptyList(), emptyMap(), bucketize(opt),
+            excluded = excluded)
         // scenario reliability: records whose own horizon equals this horizon
         val scen = done.filter { (r, _) -> r.horizonMinutes == horizon && r.scenarioProbs.isNotEmpty() && r.rangeBand > 0 }.map { (r, o) ->
             r to ScenarioEngine.realized(o.move, r.rangeBand, r.breakoutBand)
@@ -337,6 +485,6 @@ object PerformanceStats {
         val logLoss = done.map { (r, o) -> ProbabilityCalibrator.logLoss(r.pBull, r.pBear, r.pRange, o.realized) }.average()
         return Summary(horizon, done.size, acc, brier, dirHit, trades.size, tradeWin, bucketize(raw), bucketize(cal), driverHits, bucketize(opt),
             if (scenPoints.isEmpty()) emptyList() else scenarioBucketize(scenPoints), if (scen.isEmpty()) emptyList() else scenRates,
-            logLoss, ProbabilityCalibrator.regimeRecords(records, horizon).values.sortedByDescending { it.n })
+            logLoss, ProbabilityCalibrator.regimeRecords(records, horizon).values.sortedByDescending { it.n }, excluded)
     }
 }

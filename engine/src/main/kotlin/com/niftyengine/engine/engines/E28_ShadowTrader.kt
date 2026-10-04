@@ -63,6 +63,8 @@ class ShadowTrader(
         val marketOpen: Boolean,
         /** v5.1 benchmark: naive candidate + its risk sizing, opened only when the main book opens a position. */
         val benchmark: Pair<StrategyCandidate, RiskAssessment>? = null,
+        /** The frozen decision snapshot this cycle was made from (recorded on every position for the audit trail). */
+        val snapshotId: String = "",
     )
 
     private fun legMark(chain: OptionChain?, l: ShadowLeg): Double {
@@ -146,7 +148,7 @@ class ShadowTrader(
             stopValue = exit.stopValue, targetValue = exit.targetValue, timeExitAt = exit.timeExitAt, riskAtStop = risk.riskAtStop,
             direction = cand.type.directional, entrySpot = c.spot, regime = c.regime.primary.name, quality = c.quality.score,
             qualityTier = c.quality.tier.name, probability = c.probability, expectationState = c.expectation.state.name,
-            shockLevel = c.shock.level.name, decision = c.decision.name, lastMarkAt = c.now, lastSpot = c.spot,
+            shockLevel = c.shock.level.name, decision = c.decision.name, lastMarkAt = c.now, lastSpot = c.spot, snapshotId = c.snapshotId,
             mfe = minOf(0.0, mv - entry), mae = minOf(0.0, mv - entry),
         )
     }

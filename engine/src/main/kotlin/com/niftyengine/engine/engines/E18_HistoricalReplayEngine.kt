@@ -52,13 +52,14 @@ class HistoricalReplayEngine(private val config: EngineConfig = EngineConfig()) 
             if (i % predictEvery == 0 && Session.isOpen(out.timestamp)) logger.record(out)
             onProgress(i + 1, sorted.size)
         }
-        // Outcomes, including the selected option's later price.
+        // Outcomes, including the selected option's later price — attached at the end of the replay (its clock).
+        val replayEnd = sorted.lastOrNull()?.timestamp ?: 0L
         for (r in store.all()) {
             val path = sorted.filter { it.timestamp > r.timestamp && it.timestamp <= r.timestamp + 61 * 60_000L }.map { s ->
                 val leg = s.optionChain?.rows?.firstOrNull { it.strike == r.strike }?.let { if (r.optionType == "CE") it.call else it.put }
                 PredictionLogger.PricePoint(s.timestamp, s.nifty.last, leg?.ltp ?: Double.NaN)
             }
-            val outs = logger.horizons.mapNotNull { h -> logger.outcomeFor(r, h, path) }
+            val outs = logger.horizons.mapNotNull { h -> logger.outcomeFor(r, h, path, replayEnd) }
             if (outs.isNotEmpty()) store.update(r.copy(outcomes = outs))
         }
         val recs = store.all()

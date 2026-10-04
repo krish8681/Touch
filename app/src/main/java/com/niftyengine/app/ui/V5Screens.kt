@@ -135,6 +135,17 @@ fun DecisionStateCard(o: EngineOutput) {
             weight = FontWeight.Bold)
         if (ds.stop.isNotBlank()) Label("Stop ${ds.stop} · target ${ds.target}", color = C.text, size = 10.sp, mono = false)
         o.decision.reasons.take(3).forEach { Label("• $it", color = C.dim, size = 10.sp, mono = false) }
+        // v5.1 frozen snapshot: one point in time behind the whole decision
+        val snap = o.snapshot
+        if (snap.criticalData != "OK") Label("CRITICAL DATA — NO TRADE: " + snap.criticalData, color = C.red, size = 10.sp, maxLines = 4)
+        Label("Snapshot " + snap.snapshotId + " · " + com.niftyengine.engine.core.Session.hhmm(snap.decisionTime) +
+            (if (snap.criticalSkewSec.isNaN()) "" else " · critical inputs within %.0fs".format(snap.criticalSkewSec)) +
+            (if (snap.calibrationFittedAt > 0) " · calibration " + com.niftyengine.engine.core.Session.hhmm(snap.calibrationFittedAt) else " · no calibration"),
+            color = C.dim, size = 9.sp)
+        o.pointInTime.violations.take(3).forEach {
+            Label("⚠ " + com.niftyengine.engine.engines.PointInTimeValidator.describe(it), color = if (it.critical) C.red else C.amber, size = 9.sp, maxLines = 2)
+        }
+        if (o.pointInTime.violations.size > 3) Label("  … ${o.pointInTime.violations.size - 3} more rejected input(s)", color = C.dim, size = 9.sp)
         Label("AI reads the news; probabilities, strategy, risk and execution are deterministic code. Shadow mode places no real orders.",
             color = C.dim, size = 9.sp, mono = false)
     }

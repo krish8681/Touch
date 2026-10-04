@@ -70,6 +70,10 @@ fun StatsCard(title: String, summaries: List<PerformanceStats.Summary>) {
                 Triple("${s.tradeCount}·${pct(s.tradeWinRate)}", 0.9f, C.text),
             )
         }
+        summaries.firstOrNull()?.excluded?.takeIf { it > 0 }?.let {
+            Label("$it logged record(s) excluded — DATA ERROR cycles or records failing the audit (tampered, premature outcome)",
+                color = C.amber, size = 10.sp, mono = false)
+        }
         Spacer(Modifier.height(8.dp))
         Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
             summaries.forEach { s ->
@@ -161,6 +165,26 @@ private fun AuditDetail(r: com.niftyengine.engine.engines.PredictionRecord) {
     Column(Modifier.fillMaxWidth().padding(start = 8.dp, bottom = 8.dp)) {
         KV("Prediction ID", r.id)
         KV("Engine / source", "${r.engineVersion.ifBlank { "≤3.1" }} · ${r.source}")
+        // v5.1 audit: frozen snapshot, input timestamps, verification
+        val verdict = com.niftyengine.engine.engines.PredictionAudit.verify(r)
+        KV("Audit", verdict.status.name + when (verdict.status) {
+            com.niftyengine.engine.engines.PredictionAudit.Status.VERIFIED -> " · hash ${r.auditHash}"
+            com.niftyengine.engine.engines.PredictionAudit.Status.LEGACY -> " · logged before v5.1.1 (no audit hash)"
+            else -> ""
+        })
+        verdict.problems.forEach { Label("  ✗ $it", color = C.red, size = 10.sp) }
+        if (r.snapshotId.isNotBlank()) {
+            KV("Snapshot", r.snapshotId + " · decision " + Session.hhmm(r.timestamp) +
+                (if (r.analysedTimestamp > 0 && r.analysedTimestamp != r.timestamp) " · analysed " + Session.hhmm(r.analysedTimestamp) else "") +
+                (if (r.criticalSkewSec.isNaN()) "" else " · skew %.0fs".format(r.criticalSkewSec)))
+            KV("Critical data", r.criticalData)
+            Label("Inputs: " + r.inputTimestamps.entries.joinToString(" · ") { "${it.key} ${if (it.value > 0) Session.hhmm(it.value) else "–"}" },
+                color = C.dim, size = 9.sp)
+            r.pitViolations.forEach { Label("  rejected: $it", color = C.amber, size = 9.sp) }
+            KV("Used B/b/R", "%.1f / %.1f / %.1f (${r.calibrationLevel.lowercase()})".format(r.usedPBull * 100, r.usedPBear * 100, r.usedPRange * 100) +
+                if (r.calibrationFittedAt > 0) " · fit " + Session.hhmm(r.calibrationFittedAt) else "")
+            KV("Model health", if (r.modelHealth.isNaN()) "–" else "%.0f · ${r.healthTier}".format(r.modelHealth))
+        }
         KV("Raw score B/b/R", "%.1f / %.1f / %.1f".format(r.pBull * 100, r.pBear * 100, r.pRange * 100))
         if (r.calibrated) KV("Calibrated B/b/R", "%.1f / %.1f / %.1f".format(r.calPBull * 100, r.calPBear * 100, r.calPRange * 100))
         KV("Composite / conflict", "%+.3f / %.0f%%".format(r.directionalScore, r.conflict * 100))
@@ -185,7 +209,8 @@ private fun AuditDetail(r: com.niftyengine.engine.engines.PredictionRecord) {
         if (r.feedStatus.isNotEmpty()) Label("Feeds: " + r.feedStatus.entries.joinToString("; ") { "${it.key} ${it.value.substringBefore(" ·")}" }, color = C.dim, size = 9.sp)
         if (r.outcomes.isNotEmpty()) Label("Outcomes: " + r.outcomes.joinToString { o ->
             "${o.minutes}m %+.0f (%s)%s".format(o.move, when (o.realized) { 1 -> "bull"; -1 -> "bear"; else -> "range" },
-                if (o.optionPrice.isNaN()) "" else " opt %.1f".format(o.optionPrice))
+                if (o.optionPrice.isNaN()) "" else " opt %.1f".format(o.optionPrice)) +
+                if (o.attachedAt > 0) " · price " + Session.hhmm(o.lastPriceAt) + ", attached " + Session.hhmm(o.attachedAt) else ""
         }, color = C.text, size = 10.sp)
         if (r.newsHorizons.isNotEmpty()) Label("News by horizon: " + r.newsHorizons.entries.joinToString { "${it.key} %+.2f".format(it.value) }, color = C.text, size = 10.sp)
         r.events.forEach { e ->
@@ -366,6 +391,8 @@ fun SettingsScreen(current: AppSettings, onSave: (AppSettings) -> Unit, onKiteLo
     var stratCondor by remember(current) { mutableStateOf(current.enableCondor) }
     var healthEligible by remember(current) { mutableStateOf(current.healthEligible.toInt().toString()) }
     var healthShadow by remember(current) { mutableStateOf(current.healthShadow.toInt().toString()) }
+    var pitTol by remember(current) { mutableStateOf(current.futureToleranceSec.toInt().toString()) }
+    var critSkew by remember(current) { mutableStateOf(current.maxCriticalSkewSec.toInt().toString()) }
 
     fun build() = current.copy(
         mode = mode, refreshSeconds = num(refresh, 30.0).toInt().coerceIn(5, 600),
@@ -397,6 +424,7 @@ fun SettingsScreen(current: AppSettings, onSave: (AppSettings) -> Unit, onKiteLo
         enableLongOptions = stratLong, enableSpreads = stratSpread, enableCondor = stratCondor,
         healthEligible = num(healthEligible, 75.0).coerceIn(10.0, 100.0),
         healthShadow = num(healthShadow, 60.0).coerceIn(0.0, 100.0).coerceAtMost(num(healthEligible, 75.0).coerceIn(10.0, 100.0)),
+        futureToleranceSec = num(pitTol, 10.0).coerceIn(0.0, 120.0), maxCriticalSkewSec = num(critSkew, 180.0).coerceIn(30.0, 900.0),
     )
 
     Card("Data source") {
@@ -475,6 +503,10 @@ fun SettingsScreen(current: AppSettings, onSave: (AppSettings) -> Unit, onKiteLo
         Field("Min trade quality (%)", minQuality, KeyboardType.Number) { minQuality = it }
         Row { Column(Modifier.weight(1f).padding(end = 4.dp)) { Field("Model health: eligible ≥", healthEligible, KeyboardType.Number) { healthEligible = it } }
             Column(Modifier.weight(1f)) { Field("Model health: shadow ≥", healthShadow, KeyboardType.Number) { healthShadow = it } } }
+        Row { Column(Modifier.weight(1f).padding(end = 4.dp)) { Field("Clock-skew tolerance (s)", pitTol, KeyboardType.Number) { pitTol = it } }
+            Column(Modifier.weight(1f)) { Field("Max critical input gap (s)", critSkew, KeyboardType.Number) { critSkew = it } } }
+        Label("Inputs stamped more than the tolerance after the decision time are rejected as FUTURE (critical ⇒ NO TRADE); " +
+            "NIFTY, futures and option chain stamped further apart than the gap are not one snapshot ⇒ NO TRADE.", color = C.dim, size = 10.sp, mono = false)
         Label("Strategies the selector may use", color = C.dim, size = 11.sp)
         Toggle("Buy call / buy put (strong directional)", stratLong) { stratLong = it }
         Toggle("Bull call / bear put debit spreads (moderate, or rich IV)", stratSpread) { stratSpread = it }

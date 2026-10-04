@@ -387,11 +387,11 @@ fun NewsScreen(ui: UiState) {
 
 fun statusColor(s: FeedStatus) = when (s) {
     FeedStatus.LIVE -> C.green; FeedStatus.MANUAL -> C.blue; FeedStatus.DEGRADED -> C.amber
-    FeedStatus.STALE, FeedStatus.INVALID, FeedStatus.MISSING -> C.red
+    FeedStatus.STALE, FeedStatus.INVALID, FeedStatus.MISSING, FeedStatus.FUTURE -> C.red
 }
 
-private fun age(sec: Double) = when {
-    sec.isNaN() -> "–"; sec < 120 -> "%.0fs".format(sec); sec < 7200 -> "%.0fm".format(sec / 60)
+private fun age(sec: Double): String = when {
+    sec.isNaN() -> "–"; sec < 0 -> "+" + age(-sec) /* stamped after the decision time */; sec < 120 -> "%.0fs".format(sec); sec < 7200 -> "%.0fm".format(sec / 60)
     sec < 172800 -> "%.1fh".format(sec / 3600); else -> "%.0fd".format(sec / 86400)
 }
 

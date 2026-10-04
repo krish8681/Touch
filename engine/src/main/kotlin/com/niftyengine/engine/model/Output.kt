@@ -151,6 +151,8 @@ data class CalibrationInfo(
     val optionBrierRaw: Double = Double.NaN,
     val optionBrierCalibrated: Double = Double.NaN,
     val optionAccepted: Boolean = false,
+    /** v5.1: logged records left out of the fit (DATA ERROR cycles, records failing the audit). */
+    val auditExcluded: Int = 0,
 )
 
 /** P(NIFTY move over the horizon ≥ +pts) or ≤ −pts. */
@@ -172,6 +174,8 @@ data class ExpectedMove(
     val eventMultiplier: Double,
     val components: List<Detail>,
     val thresholds: List<MoveProb> = emptyList(),
+    /** How many volatility inputs (VIX, ATM IV, realised, historical) were available; 0 ⇒ no basis for a move. */
+    val volInputs: Int = -1,
 )
 
 @Serializable
@@ -286,6 +290,8 @@ data class EngineOutput(
     val shadow: ShadowSummary = ShadowSummary(),
     val decisionState: DecisionState = DecisionState(),
     val health: ModelHealth = ModelHealth(),
+    val pointInTime: PointInTimeReport = PointInTimeReport(),
+    val snapshot: DecisionSnapshot = DecisionSnapshot(),
 )
 
 @Serializable
@@ -314,7 +320,11 @@ data class GiftNiftyReport(
 )
 
 @Serializable
-enum class FeedStatus { LIVE, DEGRADED, STALE, INVALID, MISSING, MANUAL }
+enum class FeedStatus {
+    LIVE, DEGRADED, STALE, INVALID, MISSING, MANUAL,
+    /** v5.1: stamped after the decision time (beyond clock-skew tolerance) — rejected, never treated as fresh. */
+    FUTURE,
+}
 
 @Serializable
 data class FeedQuality(

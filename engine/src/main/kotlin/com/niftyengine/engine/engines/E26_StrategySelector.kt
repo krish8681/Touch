@@ -95,7 +95,8 @@ class StrategySelector(private val costs: TransactionCosts = TransactionCosts(),
         // horizon values in trading time with variance-consistent IV (see OptionClock)
         val clock = OptionClock.of(i.now, chain.expiryMillis)
         val hold = if (i.creditHoldMinutes > 0) i.creditHoldMinutes else i.horizonMinutes
-        val atmIv = if (!i.atmIvPct.isNaN() && i.atmIvPct > 0) i.atmIvPct / 100 else 0.13
+        // v5.1: no substituted "typical" IV — a leg whose volatility cannot be measured is not priced at all
+        val atmIv = if (!i.atmIvPct.isNaN() && i.atmIvPct > 0) i.atmIvPct / 100 else Double.NaN
         val ctx = Ctx(i, sorted.associateBy { it.strike }, step, atm, tYears, clock.after(i.horizonMinutes), clock.after(hold), hold, atmIv, clock.volScale)
         val sc = i.scenarios
         val rationale = ArrayList<String>()
@@ -242,6 +243,7 @@ class StrategySelector(private val costs: TransactionCosts = TransactionCosts(),
             !l.iv.isNaN() && l.iv > 0 -> l.iv / 100
             else -> BlackScholes.impliedVol(isCall, c.i.spot, k, c.tYears, mid).takeIf { !it.isNaN() } ?: c.atmIv
         }
+        if (iv.isNaN() || iv <= 0) return null
         val g = BlackScholes.price(isCall, c.i.spot, k, c.tYears, iv)
         return StrategyLeg(action, type, k, c.i.chain?.expiry ?: "", price, l.bid, l.ask, iv * 100, g.delta, spreadPct, l.oi, l.volume)
     }

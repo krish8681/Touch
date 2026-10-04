@@ -204,8 +204,11 @@ class LiveSnapshotProvider(private val cacheDir: File, private val settings: () 
         status["News"] = (news.lastError?.let { "✗ $it" } ?: "✓ ${n?.items?.size ?: 0} items") +
             (n?.errors?.takeIf { it.isNotEmpty() }?.let { " · ${it.size} feed(s) failed" } ?: "")
 
+        // v5.1: the snapshot's (decision) time is when it was COMPLETED, not when collection started — every input in it
+        // was fetched at or before this moment, so a feed stamped at fetch time can never read as "from the future".
+        val completedAt = maxOf(now, System.currentTimeMillis())
         MarketSnapshot(
-            timestamp = now, nifty = nifty, bankNifty = bank, vix = vix, futures = fut, optionChain = optChain,
+            timestamp = completedAt, nifty = nifty, bankNifty = bank, vix = vix, futures = fut, optionChain = optChain,
             constituents = stocks, sectors = sectors, global = glob, macro = s.macroInputs(), flows = flows.get(),
             giftNifty = gift.get(),
             news = n?.items ?: emptyList(),

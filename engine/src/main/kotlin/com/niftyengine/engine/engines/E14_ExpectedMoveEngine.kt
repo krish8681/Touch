@@ -43,7 +43,10 @@ class ExpectedMoveEngine {
         add("ATM IV", i.atmIv / 100, 0.30)
         add("Realised (5m)", i.realizedVol, 0.25)
         add("Historical (20d)", i.histVol, 0.15)
+        // No volatility input at all ⇒ the move cannot be estimated; 14 % is shown only as a placeholder and the
+        // orchestrator treats volInputs = 0 as a critical-data failure (NO TRADE), never as a real estimate.
         val annual = if (parts.isEmpty()) 0.14 else parts.sumOf { it.first * it.second } / parts.sumOf { it.first }
+        if (parts.isEmpty()) comps += Detail("Volatility", "NO INPUT — move not estimable")
 
         var mult = 1.0
         if (i.eventShock) mult *= 1.4
@@ -75,6 +78,7 @@ class ExpectedMoveEngine {
             thresholds = listOf(50, 100, 150, 200).map { k ->
                 MoveProb(k, 1 - M.normCdf((k - drift) / sigma), M.normCdf((-k - drift) / sigma))
             },
+            volInputs = parts.size,
         )
     }
 }

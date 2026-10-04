@@ -158,7 +158,13 @@ class V51Test {
             val clean = simA.collect(0); simB.collect(0)
             val oa = a.process(clean)
             val ob = b.process(poison(clean))
-            assertEquals(enc(oa), enc(ob), "future data leaked into the decision at cycle $k (${Session.hhmm(clean.timestamp)})")
+            // the only difference allowed: the point-in-time report lists what was rejected
+            assertTrue(oa.pointInTime.violations.isEmpty() && ob.pointInTime.violations.isNotEmpty(), "injection not reported")
+            assertTrue(ob.pointInTime.criticalViolations.isEmpty(), "series/news/analyses are not critical quotes")
+            val warn = ob.dataQuality.warnings.filter { it.startsWith("Point-in-time:") }
+            assertEquals(1, warn.size, "one summary line for the trimmed inputs")
+            assertEquals(enc(oa), enc(ob.copy(pointInTime = oa.pointInTime, dataQuality = ob.dataQuality.copy(warnings = ob.dataQuality.warnings - warn.toSet()))),
+                "future data leaked into the decision at cycle $k (${Session.hhmm(clean.timestamp)})")
         }
         // and the replay layer strips the same things
         val s = simA.collect(0)

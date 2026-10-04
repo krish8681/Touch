@@ -151,7 +151,7 @@ class EngineController(private val app: Application) {
         scope.launch(engineThread) {
             loadEventState()
             loadV5State()
-            refitCalibration()
+            refitNow()
             refreshStats()
         }
     }
@@ -188,7 +188,9 @@ class EngineController(private val app: Application) {
         try {
             val out = withContext(engineThread) {
                 val raw = withContext(Dispatchers.IO) { provider.collect(System.currentTimeMillis()) }
-                val delivered = generateSequence { analysesQueue.poll() }.toList()
+                // Only analyses that existed when the snapshot was completed belong to it; later ones wait for the next.
+                val (delivered, later) = generateSequence { analysesQueue.poll() }.toList().partition { it.analyzedAt <= raw.timestamp }
+                analysesQueue.addAll(later)
                 val snap = if (delivered.isEmpty()) raw else raw.copy(eventAnalyses = delivered)
                 val o = engine.process(snap)
                 afterCycle(snap, o)
@@ -228,7 +230,7 @@ class EngineController(private val app: Application) {
             }
         }
         if (changed > 0) predictionStore.flush()
-        if (changed > 0 && System.currentTimeMillis() - lastFit > 10 * 60_000L) refitCalibration()
+        if (changed > 0 && System.currentTimeMillis() - lastFit > 10 * 60_000L) refitNow()
         if (s.recordSessions && s.mode != DataMode.SIMULATED && sessionOpen) runCatching { recorder.record(snap) }
         val alert = o.decision.decision == Decision.TRADE || o.decision.decision == Decision.PAPER_TRADE
         if (s.notifyOnTrade && alert && lastDecision != o.decision.decision) notifier.trade(o)
@@ -279,7 +281,9 @@ class EngineController(private val app: Application) {
             try {
                 countCall()
                 val res = GeminiEventAnalyst(s.geminiApiKey, s.geminiModel).analyze(reqs, briefs, System.currentTimeMillis())
-                analysesQueue.addAll(res)
+                // stamped when the analysis became AVAILABLE (point-in-time), not when it was requested
+                val arrived = System.currentTimeMillis()
+                analysesQueue.addAll(res.map { it.copy(analyzedAt = maxOf(it.analyzedAt, arrived)) })
                 analystLastOk = System.currentTimeMillis(); analystLastError = null
             } catch (e: GeminiException) {
                 analystLastError = e.message
@@ -347,7 +351,10 @@ class EngineController(private val app: Application) {
     }
 
     /** 19 — refit the probability calibrator from logged outcomes and hand it to the engine. */
-    fun refitCalibration() {
+    /** Refit requested from the UI: runs on the engine thread, so it never races a cycle or the log writer. */
+    fun refitCalibration() { scope.launch(engineThread) { refitNow() } }
+
+    private fun refitNow() {
         val fit = ProbabilityCalibrator.fit(recordsForMode(), _settings.value.minCalibrationSamples)
         calibration = fit
         engine.calibration = fit
@@ -403,7 +410,7 @@ class EngineController(private val app: Application) {
             if (keepBase != null && keepShadow != null) { engine.baselines.importState(keepBase); engine.shadow.importState(keepShadow) }
             else loadV5State(new.mode)
             if (old.mode != new.mode) { provider = makeProvider(); path.clear(); _ui.update { it.copy(chart = emptyList(), output = null) } }
-            refitCalibration()
+            refitNow()
             refreshStats()
         }
     }

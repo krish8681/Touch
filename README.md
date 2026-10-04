@@ -1,4 +1,4 @@
-# NIFTY Direction Engine v5.1 — Android
+# NIFTY Direction Engine v5.1.1 — Android
 
 A **NIFTY market-intelligence, probability and trade-selection engine** for Android. v5 replaces
 "indicators → score → direction → option" with a decision pipeline that asks, in order:
@@ -14,8 +14,23 @@ A **NIFTY market-intelligence, probability and trade-selection engine** for Andr
 > optima. The app never places real orders: approved decisions are executed in **shadow mode** (virtual trades) so the
 > whole pipeline can be measured before any money is risked.
 
-**Install:** `release/NiftyDirectionEngine-v5.1.0.apk` (Android 8.0+, sideload / "install unknown apps"). Installs over v4.x / v5.0
+**Install:** `release/NiftyDirectionEngine-v5.1.1.apk` (Android 8.0+, sideload / "install unknown apps"). Installs over v4.x / v5.x
 (same signing key). It opens in **Simulator** mode (synthetic data, works offline/after hours). Switch to live data in **Setup**.
+
+## v5.1.1 — point-in-time integrity (five essential fixes, nothing else added)
+
+No new indicators, models, news logic, calibration complexity or strategies — only guarantees that every decision is made
+from one consistent, past-only snapshot and that every prediction can be audited against its outcome.
+
+| # | Fix | What changed |
+|---|-----|--------------|
+| 1 | **Point-in-time validator** (`E00_PointInTimeValidator`) | Runs **before the entire pipeline**. Every input must satisfy `dataTimestamp ≤ decisionTimestamp`: NIFTY / Bank Nifty / VIX / constituents / sectors / global (`InstrumentData.asOf`), `FuturesData.asOf`, `OptionChain.asOf`, `GiftNiftyData.asOf`, `FlowData.asOf`, macro release dates, news, event analyses, every intraday/daily candle and futures OI bar. A future-dated non-critical input is **removed**; a future-dated **critical** input (NIFTY, futures, option chain) is flagged and the cycle becomes **DATA ERROR — NO TRADE**. Series items stamped later are dropped. Everything rejected is listed in the output (`pointInTime`) and on the Decision card. |
+| 2 | **Future timestamps are FUTURE, not fresh** | The old `max(0, now − asOf)` age made a future quote look "0 s old — perfectly fresh". Ages are now signed; `asOf > decisionTime + tolerance` ⇒ new feed status **FUTURE** (red, shown as `+5m`) ⇒ critical ⇒ NO TRADE. A small clock-skew allowance (default **10 s**, Setup) is accepted and reported as "clock skew" — beyond it the input is rejected. |
+| 3 | **One frozen decision snapshot** | The decision time is the snapshot's own timestamp; the live provider now stamps a snapshot when it is **completed**, not when collection started; Gemini analyses are stamped when they **arrive** and only those that existed at snapshot time enter it (later ones wait for the next cycle); the calibration is captured **once per cycle**, and UI-triggered refits run on the engine thread, so one decision never mixes two calibrations. During the session NIFTY, futures and the option chain must be stamped within **180 s** of each other (Setup) — otherwise "Inconsistent snapshot … inputs are from different moments" ⇒ NO TRADE. Each decision carries a `DecisionSnapshot` (id, decision time, analysed time, every input's timestamp, critical skew, calibration fit time). |
+| 4 | **Hard critical-data gate — missing ≠ neutral** | Missing, stale, invalid or future-dated NIFTY / futures / option chain, inputs from different moments, or no volatility input at all ⇒ **DATA ERROR — NO TRADE**: no strategy is selected, nothing is sized, no instrument is named, the shadow trader opens nothing. No neutral value is substituted — the strategy selector's "typical 13 % IV" fallback is gone (a leg whose IV cannot be measured is not priced). |
+| 5 | **Prediction / outcome audit trail** | Every logged prediction stores the decision timestamp, analysed time, snapshot id, **every input timestamp**, point-in-time rejections, raw / used / calibrated probabilities with the calibration level and fit time, regime, scenarios, selected option and strategy, model health, critical-data status and decision — and is **sealed with a hash** of that content. Outcomes carry their provenance (window start/end, price timestamp, points, threshold, **attached-at**) and are attached **only after the horizon has fully expired**. `PredictionAudit.verify` re-checks hash, input timestamps, outcome window, attachment time and class; calibration and statistics use only verified (or pre-v5.1.1 legacy) records and never DATA ERROR cycles. Log → tap a row shows the audit verdict. |
+
+Next step per plan: run v5.1.1 in **shadow / live-data testing** and let the audited log accumulate.
 
 ## v5.1 — correctness, validation and data integrity (no new architecture)
 
@@ -69,7 +84,8 @@ DATA ─→ NORMALIZED STATE ─→ MARKET STATE ENGINES ─→ FUTURE EXPECTATI
   "information_shock": 0.12, "trade_quality": 0.81, "quality_tier": "HIGH",
   "instrument": "NIFTY 24500 CE", "strategy": "BUY_CALL", "lots": 1, "risk_at_stop": 2340,
   "stop": "premium −35% (₹65.0)", "target": "premium +60% (₹160.0)",
-  "model_health": 86, "health_tier": "ELIGIBLE", "action": "TRADE"
+  "model_health": 86, "health_tier": "ELIGIBLE", "action": "TRADE",
+  "snapshot_id": "3FA91C07", "critical_data": "OK"
 }
 ```
 

@@ -401,6 +401,8 @@ data class ShadowPosition(
     val shockLevel: String,
     val decision: String,
     val lastMarkAt: Long = 0L,
+    /** Snapshot the entry decision was made from (audit). */
+    val snapshotId: String = "",
     /** NIFTY at the last mark. */
     val lastSpot: Double = Double.NaN,
     /** Best / worst per-unit P&L seen while open. */
@@ -510,6 +512,52 @@ data class ModelHealth(
     val notes: List<String> = emptyList(),
 )
 
+// ------------------------------------------------------------------ point-in-time integrity (v5.1)
+
+/** One input stamped after the decision time. */
+@Serializable
+data class PitViolation(
+    val input: String,
+    val asOf: Long,
+    /** Seconds the input is ahead of the decision time. */
+    val aheadSec: Double,
+    val critical: Boolean,
+    /** What was done: "rejected" (input removed), "dropped N items", "critical — NO TRADE". */
+    val action: String,
+)
+
+@Serializable
+data class PointInTimeReport(
+    val decisionTime: Long = 0L,
+    /** Clock-skew allowance: inputs up to this far ahead are accepted (and reported), beyond it they are rejected. */
+    val toleranceSec: Double = 0.0,
+    val violations: List<PitViolation> = emptyList(),
+    /** Largest accepted skew (inputs ahead of the decision time but within tolerance), seconds. */
+    val maxAcceptedSkewSec: Double = 0.0,
+) {
+    val clean: Boolean get() = violations.isEmpty()
+    val criticalViolations: List<PitViolation> get() = violations.filter { it.critical }
+}
+
+/** The one frozen snapshot a decision was made from — what every module saw, and when each input was stamped. */
+@Serializable
+data class DecisionSnapshot(
+    /** The decision instant (snapshot completed). Nothing stamped later may be used. */
+    val decisionTime: Long = 0L,
+    /** Time the analysis refers to (= decisionTime in session; the last bar after hours). */
+    val analysedTime: Long = 0L,
+    /** Stable id of this snapshot (decision time + input timestamps + spot). */
+    val snapshotId: String = "",
+    /** Source timestamp of every timed input (epoch ms; 0 = unknown). */
+    val inputTimes: Map<String, Long> = emptyMap(),
+    /** Largest gap between the critical inputs (NIFTY, futures, option chain), seconds. */
+    val criticalSkewSec: Double = Double.NaN,
+    /** The calibration fit this decision used (captured once per cycle). */
+    val calibrationFittedAt: Long = 0L,
+    /** OK, or the critical-data failures that forced NO TRADE. */
+    val criticalData: String = "OK",
+)
+
 // ------------------------------------------------------------------ final decision object
 
 /** The complete decision state of one cycle — not just "NIFTY UP". Keys follow the v5 spec. */
@@ -517,6 +565,9 @@ data class ModelHealth(
 data class DecisionState(
     @SerialName("market") val market: String = "NIFTY",
     @SerialName("timestamp") val timestamp: Long = 0L,
+    @SerialName("snapshot_id") val snapshotId: String = "",
+    /** OK, or which critical inputs were missing / stale / invalid / future-dated (⇒ NO TRADE). */
+    @SerialName("critical_data") val criticalData: String = "OK",
     @SerialName("spot") val spot: Double = 0.0,
     @SerialName("regime") val regime: String = PrimaryRegime.RANGE.name,
     @SerialName("regime_quality") val regimeQuality: Double = 0.0,

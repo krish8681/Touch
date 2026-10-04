@@ -173,8 +173,11 @@ object ProbabilityCalibrator {
      * Fits every calibration and ACCEPTS it only if, fitted on the earlier 70 % of outcomes, it beats the raw model on the
      * later 30 % (lower Brier and no worse log loss). Rejected calibrations are not applied — the raw score is kept and
      * labelled as such. Outcomes are all in the past (attached only after their horizon elapsed), so nothing leaks.
+     * v5.1: only records that pass [PredictionAudit.verify] and were not DATA ERROR cycles are fitted on.
      */
-    fun fit(records: List<PredictionRecord>, minSamples: Int = 150, minOptionSamples: Int = 100, now: Long = System.currentTimeMillis()): CalibrationModel {
+    fun fit(logged: List<PredictionRecord>, minSamples: Int = 150, minOptionSamples: Int = 100, now: Long = System.currentTimeMillis()): CalibrationModel {
+        val records = PredictionAudit.usable(logged)
+        val auditExcluded = logged.size - records.size
         val models = HashMap<Int, ClassModels>()
         val partial = HashMap<Int, ClassModels>()
         val partialW = HashMap<Int, Double>()
@@ -263,11 +266,13 @@ object ProbabilityCalibrator {
                 note = (if (calibrated) "Calibrated on ${models.keys.sorted().joinToString { "${it}m n=${samples[it]}" }}"
                 else "Uncalibrated: ${samples.entries.sortedBy { it.key }.joinToString { "${it.key}m ${it.value}/$minSamples" }} outcomes — probabilities are model scores" +
                     if (partial.isNotEmpty()) " (partial calibration on ${partial.keys.sorted().joinToString { "${it}m" }})" else "") +
-                    if (rejectedNotes.isEmpty()) "" else " · " + rejectedNotes.joinToString("; "),
+                    (if (rejectedNotes.isEmpty()) "" else " · " + rejectedNotes.joinToString("; ")) +
+                    if (auditExcluded == 0) "" else " · $auditExcluded record(s) excluded by the audit (data error / failed verification)",
                 holdoutLogLossRaw = llRaw, holdoutLogLossCalibrated = llCal, accepted = accepted,
                 scenarioSamples = scenRows.size, scenarioBrierRaw = sBrRaw, scenarioBrierCalibrated = sBrCal,
                 scenarioLogLossRaw = sLlRaw, scenarioLogLossCalibrated = sLlCal, scenarioAccepted = sOk,
                 optionBrierRaw = oBrRaw, optionBrierCalibrated = oBrCal, optionAccepted = oOk,
+                auditExcluded = auditExcluded,
             ),
         )
     }

@@ -206,8 +206,10 @@ class HistoricalBacktest(private val engineConfig: EngineConfig = EngineConfig()
                 }
                 // Outcomes from this day's realised minute path (completed bar closes).
                 val path = niftyDay.map { PredictionLogger.PricePoint(it.t + 60_000L, it.c) }
+                // attached once the day's path is complete: the replay clock is the last completed bar
+                val dayEnd = path.lastOrNull()?.t ?: open
                 for (r in store.since(open)) {
-                    val outs = logger.horizons.mapNotNull { h -> logger.outcomeFor(r, h, path) }
+                    val outs = logger.horizons.mapNotNull { h -> logger.outcomeFor(r, h, path, dayEnd) }
                     if (outs.isNotEmpty()) store.update(r.copy(outcomes = outs))
                 }
                 // Daily history grows as the replay moves forward.

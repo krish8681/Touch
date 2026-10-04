@@ -58,6 +58,13 @@ class UiRobustnessTest {
             "headline with %" to s.copy(news = s.news + listOf(
                 com.niftyengine.engine.model.NewsItem("pct1", "Sensex crashes 2%, Nifty falls 1.5% as FPIs pull out ₹8,000 crore", "Reuters", s.timestamp - 120_000),
                 com.niftyengine.engine.model.NewsItem("pct2", "India CPI inflation rises to 6.2% against estimate of 5.6%", "Economic Times", s.timestamp - 60_000))),
+            // v5.1 point-in-time: future-dated critical inputs, inputs from different moments, future series/news
+            "future NIFTY" to s.copy(nifty = s.nifty.copy(asOf = s.timestamp + 300_000)),
+            "future chain" to s.copy(optionChain = s.optionChain?.copy(asOf = s.timestamp + 300_000)),
+            "mismatched chain" to s.copy(optionChain = s.optionChain?.copy(asOf = s.timestamp - 200_000)),
+            "future bars + news" to s.copy(
+                nifty = s.nifty.copy(intraday = s.nifty.intraday + com.niftyengine.engine.model.Candle(s.timestamp + 60_000, 1.0, 1.0, 1.0, 1.0)),
+                news = s.news + com.niftyengine.engine.model.NewsItem("fut", "Nifty jumps 3% tomorrow", "Reuters", s.timestamp + 600_000)),
             "NaN everywhere" to s.copy(nifty = nanify(s.nifty), vix = s.vix?.let(::nanify), bankNifty = null,
                 constituents = s.constituents.mapValues { nanify(it.value) }, sectors = s.sectors.mapValues { nanify(it.value) },
                 futures = s.futures?.copy(last = Double.NaN, openInterest = Double.NaN), optionChain = null, giftNifty = null),

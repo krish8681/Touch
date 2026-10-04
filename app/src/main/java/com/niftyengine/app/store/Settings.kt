@@ -73,6 +73,9 @@ data class AppSettings(
     // ---- v5.1 model health gate (score 0–100)
     val healthEligible: Double = 75.0,
     val healthShadow: Double = 60.0,
+    // ---- v5.1 point-in-time: clock-skew allowance and max gap between the critical inputs' timestamps
+    val futureToleranceSec: Double = 10.0,
+    val maxCriticalSkewSec: Double = 180.0,
 ) {
     val geminiActive get() = geminiEnabled && geminiApiKey.isNotBlank() && mode != DataMode.SIMULATED
 
@@ -110,6 +113,7 @@ data class AppSettings(
         shadowMode = shadowMode, minTradeQuality = minTradeQuality,
         enableLongOptions = enableLongOptions, enableSpreads = enableSpreads, enableCondor = enableCondor,
         healthEligible = healthEligible, healthShadow = healthShadow,
+        futureToleranceSec = futureToleranceSec, maxCriticalSkewSec = maxCriticalSkewSec,
     )
 
     /** Key settings copied into each logged prediction (audit trail). */
@@ -124,6 +128,7 @@ data class AppSettings(
         "maxPositions" to "$maxOpenPositions", "maxTrades" to "$maxTradesPerDay", "maxIv" to "$maxIvPct",
         "stopPct" to "$longStopPct", "targetPct" to "$longTargetPct", "minQuality" to "$minTradeQuality",
         "health" to "$healthShadow/$healthEligible",
+        "pitTolerance" to "$futureToleranceSec", "maxCriticalSkew" to "$maxCriticalSkewSec",
         "strategies" to listOfNotNull("long".takeIf { enableLongOptions }, "spread".takeIf { enableSpreads }, "condor".takeIf { enableCondor }).joinToString("+"),
     )
 }
@@ -186,6 +191,8 @@ class SettingsStore(context: Context) {
             enableCondor = p.getBoolean("stratCondor", def.enableCondor),
             healthEligible = d("healthElig", def.healthEligible),
             healthShadow = d("healthShadow", def.healthShadow),
+            futureToleranceSec = d("pitTol", def.futureToleranceSec),
+            maxCriticalSkewSec = d("critSkew", def.maxCriticalSkewSec),
             macro = MacroInputs(
                 repoRate = d("m_repo", def.macro.repoRate),
                 lastPolicyChangeBps = d("m_policy", def.macro.lastPolicyChangeBps),
@@ -227,6 +234,7 @@ class SettingsStore(context: Context) {
             .putString("minQuality", s.minTradeQuality.toString())
             .putBoolean("stratLong", s.enableLongOptions).putBoolean("stratSpread", s.enableSpreads).putBoolean("stratCondor", s.enableCondor)
             .putString("healthElig", s.healthEligible.toString()).putString("healthShadow", s.healthShadow.toString())
+            .putString("pitTol", s.futureToleranceSec.toString()).putString("critSkew", s.maxCriticalSkewSec.toString())
             .also { e -> MACRO_DATE_KEYS.forEach { k -> e.putString("md_$k", s.macroDates[k] ?: "") } }
             .apply()
     }

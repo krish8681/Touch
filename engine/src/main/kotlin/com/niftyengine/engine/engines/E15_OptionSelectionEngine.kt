@@ -113,6 +113,7 @@ class OptionSelectionEngine(
             !leg.iv.isNaN() && leg.iv > 0 -> leg.iv / 100
             else -> BlackScholes.impliedVol(isCall, spot, k, tYears, mid).takeIf { !it.isNaN() } ?: atmIv
         }
+        if (iv.isNaN() || iv <= 0) return null
         val g = BlackScholes.price(isCall, spot, k, tYears, iv)
         val ivH = iv * volScale
         val halfSpread = if (spreadPct.isNaN()) premium * 0.005 else (leg.ask - leg.bid) / 2
