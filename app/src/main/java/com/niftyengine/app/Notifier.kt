@@ -19,7 +19,10 @@ class Notifier(private val ctx: Context) {
             ContextCompat.checkSelfPermission(ctx, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) return
         val d = o.direction
         val text = "%s · Bull %.0f%% / Bear %.0f%% · %s conf · move %+.0f pts".format(
-            o.regime.regime.label, d.pBull * 100, d.pBear * 100, d.confidence.name, o.expectedMove.expectedMovePoints)
+            o.regimeV5.primary.label, d.pBull * 100, d.pBear * 100, d.confidence.name, o.expectedMove.expectedMovePoints) +
+            " · quality %.0f%% %s".format(o.quality.score * 100, o.quality.tier.name) +
+            (o.risk.exit?.let { " · stop ${it.stopText} · target ${it.targetText}" } ?: "") +
+            if (o.shadow.enabled) " · shadow mode (no real order)" else ""
         val pi = PendingIntent.getActivity(ctx, 0, Intent(ctx, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP),
             PendingIntent.FLAG_IMMUTABLE)
         val n = NotificationCompat.Builder(ctx, CHANNEL)

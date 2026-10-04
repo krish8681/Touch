@@ -56,6 +56,20 @@ data class AppSettings(
     val geminiModel: String = "gemini-2.5-flash",
     val geminiDailyBudget: Int = 200,
     val geminiMinIntervalSec: Int = 60,
+    // ---- v5 strategy, risk and shadow execution (deterministic; the app never places real orders)
+    val shadowMode: Boolean = true,
+    val capital: Double = 200_000.0,
+    val maxRiskPerTradePct: Double = 2.0,
+    val maxDailyLossPct: Double = 5.0,
+    val maxOpenPositions: Int = 1,
+    val maxTradesPerDay: Int = 4,
+    val maxIvPct: Double = 35.0,
+    val longStopPct: Double = 35.0,
+    val longTargetPct: Double = 60.0,
+    val minTradeQuality: Double = 0.65,
+    val enableLongOptions: Boolean = true,
+    val enableSpreads: Boolean = true,
+    val enableCondor: Boolean = true,
 ) {
     val geminiActive get() = geminiEnabled && geminiApiKey.isNotBlank() && mode != DataMode.SIMULATED
 
@@ -85,6 +99,13 @@ data class AppSettings(
             slippageTicks = slippageTicks, lotSize = lotSize, lots = lots),
         minOptionProfitProb = minOptionProfitProb, eventThresholdBump = eventThresholdBump, minDataQuality = minDataQuality,
         confirmCycles = confirmCycles, requireCalibration = requireCalibration,
+        risk = com.niftyengine.engine.model.RiskConfig(
+            capital = capital, maxRiskPerTradePct = maxRiskPerTradePct, maxDailyLossPct = maxDailyLossPct,
+            maxOpenPositions = maxOpenPositions, maxTradesPerDay = maxTradesPerDay, maxSpreadPct = maxSpreadPct,
+            maxIvPct = maxIvPct, longStopPct = longStopPct, longTargetPct = longTargetPct,
+        ),
+        shadowMode = shadowMode, minTradeQuality = minTradeQuality,
+        enableLongOptions = enableLongOptions, enableSpreads = enableSpreads, enableCondor = enableCondor,
     )
 
     /** Key settings copied into each logged prediction (audit trail). */
@@ -95,6 +116,10 @@ data class AppSettings(
         "requireCalibration" to "$requireCalibration", "lotSize" to "$lotSize", "lots" to "$lots",
         "brokerage" to "$brokeragePerOrder", "stt" to "$sttSellPct", "slippageTicks" to "$slippageTicks",
         "eventAnalyst" to if (geminiActive) "gemini:$geminiModel" else "rules",
+        "shadow" to "$shadowMode", "capital" to "$capital", "riskPct" to "$maxRiskPerTradePct", "dailyLossPct" to "$maxDailyLossPct",
+        "maxPositions" to "$maxOpenPositions", "maxTrades" to "$maxTradesPerDay", "maxIv" to "$maxIvPct",
+        "stopPct" to "$longStopPct", "targetPct" to "$longTargetPct", "minQuality" to "$minTradeQuality",
+        "strategies" to listOfNotNull("long".takeIf { enableLongOptions }, "spread".takeIf { enableSpreads }, "condor".takeIf { enableCondor }).joinToString("+"),
     )
 }
 
@@ -141,6 +166,19 @@ class SettingsStore(context: Context) {
             geminiModel = p.getString("gemModel", def.geminiModel)!!.ifBlank { def.geminiModel },
             geminiDailyBudget = p.getInt("gemBudget", def.geminiDailyBudget),
             geminiMinIntervalSec = p.getInt("gemInterval", def.geminiMinIntervalSec),
+            shadowMode = p.getBoolean("shadow", def.shadowMode),
+            capital = d("capital", def.capital),
+            maxRiskPerTradePct = d("riskPct", def.maxRiskPerTradePct),
+            maxDailyLossPct = d("dailyLossPct", def.maxDailyLossPct),
+            maxOpenPositions = p.getInt("maxPos", def.maxOpenPositions),
+            maxTradesPerDay = p.getInt("maxTrades", def.maxTradesPerDay),
+            maxIvPct = d("maxIv", def.maxIvPct),
+            longStopPct = d("stopPct", def.longStopPct),
+            longTargetPct = d("targetPct", def.longTargetPct),
+            minTradeQuality = d("minQuality", def.minTradeQuality),
+            enableLongOptions = p.getBoolean("stratLong", def.enableLongOptions),
+            enableSpreads = p.getBoolean("stratSpread", def.enableSpreads),
+            enableCondor = p.getBoolean("stratCondor", def.enableCondor),
             macro = MacroInputs(
                 repoRate = d("m_repo", def.macro.repoRate),
                 lastPolicyChangeBps = d("m_policy", def.macro.lastPolicyChangeBps),
@@ -175,6 +213,12 @@ class SettingsStore(context: Context) {
             .putInt("lotSize", s.lotSize).putInt("lots", s.lots)
             .putBoolean("gemOn", s.geminiEnabled).putString("gemKey", s.geminiApiKey.trim()).putString("gemModel", s.geminiModel.trim())
             .putInt("gemBudget", s.geminiDailyBudget).putInt("gemInterval", s.geminiMinIntervalSec)
+            .putBoolean("shadow", s.shadowMode).putString("capital", s.capital.toString())
+            .putString("riskPct", s.maxRiskPerTradePct.toString()).putString("dailyLossPct", s.maxDailyLossPct.toString())
+            .putInt("maxPos", s.maxOpenPositions).putInt("maxTrades", s.maxTradesPerDay).putString("maxIv", s.maxIvPct.toString())
+            .putString("stopPct", s.longStopPct.toString()).putString("targetPct", s.longTargetPct.toString())
+            .putString("minQuality", s.minTradeQuality.toString())
+            .putBoolean("stratLong", s.enableLongOptions).putBoolean("stratSpread", s.enableSpreads).putBoolean("stratCondor", s.enableCondor)
             .also { e -> MACRO_DATE_KEYS.forEach { k -> e.putString("md_$k", s.macroDates[k] ?: "") } }
             .apply()
     }

@@ -17,6 +17,7 @@ import com.niftyengine.app.ui.NewsScreen
 import com.niftyengine.app.ui.NiftyTheme
 import com.niftyengine.app.ui.OptionsScreen
 import com.niftyengine.app.ui.SettingsScreen
+import com.niftyengine.app.ui.ShadowScreen
 import com.niftyengine.app.ui.StatsCard
 import com.niftyengine.app.ui.UiState
 import com.niftyengine.engine.NiftyDirectionEngine
@@ -40,7 +41,7 @@ class ScreenshotTest {
         val engine = NiftyDirectionEngine()
         val chart = ArrayList<ChartPoint>()
         var out = engine.process(sim.collect(0))
-        repeat(150) {
+        repeat(260) {
             out = engine.process(sim.collect(0))
             chart += ChartPoint(out.timestamp, out.spot, out.direction.pBull, out.direction.pBear)
         }
@@ -60,6 +61,7 @@ class ScreenshotTest {
         shot("3_options") { OptionsScreen(ui) }
         shot("4_market") { MarketScreen(ui) }
         shot("5_news") { NewsScreen(ui) }
+        shot("5b_shadow") { ShadowScreen(ui, {}, {}) }
         shot("7_settings") { SettingsScreen(AppSettings(), {}, {}) }
         val sim = SimulatedMarket(seed = 21, startDate = LocalDate.of(2026, 9, 29))
         val snaps = List(370) { sim.collect(0) }

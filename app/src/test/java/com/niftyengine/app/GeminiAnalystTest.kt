@@ -45,6 +45,7 @@ class GeminiAnalystTest {
             .put("escalationRisk", 0.0).put("confidence", 0.85)
             .put("horizonWeights", JSONObject().put("M5_15", 1.0).put("EOD", 0.8).put("W1_2", 0.3))
             .put("mergeWith", JSONArray().put("E0").put("NOT_ACTIVE"))
+            .put("expectationShift", 1.4)                // v5 — clamped to 1.0
             .put("action", "BUY CALL 24600 CE")          // must be ignored
             .put("niftyTarget", 25500))                  // must be ignored
         .put(JSONObject().put("eventId", "UNREQUESTED").put("stage", "RUMOUR"))
@@ -65,6 +66,8 @@ class GeminiAnalystTest {
         assertTrue(prompt.contains("must NOT give trading advice"))
         assertTrue(prompt.contains("Expected news is not new news"))
         assertTrue(prompt.contains("E0 | EXPECTED | RBI policy preview"))
+        assertTrue(prompt.contains("has the probability of the expected outcome changed"))
+        assertTrue(prompt.contains("\"expectationShift\""))
 
         assertEquals(1, out.size)
         val a = out[0]
@@ -77,6 +80,7 @@ class GeminiAnalystTest {
         assertEquals(listOf("E0"), a.mergeWith)                     // only ids that were offered
         assertEquals(setOf(NewsHorizon.M5_15, NewsHorizon.EOD, NewsHorizon.W1_2), a.horizonWeights.keys)
         assertTrue(a.source.startsWith("gemini"))
+        assertEquals(1.0, a.expectationShift, 1e-9)
         val fields = EventAnalysis::class.java.declaredFields.map { it.name.lowercase() }
         assertFalse("schema must not carry trade fields", fields.any { it.contains("action") || it.contains("target") || it.contains("buy") })
     }

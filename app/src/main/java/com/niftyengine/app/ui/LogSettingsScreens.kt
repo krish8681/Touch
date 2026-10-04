@@ -85,6 +85,13 @@ fun StatsCard(title: String, summaries: List<PerformanceStats.Summary>) {
             Label("AFTER CALIBRATION · ${sel.horizon}m (predictions that were calibrated when made)", color = C.dim, size = 10.sp)
             BucketTable(sel.calibratedBuckets)
         }
+        if (sel.scenarioRates.isNotEmpty()) {
+            Spacer(Modifier.height(6.dp))
+            Label("SCENARIOS · ${sel.horizon}m · predicted vs realised frequency", color = C.dim, size = 10.sp)
+            BucketTable(sel.scenarioRates, "pred", "freq")
+            Label("SCENARIO RELIABILITY (every scenario probability vs whether it happened)", color = C.dim, size = 10.sp)
+            BucketTable(sel.scenarioBuckets)
+        }
         if (sel.optionBuckets.any { it.n > 0 }) {
             Spacer(Modifier.height(6.dp))
             Label("OPTION OUTCOME MODEL · ${sel.horizon}m · P(profit) vs realised net option profit", color = C.dim, size = 10.sp)
@@ -163,6 +170,15 @@ private fun AuditDetail(r: com.niftyengine.engine.engines.PredictionRecord) {
             Label("  event ${e.id} [${e.stage}/${e.source}] sev %.2f surprise %+.2f unpriced %.0f%% reaction %+.2f conf %.2f → %+.3f %s · ${e.title.take(60)}"
                 .format(e.severity, e.surprise, e.unpriced * 100, e.reactionAgreement, e.confidence, e.effectiveImpact, e.flags.joinToString(" ")),
                 color = C.text, size = 9.sp)
+        }
+        if (r.primaryRegime.isNotBlank()) {
+            KV("v5 regime / quality", "${r.primaryRegime} · %.0f%%".format(r.regimeQuality * 100))
+            KV("Expectation / Δ / state", "%+.2f / %+.2f / ${r.expectationState}".format(r.expectation, r.expectationChange))
+            KV("Information shock", "%.0f%% (dir %+.2f)".format(r.shockScore * 100, r.shockDirection))
+            if (r.scenarioProbs.isNotEmpty()) KV("Scenarios (raw)", r.scenarioProbs.entries.joinToString(" ") { "${it.key.lowercase()} %.0f".format(it.value * 100) })
+            KV("Strategy / quality", "${r.strategy} ${r.instrument} · %.0f%% ${r.qualityTier}".format(r.tradeQuality * 100))
+            if (!r.strategyEv.isNaN()) KV("Strategy P(profit) / EV", "%.0f%% / %+.2f · risk ${if (r.riskApproved) "approved ${r.lots} lot(s)" else "blocked"}"
+                .format(r.strategyProbProfit * 100, r.strategyEv))
         }
         if (r.config.isNotEmpty()) Label("Config: " + r.config.entries.joinToString(" ") { "${it.key}=${it.value}" }, color = C.dim, size = 9.sp)
     }
@@ -313,6 +329,19 @@ fun SettingsScreen(current: AppSettings, onSave: (AppSettings) -> Unit, onKiteLo
     var gemModel by remember(current) { mutableStateOf(current.geminiModel) }
     var gemBudget by remember(current) { mutableStateOf(current.geminiDailyBudget.toString()) }
     var gemInterval by remember(current) { mutableStateOf(current.geminiMinIntervalSec.toString()) }
+    var shadow by remember(current) { mutableStateOf(current.shadowMode) }
+    var capital by remember(current) { mutableStateOf(current.capital.toLong().toString()) }
+    var riskPct by remember(current) { mutableStateOf(current.maxRiskPerTradePct.toString()) }
+    var dailyLossPct by remember(current) { mutableStateOf(current.maxDailyLossPct.toString()) }
+    var maxPos by remember(current) { mutableStateOf(current.maxOpenPositions.toString()) }
+    var maxTrades by remember(current) { mutableStateOf(current.maxTradesPerDay.toString()) }
+    var maxIv by remember(current) { mutableStateOf(current.maxIvPct.toString()) }
+    var stopPct by remember(current) { mutableStateOf(current.longStopPct.toString()) }
+    var targetPct by remember(current) { mutableStateOf(current.longTargetPct.toString()) }
+    var minQuality by remember(current) { mutableStateOf((current.minTradeQuality * 100).toInt().toString()) }
+    var stratLong by remember(current) { mutableStateOf(current.enableLongOptions) }
+    var stratSpread by remember(current) { mutableStateOf(current.enableSpreads) }
+    var stratCondor by remember(current) { mutableStateOf(current.enableCondor) }
 
     fun build() = current.copy(
         mode = mode, refreshSeconds = num(refresh, 30.0).toInt().coerceIn(5, 600),
@@ -336,6 +365,12 @@ fun SettingsScreen(current: AppSettings, onSave: (AppSettings) -> Unit, onKiteLo
         geminiEnabled = gemOn, geminiApiKey = gemKey.trim(), geminiModel = gemModel.trim().ifBlank { "gemini-2.5-flash" },
         geminiDailyBudget = num(gemBudget, 200.0).toInt().coerceIn(0, 5000),
         geminiMinIntervalSec = num(gemInterval, 60.0).toInt().coerceIn(10, 3600),
+        shadowMode = shadow, capital = num(capital, 200_000.0).coerceAtLeast(10_000.0),
+        maxRiskPerTradePct = num(riskPct, 2.0).coerceIn(0.1, 20.0), maxDailyLossPct = num(dailyLossPct, 5.0).coerceIn(0.5, 50.0),
+        maxOpenPositions = num(maxPos, 1.0).toInt().coerceIn(1, 10), maxTradesPerDay = num(maxTrades, 4.0).toInt().coerceIn(1, 50),
+        maxIvPct = num(maxIv, 35.0).coerceIn(5.0, 150.0), longStopPct = num(stopPct, 35.0).coerceIn(5.0, 90.0),
+        longTargetPct = num(targetPct, 60.0).coerceIn(5.0, 500.0), minTradeQuality = (num(minQuality, 65.0) / 100).coerceIn(0.0, 0.99),
+        enableLongOptions = stratLong, enableSpreads = stratSpread, enableCondor = stratCondor,
     )
 
     Card("Data source") {
@@ -397,6 +432,25 @@ fun SettingsScreen(current: AppSettings, onSave: (AppSettings) -> Unit, onKiteLo
         Field("Event regime: raise probability threshold by (pts)", eventBump, KeyboardType.Number) { eventBump = it }
         Field("Min data quality (%)", minDq, KeyboardType.Number) { minDq = it }
         Field("Consecutive cycles before TRADE (hysteresis)", confirm, KeyboardType.Number) { confirm = it }
+    }
+    Card("Strategy, risk & shadow mode (v5)") {
+        Label("The risk engine is deterministic code: it sizes from the stop, enforces the daily loss limit, open positions, trades/day, " +
+            "spread, IV and event caps, and sets stop/target/time exits. Shadow mode executes approved decisions virtually — the app never places real orders.",
+            color = C.dim, size = 10.sp, mono = false)
+        Toggle("Shadow mode (virtual execution of TRADE / PAPER TRADE)", shadow) { shadow = it }
+        Row { Column(Modifier.weight(1f).padding(end = 4.dp)) { Field("Capital ₹", capital, KeyboardType.Number) { capital = it } }
+            Column(Modifier.weight(1f)) { Field("Max risk / trade %", riskPct) { riskPct = it } } }
+        Row { Column(Modifier.weight(1f).padding(end = 4.dp)) { Field("Max daily loss %", dailyLossPct) { dailyLossPct = it } }
+            Column(Modifier.weight(1f)) { Field("Max IV % (long premium)", maxIv) { maxIv = it } } }
+        Row { Column(Modifier.weight(1f).padding(end = 4.dp)) { Field("Max open positions", maxPos, KeyboardType.Number) { maxPos = it } }
+            Column(Modifier.weight(1f)) { Field("Max trades / day", maxTrades, KeyboardType.Number) { maxTrades = it } } }
+        Row { Column(Modifier.weight(1f).padding(end = 4.dp)) { Field("Long option stop %", stopPct) { stopPct = it } }
+            Column(Modifier.weight(1f)) { Field("Long option target %", targetPct) { targetPct = it } } }
+        Field("Min trade quality (%)", minQuality, KeyboardType.Number) { minQuality = it }
+        Label("Strategies the selector may use", color = C.dim, size = 11.sp)
+        Toggle("Buy call / buy put (strong directional)", stratLong) { stratLong = it }
+        Toggle("Bull call / bear put debit spreads (moderate, or rich IV)", stratSpread) { stratSpread = it }
+        Toggle("Iron condor — defined-risk option selling (range + rich IV)", stratCondor) { stratCondor = it }
     }
     Card("Calibration") {
         Toggle("Require calibrated probabilities for TRADE (else PAPER TRADE)", reqCal) { reqCal = it }

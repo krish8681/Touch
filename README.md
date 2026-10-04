@@ -1,17 +1,70 @@
-# NIFTY Direction Engine v4.3 — Android
+# NIFTY Direction Engine v5.0 — Android
 
-A **NIFTY market-intelligence and probability engine** for Android. It answers four questions in order:
+A **NIFTY market-intelligence, probability and trade-selection engine** for Android. v5 replaces
+"indicators → score → direction → option" with a decision pipeline that asks, in order:
 
-1. What is driving NIFTY?
-2. Which regime are we in?
-3. What is the probability distribution (Bull / Bear / Range) and the expected magnitude of the next move?
-4. Given that, which option (if any) has the best risk/reward — or is the answer **no trade**?
+1. What state is the market in, relative to its own normal?
+2. Which regime is it — and do the information blocks even agree?
+3. What is the market **expecting** for the near future, and is that expectation **changing**?
+4. What just **changed** (information shock: expected vs actual)?
+5. Which **scenarios** follow (breakout / continuation / range / reversal / sharp decline), with what calibrated probability?
+6. Is there enough **trade quality** — and which **option**, which **strategy**, how much **risk**?
 
-> Decision support only — not investment advice. Weights are starting engineering values, not validated
-> optima; use the prediction log and replay tools to measure before risking capital.
+> Decision support only — not investment advice. Weights and thresholds are starting engineering values, not validated
+> optima. The app never places real orders: approved decisions are executed in **shadow mode** (virtual trades) so the
+> whole pipeline can be measured before any money is risked.
 
-**Install:** `release/NiftyDirectionEngine-v4.3.1.apk` (Android 8.0+, sideload / "install unknown apps").
-It opens in **Simulator** mode (synthetic data, works offline/after hours). Switch to live data in **Setup**.
+**Install:** `release/NiftyDirectionEngine-v5.0.0.apk` (Android 8.0+, sideload / "install unknown apps"). Installs over v4.x
+(same signing key). It opens in **Simulator** mode (synthetic data, works offline/after hours). Switch to live data in **Setup**.
+
+## v5.0 — State → Regime → Expectation → Shock → Scenario → Probability → Quality → Option → Strategy → Risk → Shadow
+
+```
+DATA ─→ NORMALIZED STATE ─→ MARKET STATE ENGINES ─→ FUTURE EXPECTATION ─→ INFORMATION SHOCK ─→ REGIME (v5)
+     ─→ DIRECTION PROBABILITY (regime weights) ─→ CALIBRATION ─→ SCENARIOS ─→ OPTION SELECTOR ─→ STRATEGY SELECTOR
+     ─→ TRADE QUALITY ─→ RISK ENGINE ─→ TRADE / WAIT ─→ SHADOW EXECUTION ─→ OUTCOME LOG ─→ CALIBRATION
+```
+
+| # | Module | What it does |
+|---|--------|--------------|
+| 02c | `RelativeBaselines` | Every positioning/volatility/global input **relative to its own normal**: PCR vs its 20-session normal ("1.12 vs 0.94 → +19 %"), IV skew, ATM IV (India VIX as the prior), futures premium vs **fair carry**, realised vol, NIFTY 15-min move and global daily moves as **multiples of normal** ("Nasdaq +1.0 % = 4.0× normal"). Rolling day aggregates persist across restarts; global normals come from ~2 months of daily candles. The global-risk engine now uses these normals. |
+| 23 | `FutureExpectationEngine` | Keeps **current** (price/breadth/sectors), **expected** (expectation changes of unresolved events, lasting news impact, options vs normal, futures premium vs fair, live US/Asia futures & GIFT pre-open, Gemini's expectation shift) and **change** (30 min). Price rising while the expected future deteriorates ⇒ **early reversal warning** — before RSI/MACD turn. New `EXPECTATION` driver. |
+| 24 | `InformationShockEngine` | What the market expected vs what happened: event surprises (expected 25 bp cut at 78 % → no cut), global moves, India VIX / ATM-IV jumps, NIFTY 15-min moves and opening gaps in units of normal, sudden expectation repricing. The shock widens the expected move, fattens/skews scenario tails and pushes the regime to EVENT_DRIVEN / VOLATILITY_EXPANSION immediately. |
+| 12b | `RegimeEngineV5` | One primary regime: **TREND_UP / TREND_DOWN / RANGE / VOLATILITY_EXPANSION / EVENT_DRIVEN / REVERSAL_RISK / CONFLICT** plus a regime-quality score. When NIFTY, global, options, news, breadth and expectation blocks split, the regime is **CONFLICT ⇒ WAIT** — never forced into UP or DOWN. Each regime family has its own driver-weight table (event regimes lean on news + expectation, trends on structure). |
+| 14b | `ScenarioEngine` | Splits P(up)/P(down) into **Bull breakout · Bull continuation (or reversal) · Range · Bear reversal (or continuation) · Sharp decline** by move size (range band = the outcome logger's threshold; breakout = 1.25 normal σ). Breakout shares are tilted by momentum/ADX, opening-range and previous-day breaks, futures short covering/buildup, the shock, expectation change and scheduled-event risk. Produces the move distribution used to reprice options. |
+| 19 | `ProbabilityCalibrator` (extended) | **Progressive calibration**: from 30 outcomes per horizon the raw score is blended with the isotonic fit by sample share (full calibration at the configured minimum). **Scenario calibration** against realised buckets. Decision object shows raw *and* calibrated probability. |
+| 15 | `OptionSelectionEngine` (extended) | Strikes repriced over the five-scenario distribution, with a **variance-consistent trading-time clock** (calendar-time repricing under-charged intraday theta ≈4–5×). |
+| 26 | `StrategySelector` | Strategy is a consequence of regime + scenario shape + IV: strong directional → **BUY CALL / BUY PUT**; moderate or rich IV → **BULL CALL / BEAR PUT debit spread**; range + IV above normal + no event/shock → **IRON CONDOR** (defined-risk option selling, valued and held to the time exit); conflict / reversal against / no positive-EV structure → **NO TRADE**. Legs filled at ask/bid, priced over the scenario distribution, net of all-leg costs; strikes and widths searched for the best return on risk. |
+| 25 | `TradeQualityEngine` | **Probability edge × confidence × regime quality × liquidity × R:R** (geometric mean, every component above its floor). 74 % with 86 % confidence, 81 % regime, 94 % liquidity, R:R 1.8 ⇒ HIGH; the same 74 % with 52 % confidence and a 43 % regime ⇒ NO TRADE. Shadow track record per strategy nudges the score once enough trades exist. |
+| 27 | `RiskEngine` | Deterministic — **AI can recommend, code decides**: size from the stop (capital × max risk per trade), max capital per trade, max daily loss, max open positions, trades/day, leg spread, slippage share, max IV (long premium), max event/shock risk, entry cut-off; stop, target, time exit and emergency exits. |
+| 28 | `ShadowTrader` | **Shadow mode** execution: virtual fills at quoted ask/bid, marked to the chain every cycle (long legs at bid, short at ask), closed on STOP / TARGET / TIME / EMERGENCY (data breaker, shock/regime/expectation against the position) / session end, P&L net of charges. Learning tables by strategy, regime, quality tier, probability bucket, expectation state and exit reason. Persisted per data family (simulator vs live). |
+| 16 | `TradeDecisionEngine` (v5) | Data → regime → probability → strategy → liquidity → P(profit) → EV → quality → risk → event risk → session → persistence → calibration. Uncalibrated but otherwise passing ⇒ PAPER TRADE (shadow-executed). |
+
+**Final decision object** (Home → Decision state; Shadow tab → share JSON):
+
+```json
+{
+  "market": "NIFTY", "regime": "TREND_UP", "regime_quality": 0.81, "direction": "UP",
+  "raw_probability": 0.78, "calibrated_probability": 0.72, "calibration": "PARTIAL", "confidence": 0.86,
+  "scenarios": {"bull_breakout": 0.18, "bull_continuation": 0.51, "range": 0.15, "bear_reversal": 0.11, "sharp_decline": 0.05},
+  "future_expectation": 0.34, "expectation_change": -0.05, "expectation_state": "CONFIRMING",
+  "information_shock": 0.12, "trade_quality": 0.81, "quality_tier": "HIGH",
+  "instrument": "NIFTY 24500 CE", "strategy": "BUY_CALL", "lots": 1, "risk_at_stop": 2340,
+  "stop": "premium −35% (₹65.0)", "target": "premium +60% (₹160.0)", "action": "TRADE"
+}
+```
+
+**Gemini** remains the news/macro reader only. v5 asks it the expectation question explicitly ("what was expected, at what
+probability, what is new, has the probability changed?") and adds an `expectationShift` field that feeds the Future
+Expectation Engine. It still has no trade fields; probabilities, option/strategy choice, risk and execution are code.
+
+**App:** new Home cards (decision state, scenarios, v5 regime + information blocks, future expectation, information shock,
+strategy & risk plan, trade quality), Market → relative state, Options → strategy candidates, a new **Shadow** tab
+(open positions, P&L, recent trades, learning tables, decision JSON), Log → scenario reliability, Setup → strategy/risk/shadow
+settings (capital, risk %, daily loss %, positions, trades/day, IV cap, stop/target %, min quality, strategy toggles).
+
+Also fixed in v5: the isotonic calibrator pooled tied scores incorrectly (duplicate blocks made `predict` return the first
+one); a data-mode switch could save the old engine's state under the new mode's file.
 
 ## v4.3.1 — Kite login crash fixes
 
@@ -103,7 +156,7 @@ gamma/dealer regime, composite breadth, opening-session model, ML weight optimis
 ## Project layout
 
 ```
-engine/   pure Kotlin/JVM — all 18 modules, no Android deps (can be moved to a backend unchanged)
+engine/   pure Kotlin/JVM — all modules, no Android deps (can be moved to a backend unchanged)
 app/      Android (Jetpack Compose): live data feeds, storage, UI, notifications
 release/  prebuilt APK
 ```
@@ -134,7 +187,16 @@ release/  prebuilt APK
 | 01b | `DataQualityEngine` | per-feed freshness/validity, quality score, circuit breaker |
 | 20 | `EventIntelligenceEngine` | event lifecycle/clustering, expectation state, pricing-in, reaction confirmation, multi-horizon news impact |
 | 21 | `GiftNiftyEngine` | GIFT Nifty implied opening gap, gap behaviour in the first hour, pre-open pricing of overnight news |
-| 19 | `ProbabilityCalibrator` | isotonic calibration per horizon/class + option-outcome calibration, walk-forward hold-out check |
+| 19 | `ProbabilityCalibrator` | isotonic calibration per horizon/class (progressive from 30 outcomes) + scenario and option-outcome calibration, walk-forward hold-out check |
+| 02c | `RelativeBaselines` | inputs relative to their own normal (PCR, IV, skew, basis vs fair carry, global moves × normal) |
+| 12b | `RegimeEngineV5` | primary regime (trend/range/volatility/event/reversal/conflict) + regime quality, weight-table selection |
+| 14b | `ScenarioEngine` | five scenarios + move distribution for option/strategy repricing |
+| 23 | `FutureExpectationEngine` | current vs expected vs change; early reversal warnings; EXPECTATION driver |
+| 24 | `InformationShockEngine` | expected vs actual on events and market data, in units of normal |
+| 25 | `TradeQualityEngine` | probability edge × confidence × regime quality × liquidity × R:R with floors |
+| 26 | `StrategySelector` | buy call/put, debit spreads, iron condor or no trade — from regime, scenario shape and IV |
+| 27 | `RiskEngine` | deterministic sizing, limits and exit plan |
+| 28 | `ShadowTrader` | virtual execution, exits, net P&L, learning statistics |
 
 `NiftyDirectionEngine` orchestrates one cycle; `sim/SimulatedMarket` generates a consistent synthetic market for demo/tests.
 
@@ -179,10 +241,11 @@ status is shown on the Home tab.
 
 ## App tabs
 
-Home (probabilities, confidence, regime, expected move, decision + checks, option candidate) · Drivers (weighted
-driver bars, agreement/conflict, every engine signal) · Options (ranked strikes) · Market (heavyweights, sectors,
-futures, VIX, global, macro, flows) · News (clustered events with decay/reaction) · Log (live performance,
-calibration, replay, export) · Setup.
+Home (decision state, probabilities, scenarios, regime, expectation, shock, strategy & risk plan, quality, checks) ·
+Drivers (weighted driver bars incl. future expectation, agreement/conflict, every engine signal) · Options (strategy
+candidates, ranked strikes) · Market (relative state vs normal, heavyweights, sectors, futures, VIX, global, macro, flows) ·
+News (clustered events with decay/reaction) · Shadow (virtual positions, P&L, learning, decision JSON) · Log (live
+performance, calibration, scenario reliability, replay, export) · Setup.
 
 The engine refreshes while the app is open (default 30 s live / 2 s per simulated minute). Live sessions are
 recorded for replay; predictions are logged every 5 minutes during market hours.
@@ -192,15 +255,17 @@ recorded for replay; predictions are logged every 5 minutes during market hours.
 Requires JDK 17+ and the Android SDK (platform 35).
 
 ```bash
-./gradlew :engine:test            # engine unit tests (simulated session, replay no-look-ahead, news dedup, BS parity…)
+./gradlew :engine:test            # engine unit tests (v5 pipeline, simulated sessions, replay no-look-ahead, news dedup, BS parity…)
 ./gradlew :app:assembleDebug      # APK → app/build/outputs/apk/debug/app-debug.apk
 ./gradlew :app:testDebugUnitTest --tests '*GeminiAnalystTest*'   # Gemini client vs mock server (schema, no trade fields, 429)
 ./gradlew :app:testDebugUnitTest --tests '*KiteDataTest*'   # Kite client vs mock server + real NFO instrument dump
 ./gradlew :app:testDebugUnitTest -DliveNetwork=true --tests '*LiveFeedTest*'   # hits real NSE endpoints
 ```
 
-## Roadmap (spec stages 2–3)
+## Roadmap
 
-Use the logged predictions to tune weights/thresholds and calibrate probabilities; then add a tree-based model
-(XGBoost/LightGBM) as an ensemble member next to the rule engine. The engine module is plain Kotlin, so it can
+Run shadow mode until the calibration and the shadow book have enough outcomes (Log + Shadow tabs), then tune weights,
+thresholds and strategy rules from what the learning tables show. Live order placement is intentionally not implemented:
+it should only be added once shadow results justify it, behind the same deterministic risk engine. A tree-based model
+(XGBoost/LightGBM) can later join the rule engine as an ensemble member. The engine module is plain Kotlin, so it can
 also run on a backend with the app as a thin client.

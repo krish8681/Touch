@@ -16,6 +16,13 @@ val AppJson = Json {
     encodeDefaults = false
 }
 
+/** Human-readable export (decision object): spec keys, defaults included. */
+val PrettyJson = Json {
+    prettyPrint = true
+    encodeDefaults = true
+    allowSpecialFloatingPointValues = true
+}
+
 /** 17 — prediction log persisted as JSON lines (one record per line). */
 class JsonlPredictionStore(private val file: File, private val maxRecords: Int = 5000) : PredictionStore {
     private val cache: MutableList<PredictionRecord> = load()

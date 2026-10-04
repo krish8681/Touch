@@ -88,11 +88,14 @@ class ShadowTrader(
         val closedNow = ArrayList<ShadowTrade>()
 
         for (pos0 in book.open) {
-            val legs = if (c.dataError) pos0.legs else pos0.legs.map { it.copy(mark = legMark(c.chain, it)) }
+            // new day — or the clock went backwards (simulator restart / replay): close at the last mark, never carry it over
+            val stale = Session.zdt(pos0.openedAt).toLocalDate() != day || pos0.openedAt > c.now
+            val legs = if (c.dataError || stale) pos0.legs else pos0.legs.map { it.copy(mark = legMark(c.chain, it)) }
             val mv = value(legs)
             val pnlUnit = mv - pos0.entryValue
-            val pos = pos0.copy(legs = legs, markValue = mv, lastMarkAt = c.now,
-                mfe = maxOf(pos0.mfe, pnlUnit), mae = minOf(pos0.mae, pnlUnit))
+            val fresh = !c.dataError && !stale
+            val pos = pos0.copy(legs = legs, markValue = mv, lastMarkAt = if (fresh) c.now else pos0.lastMarkAt,
+                lastSpot = if (fresh) c.spot else pos0.lastSpot, mfe = maxOf(pos0.mfe, pnlUnit), mae = minOf(pos0.mae, pnlUnit))
             val against = pos.direction != 0 && (
                 (c.shock.level == ShockLevel.MAJOR && c.shock.direction * pos.direction < -0.2) ||
                     (c.regime.primary.bias != 0 && c.regime.primary.bias == -pos.direction) ||
@@ -100,7 +103,7 @@ class ShadowTrader(
                     (pos.direction < 0 && c.expectation.state == ExpectationState.BEAR_REVERSAL_WARNING))
             val creditDanger = pos.strategy.credit && (c.shock.level >= ShockLevel.SIGNIFICANT || c.regime.primary == PrimaryRegime.VOLATILITY_EXPANSION)
             val reason = when {
-                Session.zdt(pos.openedAt).toLocalDate() != day -> "SESSION END"
+                stale -> "SESSION END"
                 c.dataError -> "EMERGENCY: data error"
                 mv <= pos.stopValue -> "STOP"
                 mv >= pos.targetValue -> "TARGET"
@@ -115,7 +118,9 @@ class ShadowTrader(
             }
             if (reason == null) stillOpen += pos
             else {
-                val t = close(pos, c.now, c.spot, reason)
+                // a stale position is booked when it was last marked (its own session), not "now"
+                val t = if (stale) close(pos0, maxOf(pos0.lastMarkAt, pos0.openedAt), pos0.lastSpot.takeIf { !it.isNaN() } ?: pos0.entrySpot, reason)
+                else close(pos, c.now, c.spot.takeIf { !it.isNaN() && it > 0 } ?: pos0.lastSpot, reason)
                 closedNow += t
                 events += "Closed ${pos.instrument} · $reason · ₹%,.0f".format(t.pnl)
             }
@@ -137,7 +142,7 @@ class ShadowTrader(
                 stopValue = exit.stopValue, targetValue = exit.targetValue, timeExitAt = exit.timeExitAt, riskAtStop = c.risk.riskAtStop,
                 direction = chosen.type.directional, entrySpot = c.spot, regime = c.regime.primary.name, quality = c.quality.score,
                 qualityTier = c.quality.tier.name, probability = c.probability, expectationState = c.expectation.state.name,
-                shockLevel = c.shock.level.name, decision = c.decision.name, lastMarkAt = c.now,
+                shockLevel = c.shock.level.name, decision = c.decision.name, lastMarkAt = c.now, lastSpot = c.spot,
                 mfe = minOf(0.0, mv - entry), mae = minOf(0.0, mv - entry),
             )
             events += "Opened ${chosen.instrument} × ${c.risk.lots} lot(s) @ ₹%.1f (${c.decision.name.replace('_', ' ')})".format(entry)

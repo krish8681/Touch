@@ -54,6 +54,7 @@ import com.niftyengine.app.ui.NewsScreen
 import com.niftyengine.app.ui.NiftyTheme
 import com.niftyengine.app.ui.OptionsScreen
 import com.niftyengine.app.ui.SettingsScreen
+import com.niftyengine.app.ui.ShadowScreen
 
 class MainActivity : ComponentActivity() {
     private val vm: EngineController get() = (application as NiftyApp).controller
@@ -70,7 +71,7 @@ class MainActivity : ComponentActivity() {
 
     private enum class Tab(val icon: String, val label: String) {
         HOME("◉", "Home"), DRIVERS("≡", "Drivers"), OPTIONS("◈", "Options"), MARKET("▤", "Market"),
-        NEWS("✉", "News"), LOG("◷", "Log"), SETTINGS("⚙", "Setup")
+        NEWS("✉", "News"), SHADOW("◎", "Shadow"), LOG("◷", "Log"), SETTINGS("⚙", "Setup")
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -122,6 +123,7 @@ class MainActivity : ComponentActivity() {
                             Tab.OPTIONS -> OptionsScreen(ui)
                             Tab.MARKET -> MarketScreen(ui)
                             Tab.NEWS -> NewsScreen(ui)
+                            Tab.SHADOW -> ShadowScreen(ui, onReset = { vm.resetShadow() }, onShareDecision = { vm.exportDecisionFile()?.let(::shareFile) })
                             Tab.LOG -> LogScreen(ui, vm, onExport = ::exportLog, onShare = ::shareFile)
                             Tab.SETTINGS -> SettingsScreen(settings, onSave = { vm.updateSettings(it); tab = Tab.HOME }, onKiteLogin = ::startKiteLogin)
                         }
@@ -195,7 +197,7 @@ private fun TopBar(source: String, running: Boolean, busy: Boolean, error: Strin
             Spacer(Modifier.width(10.dp))
             Column(Modifier.weight(1f)) {
                 Label("NIFTY Direction Engine", color = C.white, size = 14.sp, weight = FontWeight.Bold, mono = false)
-                Label("v4.3.1 · $source", color = C.dim, size = 9.sp, maxLines = 1)
+                Label("v${BuildConfig.VERSION_NAME} · $source", color = C.dim, size = 9.sp, maxLines = 1)
             }
             Box(Modifier.size(8.dp).clip(CircleShape).background(if (busy) C.amber else if (running) C.green else C.dim))
             Spacer(Modifier.width(12.dp))

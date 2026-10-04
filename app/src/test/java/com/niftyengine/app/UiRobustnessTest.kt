@@ -13,6 +13,7 @@ import com.niftyengine.app.ui.DashboardScreen
 import com.niftyengine.app.ui.DriversScreen
 import com.niftyengine.app.ui.MarketScreen
 import com.niftyengine.app.ui.NewsScreen
+import com.niftyengine.app.ui.ShadowScreen
 import com.niftyengine.app.ui.NiftyTheme
 import com.niftyengine.app.ui.OptionsScreen
 import com.niftyengine.app.ui.UiState
@@ -53,6 +54,10 @@ class UiRobustnessTest {
             "no chain/futures/stocks" to s.copy(optionChain = null, futures = null, constituents = emptyMap(), sectors = emptyMap(), vix = null, bankNifty = null),
             "empty chain" to s.copy(optionChain = s.optionChain?.copy(rows = emptyList())),
             "weekend" to s.copy(timestamp = sunday),
+            // headlines often contain '%': they must never end up inside a format pattern
+            "headline with %" to s.copy(news = s.news + listOf(
+                com.niftyengine.engine.model.NewsItem("pct1", "Sensex crashes 2%, Nifty falls 1.5% as FPIs pull out ₹8,000 crore", "Reuters", s.timestamp - 120_000),
+                com.niftyengine.engine.model.NewsItem("pct2", "India CPI inflation rises to 6.2% against estimate of 5.6%", "Economic Times", s.timestamp - 60_000))),
             "NaN everywhere" to s.copy(nifty = nanify(s.nifty), vix = s.vix?.let(::nanify), bankNifty = null,
                 constituents = s.constituents.mapValues { nanify(it.value) }, sectors = s.sectors.mapValues { nanify(it.value) },
                 futures = s.futures?.copy(last = Double.NaN, openInterest = Double.NaN), optionChain = null, giftNifty = null),
@@ -62,7 +67,7 @@ class UiRobustnessTest {
     @Test fun allScreensSurviveDegradedData() {
         val screens = listOf<Pair<String, @androidx.compose.runtime.Composable (UiState) -> Unit>>(
             "home" to { DashboardScreen(it) }, "drivers" to { DriversScreen(it) }, "options" to { OptionsScreen(it) },
-            "market" to { MarketScreen(it) }, "news" to { NewsScreen(it) },
+            "market" to { MarketScreen(it) }, "news" to { NewsScreen(it) }, "shadow" to { ShadowScreen(it, {}, {}) },
         )
         var current by androidx.compose.runtime.mutableStateOf<Pair<Int, UiState>?>(null)
         compose.setContent {

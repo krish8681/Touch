@@ -54,6 +54,10 @@ class LiveSnapshotProvider(private val cacheDir: File, private val settings: () 
     private val global = YahooClient.GLOBAL_SYMBOLS.mapValues { (a, sym) ->
         Cached(if (a == GlobalAsset.USDINR || a == GlobalAsset.BRENT) 60_000L else 120_000L) { YahooClient.chart(sym, "5m", "1d", "G_${a.name}") }
     }
+    /** v5: ~2 months of daily closes per global asset → its normal daily move ("Nasdaq +1 % = 4× normal"). */
+    private val globalDaily = YahooClient.GLOBAL_SYMBOLS.mapValues { (_, sym) ->
+        Cached(6 * 3_600_000L) { YahooClient.chart(sym, "1d", "2mo").daily.filter { it.t < today() - 6 * 3_600_000L } }
+    }
 
     // ---- Kite feeds (rebuilt when credentials change)
     private var kiteCreds = ""
@@ -127,6 +131,7 @@ class LiveSnapshotProvider(private val cacheDir: File, private val settings: () 
         val jobs = buildList {
             add(async { flows.get() }); add(async { news.get() }); add(async { chain.get() }); add(async { gift.get() })
             global.values.forEach { c -> add(async { c.get() }) }
+            globalDaily.values.forEach { c -> add(async { c.get() }) }
             if (!kiteLive) {
                 add(async { board.get() }); add(async { constituents.get() }); add(async { futures.get() })
                 add(async { niftyIntra.get() }); add(async { vixIntra.get() }); add(async { bankIntra.get() })
@@ -193,7 +198,7 @@ class LiveSnapshotProvider(private val cacheDir: File, private val settings: () 
         st("NSE FII/DII", flows, "✓ ${flows.get()?.date ?: ""}")
         st("GIFT Nifty", gift, gift.get()?.let { "✓ %.1f (%+.2f%%) @ %s".format(it.last, it.changePct, Session.hhmm(it.asOf)) } ?: "–")
         if (dailyN.isEmpty()) status["Daily history"] = "✗ ${kDaily.takeIf { k != null }?.lastError ?: niftyDaily.lastError}"
-        val glob = global.mapNotNull { (a, c) -> c.get()?.let { a to it } }.toMap()
+        val glob = global.mapNotNull { (a, c) -> c.get()?.let { a to it.copy(daily = globalDaily[a]?.get() ?: emptyList()) } }.toMap()
         val n = news.get()
         status["Global"] = "✓ ${glob.size}/${global.size}" + (global.entries.firstOrNull { it.value.lastError != null }?.let { " (✗ ${it.key.label}: ${it.value.lastError})" } ?: "")
         status["News"] = (news.lastError?.let { "✗ $it" } ?: "✓ ${n?.items?.size ?: 0} items") +

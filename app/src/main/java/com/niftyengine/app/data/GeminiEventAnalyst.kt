@@ -25,6 +25,8 @@ class GeminiException(val code: Int, message: String, val retryAfterSec: Long = 
  * It is deliberately not a predictor: the schema has no buy/sell/call/put or NIFTY-level fields, the prompt
  * forbids them, and any extra fields in the reply are dropped. Direction probabilities remain the job of the
  * deterministic engine, which also checks Gemini's reading against the market's actual reaction.
+ * v5: Gemini also reports how the expected outcome's probability changed and an `expectationShift`, which feeds the
+ * Future Expectation Engine (what the market expects, not what it is doing).
  */
 class GeminiEventAnalyst(
     private val apiKey: String,
@@ -65,6 +67,9 @@ class GeminiEventAnalyst(
             appendLine("Separate what the market EXPECTED from what ACTUALLY happened. Expected news is not new news.")
             appendLine("Take expectations from the articles (polls, consensus, 'expected to', market pricing). If none is stated, estimate cautiously and lower confidence.")
             appendLine("Do not invent facts beyond the articles. Rumours stay rumours until confirmed by an authoritative source.")
+            appendLine("Markets trade the FUTURE. For each event answer: what was the market expecting, how likely was it (market pricing),")
+            appendLine("what is the new information, and has the probability of the expected outcome changed? Report the updated probability")
+            appendLine("in expectedProbability and how much the market's expected future moved in expectationShift.")
             appendLine()
             appendLine("Lifecycle stages: RUMOUR (unverified reports), POSSIBLE (being considered), LIKELY (probable, not done), EXPECTED (scheduled/consensus outcome awaited),")
             appendLine("CONFIRMED (outcome is fact), DEVELOPING (ongoing, new facts), ESCALATING (getting bigger/worse), RESOLVING (de-escalating/being settled), RESOLVED (over).")
@@ -91,6 +96,7 @@ class GeminiEventAnalyst(
  "surprise": -1..1 (actual vs expected for Indian equities; 0 if as expected or unknown),
  "duration": one of [SHORT,MEDIUM,LONG], "persistence": 0..1, "escalationRisk": 0..1, "confidence": 0..1,
  "horizonWeights": {"M5_15":0..1,"M30_120":0..1,"EOD":0..1,"D1_3":0..1,"W1_2":0..1} (relative relevance per horizon),
+ "expectationShift": -1..1 (how much THIS new information moved the market's expected future for Indian equities vs what was expected before it; 0 = nothing new, negative = expectations deteriorated),
  "mergeWith": [ids from the active list that are the same event], "rationale": one sentence}""")
         }
 
@@ -141,6 +147,7 @@ class GeminiEventAnalyst(
                     horizonWeights = hw,
                     mergeWith = list("mergeWith").filter { it in activeIds && it != id },
                     rationale = o.optString("rationale").take(240),
+                    expectationShift = num(o, "expectationShift", Double.NaN, -1.0, 1.0),
                 )
             }
             return out

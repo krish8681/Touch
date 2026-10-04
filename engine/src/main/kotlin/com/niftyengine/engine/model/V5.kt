@@ -401,6 +401,8 @@ data class ShadowPosition(
     val shockLevel: String,
     val decision: String,
     val lastMarkAt: Long = 0L,
+    /** NIFTY at the last mark. */
+    val lastSpot: Double = Double.NaN,
     /** Best / worst per-unit P&L seen while open. */
     val mfe: Double = 0.0,
     val mae: Double = 0.0,

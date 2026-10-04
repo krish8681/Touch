@@ -46,6 +46,7 @@ fun DashboardScreen(ui: UiState) {
         SpotChart(ui.chart)
     }
     if (o.dataQuality.circuitBreaker.isNotEmpty()) DataErrorBanner(o)
+    DecisionStateCard(o)
     o.gift?.let { GiftCard(it, o.signals["GIFT Nifty"]) }
     // Direction (calibrated probabilities when available, otherwise clearly labelled model scores)
     val hp = d.decisionProbs(o.expectedMove.horizonMinutes)
@@ -75,7 +76,7 @@ fun DashboardScreen(ui: UiState) {
                 Label("${d.confidence} (%.0f%%)".format(d.confidenceValue * 100), color = confColor(d.confidence), size = 16.sp, weight = FontWeight.Bold)
             }
             Column(Modifier.weight(1f)) {
-                Label("REGIME", color = C.dim, size = 10.sp)
+                Label("STRUCTURE REGIME", color = C.dim, size = 10.sp)
                 Label(o.regime.regime.label, color = regimeColor(o.regime.regime.bias), size = 16.sp, weight = FontWeight.Bold)
             }
         }
@@ -84,6 +85,10 @@ fun DashboardScreen(ui: UiState) {
             o.regime.reasons.take(4).forEach { Label("• $it", color = C.dim, size = 11.sp) }
         }
     }
+    ScenarioCard(o)
+    RegimeV5Card(o)
+    ExpectationCard(o)
+    ShockCard(o)
     // Expected move
     Card("Expected move") {
         val m = o.expectedMove
@@ -109,9 +114,11 @@ fun DashboardScreen(ui: UiState) {
             }
         }
     }
-    NewsSummaryCard(o, ui.analystStatus)
+    StrategyRiskCard(o)
+    QualityCard(o)
     DecisionCard(o)
-    o.options.best?.let { Card("Option outcome model") { CandidateSummary(it) } }
+    NewsSummaryCard(o, ui.analystStatus)
+    o.options.best?.let { Card("Option outcome model · best single strike") { CandidateSummary(it) } }
     DataQualityCard(o)
     Card("Driver agreement") {
         KV("Agreement", "%.0f%%".format(d.driverAgreement * 100), if (d.driverAgreement > 0.7) C.green else C.amber)
@@ -138,7 +145,7 @@ fun DecisionCard(o: EngineOutput) {
         Decision.TRADE -> C.green; Decision.PAPER_TRADE -> C.blue; Decision.WAIT -> C.amber
         Decision.NO_TRADE -> C.red; Decision.DATA_ERROR -> C.red
     }
-    Card("Decision") {
+    Card("Decision checks") {
         Label(dec.decision.name.replace('_', ' '), color = col, size = 24.sp, weight = FontWeight.Bold)
         Label(dec.headline, color = C.white, size = 12.sp)
         Spacer(Modifier.height(6.dp))
@@ -150,7 +157,7 @@ fun DecisionCard(o: EngineOutput) {
             }
         }
         Spacer(Modifier.height(6.dp))
-        if (dec.decision == Decision.PAPER_TRADE) Label("Every check passed except probability calibration. Paper-trade and let the log build outcomes; don't use real money yet.",
+        if (dec.decision == Decision.PAPER_TRADE) Label("Every check passed except probability calibration. It is executed in shadow mode so the log builds outcomes; don't use real money yet.",
             color = C.blue, size = 10.sp, mono = false)
         Label("Decision support only — not investment advice. Until calibrated, probabilities are model scores, not proven frequencies.",
             color = C.dim, size = 9.sp, mono = false)
@@ -220,7 +227,8 @@ fun OptionsScreen(ui: UiState) {
         KV("Days to expiry", "%.2f".format(oa.daysToExpiry))
         oa.notes.forEach { Label("• $it", color = C.amber, size = 11.sp) }
     }
-    oa.best?.let { Card("Best candidate") { CandidateSummary(it) } }
+    StrategyCandidatesCard(o)
+    oa.best?.let { Card("Best single strike") { CandidateSummary(it) } }
     o.signals["Options"]?.let { SignalCard(it) }
     Card("Ranked candidates") {
         TableHeader("Strike" to 1.3f, "Prem" to 0.9f, "Δ" to 0.7f, "P(pr)" to 0.8f, "EV%" to 0.9f, "Score" to 0.9f)
@@ -243,6 +251,7 @@ fun OptionsScreen(ui: UiState) {
 fun MarketScreen(ui: UiState) {
     val o = ui.output ?: return EmptyState(ui)
     val hw = o.heavyweights
+    RelativeStateCard(o)
     Card("Heavyweight contribution") {
         if (hw.fakeBreadth) Label("⚠ INDEX MOVE CARRIED BY HEAVYWEIGHTS — BREADTH WEAK", color = C.red, size = 11.sp, weight = FontWeight.Bold)
         KV("Total", "%+.1f pts".format(hw.totalContributionPts), C.signed(hw.totalContributionPts, 0.5))
@@ -292,8 +301,9 @@ fun NewsSummaryCard(o: EngineOutput, analystStatus: String) {
         Label(analystStatus, color = C.dim, size = 10.sp, mono = false)
         val top = o.events.filter { abs(it.effectiveImpact) > 0.01 || "MARKET_DISAGREES" in it.flags }.take(3)
         top.forEach { e ->
-            Label("• ${e.stage.label} · ${e.title.take(70)} — unpriced %.0f%%%s".format(e.unpriced * 100,
-                if ("MARKET_DISAGREES" in e.flags) " · market disagrees" else ""), color = C.text, size = 10.sp, mono = false)
+            // headlines often contain '%' ("Nifty falls 1%") — never put them inside a format pattern
+            Label("• ${e.stage.label} · ${e.title.take(70)} — " + "unpriced %.0f%%".format(e.unpriced * 100) +
+                (if ("MARKET_DISAGREES" in e.flags) " · market disagrees" else ""), color = C.text, size = 10.sp, mono = false)
         }
     }
 }

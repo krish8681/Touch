@@ -21,6 +21,9 @@ import com.niftyengine.app.data.GeminiException
 import com.niftyengine.app.store.AppJson
 import com.niftyengine.engine.engines.CalibrationModel
 import com.niftyengine.engine.engines.EventTrackerState
+import com.niftyengine.engine.engines.BaselineState
+import com.niftyengine.engine.model.ShadowBook
+import com.niftyengine.app.store.PrettyJson
 import com.niftyengine.engine.model.EventAnalysis
 import com.niftyengine.engine.engines.HistoricalReplayEngine
 import com.niftyengine.engine.engines.ProbabilityCalibrator
@@ -131,6 +134,10 @@ class EngineController(private val app: Application) {
     private var analystLastError: String? = null
     private val budgetPrefs = app.getSharedPreferences("gemini_budget", android.content.Context.MODE_PRIVATE)
     private val eventStateFile = File(app.filesDir, "events-live.json")
+    /** v5: rolling relative baselines (live data only) and the shadow book (kept apart for simulator vs live). */
+    private val baselinesFile = File(app.filesDir, "baselines-live.json")
+    private fun shadowFile(mode: DataMode = _settings.value.mode) =
+        File(app.filesDir, if (mode == DataMode.SIMULATED) "shadow-sim.json" else "shadow-live.json")
     private var cyclesSinceSave = 0
     private var provider: SnapshotProvider = makeProvider()
     private var loop: Job? = null
@@ -143,6 +150,7 @@ class EngineController(private val app: Application) {
         start() // first cycle runs on the engine thread after the initial load below
         scope.launch(engineThread) {
             loadEventState()
+            loadV5State()
             refitCalibration()
             refreshStats()
         }
@@ -291,19 +299,52 @@ class EngineController(private val app: Application) {
         runCatching { engine.eventIntel.importState(AppJson.decodeFromString<EventTrackerState>(eventStateFile.readText())) }
     }
 
-    private fun saveEventState(force: Boolean = false) {
-        if (_settings.value.mode == DataMode.SIMULATED) return
+    /** [mode] = the data family the CURRENT engine belongs to (on a mode switch, settings already hold the new one). */
+    private fun saveEventState(force: Boolean = false, mode: DataMode = _settings.value.mode) {
         if (!force && ++cyclesSinceSave < 5) return
         cyclesSinceSave = 0
+        saveV5State(mode)
+        if (mode == DataMode.SIMULATED) return
+        runCatching { writeAtomic(eventStateFile, AppJson.encodeToString(EventTrackerState.serializer(), engine.eventIntel.exportState())) }
+    }
+
+    private fun writeAtomic(f: File, text: String) {
+        val tmp = File(f.parentFile, f.name + ".tmp")
+        tmp.writeText(text)
+        tmp.renameTo(f)
+    }
+
+    /** v5 memory: baselines (live only — the simulator rebuilds its own) and the shadow book of the current data family. */
+    private fun loadV5State(mode: DataMode = _settings.value.mode) {
+        if (mode != DataMode.SIMULATED && baselinesFile.exists())
+            runCatching { engine.baselines.importState(AppJson.decodeFromString<BaselineState>(baselinesFile.readText())) }
+        val sf = shadowFile(mode)
+        if (sf.exists()) runCatching { engine.shadow.importState(AppJson.decodeFromString<ShadowBook>(sf.readText())) }
+    }
+
+    private fun saveV5State(mode: DataMode = _settings.value.mode) {
         runCatching {
-            val tmp = File(eventStateFile.parentFile, eventStateFile.name + ".tmp")
-            tmp.writeText(AppJson.encodeToString(EventTrackerState.serializer(), engine.eventIntel.exportState()))
-            tmp.renameTo(eventStateFile)
+            if (mode != DataMode.SIMULATED) writeAtomic(baselinesFile, AppJson.encodeToString(BaselineState.serializer(), engine.baselines.exportState()))
+            writeAtomic(shadowFile(mode), AppJson.encodeToString(ShadowBook.serializer(), engine.shadow.exportState()))
         }
     }
 
-    /** Persist event memory now (service teardown / engine stop). */
+    /** Persist event memory, baselines and the shadow book now (service teardown / engine stop). */
     fun persist() { scope.launch(engineThread) { saveEventState(force = true) } }
+
+    /** Clear the shadow book of the current data family (open positions and history). */
+    fun resetShadow() = scope.launch(engineThread) {
+        engine.shadow.importState(ShadowBook())
+        saveV5State()
+    }
+
+    /** The latest decision object as pretty JSON (spec keys), for sharing. */
+    fun exportDecisionFile(): File? {
+        val ds = _ui.value.output?.decisionState ?: return null
+        val f = File(app.filesDir, "decision-state.json")
+        f.writeText(PrettyJson.encodeToString(com.niftyengine.engine.model.DecisionState.serializer(), ds))
+        return f
+    }
 
     /** 19 — refit the probability calibrator from logged outcomes and hand it to the engine. */
     fun refitCalibration() {
@@ -351,11 +392,16 @@ class EngineController(private val app: Application) {
 
     private fun rebuildEngine(old: AppSettings, new: AppSettings) {
         run {
-            // Keep the event memory when only thresholds change; start clean when switching data family.
-            val keep = if (old.mode != new.mode) null else engine.eventIntel.exportState()
-            if (old.mode != new.mode) saveEventState(force = true)
+            // Keep the event memory, baselines and shadow book when only thresholds change; switch files when the data family changes.
+            val sameFamily = old.mode == new.mode
+            val keep = if (!sameFamily) null else engine.eventIntel.exportState()
+            val keepBase = if (!sameFamily) null else engine.baselines.exportState()
+            val keepShadow = if (!sameFamily) null else engine.shadow.exportState()
+            if (!sameFamily) saveEventState(force = true, mode = old.mode)
             engine = NiftyDirectionEngine(new.engineConfig())
             if (keep != null) engine.eventIntel.importState(keep) else if (new.mode != DataMode.SIMULATED) loadEventState()
+            if (keepBase != null && keepShadow != null) { engine.baselines.importState(keepBase); engine.shadow.importState(keepShadow) }
+            else loadV5State(new.mode)
             if (old.mode != new.mode) { provider = makeProvider(); path.clear(); _ui.update { it.copy(chart = emptyList(), output = null) } }
             refitCalibration()
             refreshStats()

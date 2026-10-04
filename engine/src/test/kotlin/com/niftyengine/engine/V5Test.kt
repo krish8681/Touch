@@ -358,6 +358,15 @@ class V5Test {
         emergency.update(ctx(t11 + 60_000L, ch0, dataError = true))
         assertTrue(emergency.current.closed.single().reason.startsWith("EMERGENCY"))
 
+        // simulator restart: the clock goes back to 09:15 — the old position is closed at its own last mark, not re-priced
+        val restart = ShadowTrader()
+        restart.update(ctx(t11, ch0, Decision.PAPER_TRADE))
+        restart.update(ctx(t11 - 90 * 60_000L, chain(spot, 13.0, t11, priceMult = 3.0)))
+        val stale = restart.current.closed.single()
+        assertEquals("SESSION END", stale.reason)
+        assertEquals(t11, stale.closedAt)
+        assertTrue(stale.pnl < 0, "closed at its own (bid) mark, not at the unrelated new chain: $stale")
+
         val off = ShadowTrader(enabled = false)
         off.update(ctx(t11, ch0, Decision.TRADE))
         assertTrue(off.current.open.isEmpty())
