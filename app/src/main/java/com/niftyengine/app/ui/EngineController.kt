@@ -132,6 +132,8 @@ class EngineController(private val app: Application) {
     private var analystNextAllowed = 0L
     private var analystLastOk = 0L
     private var analystLastError: String? = null
+    /** Consecutive Gemini server errors (5xx / overloaded) — drives the back-off. */
+    private var analystServerErrors = 0
     private val budgetPrefs = app.getSharedPreferences("gemini_budget", android.content.Context.MODE_PRIVATE)
     private val eventStateFile = File(app.filesDir, "events-live.json")
     /** v5: rolling relative baselines (live data only) and the shadow book (kept apart for simulator vs live). */
@@ -217,18 +219,26 @@ class EngineController(private val app: Application) {
         path.addLast(Triple(o.timestamp, o.spot, snap.optionChain))
         while (path.isNotEmpty() && path.first().first < o.timestamp - 75 * 60_000L) path.removeFirst()
 
-        // Log one prediction per 5-minute bucket while the session is open (and on every decision change).
+        // Log one prediction per 5-minute bucket while the session is open, plus one whenever an ACTIONABLE decision
+        // starts or ends. (Logging every WAIT↔NO TRADE flip wrote ~20 near-identical rows in 28 min — correlated
+        // duplicates that over-weight one stretch of the day in calibration.)
         val bucket = o.timestamp / (5 * 60_000L)
         val sessionOpen = Session.isOpen(o.timestamp)
-        if (sessionOpen && (bucket != lastLoggedBucket || o.decision.decision != lastDecision)) {
+        fun actionable(d: Decision?) = d == Decision.TRADE || d == Decision.PAPER_TRADE
+        val actionChange = o.decision.decision != lastDecision && (actionable(o.decision.decision) || actionable(lastDecision))
+        if (sessionOpen && (bucket != lastLoggedBucket || actionChange)) {
             logger.record(o, s.auditConfig()); lastLoggedBucket = bucket
         }
-        val changed = logger.evaluate(o.timestamp) { r ->
+        // Outcomes: the in-memory path (spot + the selected option's price) first; where it has a gap — the app was
+        // restarted or killed — the session's completed 1-minute NIFTY bars fill it (close known at bar start + 60 s).
+        var changed = logger.evaluate(o.timestamp) { r ->
             path.filter { it.first > r.timestamp }.map { (t, spot, chain) ->
                 val leg = chain?.rows?.firstOrNull { it.strike == r.strike }?.let { if (r.optionType == "CE") it.call else it.put }
                 PredictionLogger.PricePoint(t, spot, leg?.ltp ?: Double.NaN)
             }
         }
+        val bars = snap.nifty.intraday.filter { it.t + 60_000L <= o.timestamp }.map { PredictionLogger.PricePoint(it.t + 60_000L, it.c) }
+        if (bars.isNotEmpty()) changed += logger.evaluate(o.timestamp) { r -> bars.filter { it.t > r.timestamp } }
         if (changed > 0) predictionStore.flush()
         if (changed > 0 && System.currentTimeMillis() - lastFit > 10 * 60_000L) refitNow()
         if (s.recordSessions && s.mode != DataMode.SIMULATED && sessionOpen) runCatching { recorder.record(snap) }
@@ -284,10 +294,18 @@ class EngineController(private val app: Application) {
                 // stamped when the analysis became AVAILABLE (point-in-time), not when it was requested
                 val arrived = System.currentTimeMillis()
                 analysesQueue.addAll(res.map { it.copy(analyzedAt = maxOf(it.analyzedAt, arrived)) })
-                analystLastOk = System.currentTimeMillis(); analystLastError = null
+                analystLastOk = System.currentTimeMillis(); analystLastError = null; analystServerErrors = 0
             } catch (e: GeminiException) {
                 analystLastError = e.message
                 if (e.retryAfterSec > 0) analystNextAllowed = System.currentTimeMillis() + e.retryAfterSec * 1000L
+                if (e.code in 500..599) {
+                    // "model is experiencing high demand": back off 2, 4, 8 … 30 min instead of retrying every minute
+                    // (the first live day spent 100 of 200 daily calls on 503s and AI-read one event).
+                    analystServerErrors++
+                    val waitMin = minOf(30L, 1L shl analystServerErrors.coerceAtMost(5))
+                    analystNextAllowed = maxOf(analystNextAllowed, System.currentTimeMillis() + waitMin * 60_000L)
+                    analystLastError = "${e.message} — retry in ${waitMin} min"
+                }
                 if (e.modelUnavailable) {
                     // Retired model: switch to the one the API names (else the newest flash this key lists), keep it in Setup.
                     val next = e.replacementModel ?: runCatching { GeminiEventAnalyst.latestFlash(s.geminiApiKey) }.getOrNull()

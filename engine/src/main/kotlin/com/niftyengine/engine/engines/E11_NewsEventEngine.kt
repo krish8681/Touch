@@ -92,7 +92,7 @@ class NewsEventEngine {
     private val typeRules: List<Pair<EventType, Regex>> = listOf(
         // A bare "RBI" mention is not monetary policy ("…new CEO after RBI approval", "RBI penalises bank"): policy wording required.
         EventType.RBI_POLICY to Regex("repo rate|reverse repo|monetary policy|\\bmpc\\b|policy rate|\\bcrr\\b|\\bslr\\b|malhotra|" +
-            "\\b(rbi|reserve bank)('s)? (policy|governor|rate|keeps|cuts|hikes|raises|holds|leaves|stance|liquidity)|" +
+            "\\b(rbi|reserve bank)('s)? (policy|rate|keeps|cuts|hikes|raises|holds|leaves|stance|liquidity)|" +
             "rate (cut|hike)s?\\b.{0,40}\\b(rbi|reserve bank)\\b|\\b(rbi|reserve bank)\\b.{0,40}rate (cut|hike)"),
         EventType.FED to Regex("\\bfed\\b|fomc|federal reserve|powell|rate cut.*us|us rate"),
         EventType.INFLATION to Regex("inflation|\\bcpi\\b|\\bwpi\\b|consumer price"),
@@ -178,10 +178,11 @@ class NewsEventEngine {
                 Regex("rises|higher|accelerat|jumps|surges").containsMatchIn(text) -> -0.6
                 else -> direction
             }
+            // Whole words: the bare substring "cut" matched "exeCUTive", "prosecuted", "execution" (read as a rate cut).
             EventType.RBI_POLICY, EventType.FED -> direction = when {
-                Regex("cut|dovish|easing|liquidity infusion").containsMatchIn(text) -> 0.7
-                Regex("hike|hawkish|tighten").containsMatchIn(text) -> -0.7
-                Regex("unchanged|hold|holds|status quo|pause").containsMatchIn(text) -> 0.0
+                Regex("\\b(cuts?|dovish|easing|liquidity infusion)\\b").containsMatchIn(text) -> 0.7
+                Regex("\\b(hikes?|hiked|hawkish|tighten\\w*)\\b").containsMatchIn(text) -> -0.7
+                Regex("\\b(unchanged|hold|holds|status quo|pause)\\b").containsMatchIn(text) -> 0.0
                 else -> direction
             }
             EventType.CURRENCY -> if (Regex("rupee").containsMatchIn(text)) direction = when {
@@ -198,7 +199,7 @@ class NewsEventEngine {
         val surpriseDir = when (type) {
             EventType.INFLATION -> -surprise
             EventType.GROWTH -> surprise
-            EventType.RBI_POLICY, EventType.FED -> if (text.contains("cut")) surprise else -surprise
+            EventType.RBI_POLICY, EventType.FED -> if (Regex("\\bcuts?\\b").containsMatchIn(text)) surprise else -surprise
             else -> 0.0
         }
         if (surpriseDir != 0.0) direction = M.clamp(0.4 * direction + 0.6 * M.squash(surpriseDir, 0.25))

@@ -70,17 +70,39 @@ object RuleEventAnalyzer {
         EventType.MARKET, EventType.OTHER -> listOf(MarketChannel.RISK_SENTIMENT)
     }
 
-    fun stageOf(title: String, summary: String = ""): EventStage {
+    fun stageOf(title: String, summary: String = ""): EventStage = cuedStage(title, summary) ?: EventStage.CONFIRMED
+
+    /** The stage an article's wording states, or null when it states none. */
+    fun cuedStage(title: String, summary: String = ""): EventStage? {
         val head = title.lowercase()
         if (preview.containsMatchIn(head) && !outcomeVerb.containsMatchIn(head)) return EventStage.EXPECTED
         val t = (title + " " + summary).lowercase()
-        return stageRules.firstOrNull { it.second.containsMatchIn(t) }?.first ?: EventStage.CONFIRMED
+        return stageRules.firstOrNull { it.second.containsMatchIn(t) }?.first
+    }
+
+    /** Scheduled decisions / data releases: an article about them that states no outcome is commentary, not the outcome. */
+    private val scheduled = setOf(EventType.RBI_POLICY, EventType.FED, EventType.INFLATION, EventType.GROWTH, EventType.US_DATA)
+
+    /**
+     * v5.1.3 — the stage of the whole cluster (not just its newest article, which made a big cluster flip
+     * Expected↔Confirmed on every new article, each flip re-scored as fresh unpriced news):
+     *  • the newest article that STATES a stage decides; articles that state none change nothing;
+     *  • once an outcome is known (Confirmed or later) a later preview/possibility article cannot turn it back;
+     *  • no article states a stage: commentary on a scheduled event ⇒ EXPECTED (flagged [commentary]); else CONFIRMED.
+     * @return the stage and whether it is commentary (no stated stage on a scheduled event).
+     */
+    fun clusterStage(items: List<NewsItem>, type: EventType): Pair<EventStage, Boolean> {
+        val cued = items.sortedBy { it.publishedAt }.mapNotNull { cuedStage(it.title, it.summary) }
+        if (cued.isEmpty()) return if (type in scheduled) EventStage.EXPECTED to true else EventStage.CONFIRMED to false
+        val latest = cued.last()
+        val known = cued.lastOrNull { it.outcomeKnown }
+        return (if (!latest.outcomeKnown && known != null) known else latest) to false
     }
 
     fun analyze(rules: NewsEventEngine, eventId: String, items: List<NewsItem>, now: Long, series: List<Candle>, prevClose: Double, last: Double): EventAnalysis {
         val ne = rules.buildEvent(items.sortedBy { it.publishedAt }, now, series, prevClose, last)
         val latest = items.maxBy { it.publishedAt }
-        val stage = stageOf(latest.title, latest.summary)
+        val (stage, commentary) = clusterStage(items, ne.type)
         val text = items.joinToString(" ") { it.title + " " + it.summary }.lowercase()
         val matches: Boolean? = when {
             ne.expected != "–" && ne.actual != "–" -> ne.expected == ne.actual
@@ -91,7 +113,8 @@ object RuleEventAnalyzer {
         val dirSign = sign(ne.direction)
         return EventAnalysis(
             eventId = eventId, analyzedAt = now, source = "rules", title = latest.title, eventType = ne.type, stage = stage,
-            severity = ne.magnitude, direction = ne.direction, affectedSectors = ne.sectors,
+            // commentary (a speech, an opinion, a former official's remark) is not the scheduled decision itself
+            severity = if (commentary) ne.magnitude * 0.5 else ne.magnitude, direction = ne.direction, affectedSectors = ne.sectors,
             affectedStocks = Constituents.DEFAULT.filter { text.contains(it.symbol.lowercase()) }.map { it.symbol },
             channels = channelsFor(ne.type),
             expectedOutcome = if (ne.expected != "–") "expected ${ne.expected}" else "",
@@ -103,7 +126,7 @@ object RuleEventAnalyzer {
             persistence = when (ne.duration) { EventDuration.SHORT -> 0.3; EventDuration.MEDIUM -> 0.5; EventDuration.LONG -> 0.8 },
             escalationRisk = if (ne.type == EventType.GEOPOLITICS) 0.4 else 0.1,
             confidence = ne.confidence * 0.8,
-            rationale = "keyword rules",
+            rationale = if (commentary) "keyword rules [commentary — no outcome stated]" else "keyword rules",
         )
     }
 }
@@ -182,8 +205,10 @@ class EventIntelligenceEngine(private val rules: NewsEventEngine = NewsEventEngi
         for (a in fresh) {
             articles[a.id] = a
             val toks = eventTokens(a.title)
+            // Match against the event's founding headline, not the union of every article it absorbed: a growing token bag
+            // snowballs (one "event" swallowed 143 RBI-related articles from 65 sources in the first live run).
             val target = events.values.filter { now - it.lastInfoAt < 3 * 86_400_000L && it.stage != EventStage.RESOLVED }
-                .map { it to similarity(it.tokens.toSet(), toks) }.filter { it.second >= 0.35 }.maxByOrNull { it.second }?.first
+                .map { it to similarity(identity(it), toks) }.filter { it.second >= 0.35 }.maxByOrNull { it.second }?.first
             if (target != null) {
                 events[target.id] = target.copy(
                     articleIds = target.articleIds + a.id, sources = (target.sources + a.source).distinct(),
@@ -195,7 +220,7 @@ class EventIntelligenceEngine(private val rules: NewsEventEngine = NewsEventEngi
                 val id = "E" + Integer.toHexString(a.id.hashCode()).uppercase().padStart(8, '0')
                 events[id] = TrackedEvent(
                     id = id, title = a.title, type = EventType.OTHER, firstSeen = a.publishedAt, lastInfoAt = a.publishedAt,
-                    articleIds = listOf(a.id), sources = listOf(a.source), tokens = toks.toList(), stage = EventStage.CONFIRMED,
+                    articleIds = listOf(a.id), sources = listOf(a.source), tokens = toks.toList(), seedTokens = toks.toList(), stage = EventStage.CONFIRMED,
                     stageHistory = emptyList(), expectations = emptyList(), analysis = null,
                     baseline = baselineAt(a.publishedAt),
                 )
@@ -272,6 +297,9 @@ class EventIntelligenceEngine(private val rules: NewsEventEngine = NewsEventEngi
         return (words + bigrams).toSet()
     }
 
+    /** Identity tokens of an event (events stored before v5.1.3: their first tokens are the founding headline's). */
+    private fun identity(e: TrackedEvent): Set<String> = e.seedTokens.ifEmpty { e.tokens.take(16) }.toSet()
+
     private fun similarity(a: Set<String>, b: Set<String>): Double {
         if (a.isEmpty() || b.isEmpty()) return 0.0
         val wa = a.filter { '_' !in it }.toSet(); val wb = b.filter { '_' !in it }.toSet()
@@ -295,7 +323,7 @@ class EventIntelligenceEngine(private val rules: NewsEventEngine = NewsEventEngi
         val (keep, drop) = if (ea.firstSeen <= eb.firstSeen) ea to eb else eb to ea
         events[keep.id] = keep.copy(
             articleIds = (keep.articleIds + drop.articleIds).distinct(), sources = (keep.sources + drop.sources).distinct(),
-            tokens = (keep.tokens + drop.tokens).distinct().take(80),
+            tokens = (keep.tokens + drop.tokens).distinct().take(80), seedTokens = keep.seedTokens.ifEmpty { keep.tokens.take(16) },
             stageHistory = (keep.stageHistory + drop.stageHistory).sortedBy { it.t },
             expectations = (keep.expectations + drop.expectations).sortedBy { it.t },
             lastInfoAt = maxOf(keep.lastInfoAt, drop.lastInfoAt),

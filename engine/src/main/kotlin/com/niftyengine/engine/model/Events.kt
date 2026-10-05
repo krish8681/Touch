@@ -159,6 +159,8 @@ data class TrackedEvent(
     val effectiveImpact: Double = 0.0,
     val horizonImpacts: Map<NewsHorizon, Double> = emptyMap(),
     val flags: List<String> = emptyList(),
+    /** v5.1.3: the founding headline's tokens — the event's identity for matching new articles (never grows). */
+    val seedTokens: List<String> = emptyList(),
 )
 
 /** Work item for the event analyst (Gemini): an event whose articles changed since it was last analysed. */

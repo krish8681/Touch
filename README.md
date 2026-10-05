@@ -1,4 +1,4 @@
-# NIFTY Direction Engine v5.1.2 — Android
+# NIFTY Direction Engine v5.1.3 — Android
 
 A **NIFTY market-intelligence, probability and trade-selection engine** for Android. v5 replaces
 "indicators → score → direction → option" with a decision pipeline that asks, in order:
@@ -14,8 +14,19 @@ A **NIFTY market-intelligence, probability and trade-selection engine** for Andr
 > optima. The app never places real orders: approved decisions are executed in **shadow mode** (virtual trades) so the
 > whole pipeline can be measured before any money is risked.
 
-**Install:** `release/NiftyDirectionEngine-v5.1.2.apk` (Android 8.0+, sideload / "install unknown apps"). Installs over v4.x / v5.x
+**Install:** `release/NiftyDirectionEngine-v5.1.3.apk` (Android 8.0+, sideload / "install unknown apps"). Installs over v4.x / v5.x
 (same signing key). It opens in **Simulator** mode (synthetic data, works offline/after hours). Switch to live data in **Setup**.
+
+## v5.1.3 — fixes from the first full live session (5 Oct 2026)
+
+| Seen on the device | Cause | Fix |
+|---|---|---|
+| One "event" with **143 articles from 65 sources**, stage flipping Expected↔Confirmed ~25 times, each flip re-scored as fresh 100 %-unpriced news (News driver +0.38) | New articles were matched against the union of every title the event had absorbed (up to 80 tokens) — a snowball; the rule stage came from the newest article only | Articles match the event's **founding headline**; the rule stage comes from the whole cluster — the newest article that *states* a stage decides, and an outcome once known is never undone by a later preview |
+| "Fed's Hammack says…", "Former RBI Governor…" read as confirmed central-bank decisions with 60 % surprise | No outcome wording ⇒ default CONFIRMED | Commentary on a scheduled event (RBI/Fed/inflation/GDP/US data) with no outcome stated is EXPECTED at half severity |
+| "…new CEO" (chief **execut**ive) read as a **rate cut** (+0.70) | Direction rule matched the substring `cut` | Whole-word matching (cut/cuts, hike/hiked, hold…) |
+| 30-min outcomes missing ("…") for 12:29–12:56 after the app was down 12:57–13:26 | Outcomes priced only from the in-memory path, lost on restart | Gaps are filled from the session's completed 1-minute NIFTY bars (point-in-time: close known at bar start + 60 s) |
+| ~20 log rows in 28 min (WAIT↔NO TRADE flips) | Every decision change was logged | One row per 5 min, plus one when an actionable decision (TRADE / PAPER TRADE) starts or ends |
+| Gemini **503 high demand**: 101 of 200 daily calls used, 1 event AI-read | Retried every minute | Server errors back off 2→4→8…30 min |
 
 ## v5.1.2 — fixes from the first live (Kite) run
 
