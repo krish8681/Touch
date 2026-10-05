@@ -350,7 +350,7 @@ object PredictionAudit {
             if (r.snapshotId.isBlank()) problems += "no snapshot id"
             val tolMs = ((if (r.pitToleranceSec.isNaN()) 0.0 else r.pitToleranceSec) * 1000).toLong()
             r.inputTimestamps.filter { it.value > r.timestamp + tolMs }.forEach { (k, t) ->
-                problems += "input $k stamped %.0fs after the decision time".format((t - r.timestamp) / 1000.0)
+                problems += "input %s stamped %.0fs after the decision time".format(k, (t - r.timestamp) / 1000.0)
             }
         }
         val seen = HashSet<Int>()

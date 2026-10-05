@@ -161,7 +161,7 @@ private fun TextButtonLike(label: String, onClick: () -> Unit) =
     Text(label, color = C.blue, fontSize = 12.sp, modifier = Modifier.padding(top = 6.dp).clickable { onClick() })
 
 @Composable
-private fun AuditDetail(r: com.niftyengine.engine.engines.PredictionRecord) {
+internal fun AuditDetail(r: com.niftyengine.engine.engines.PredictionRecord) {
     Column(Modifier.fillMaxWidth().padding(start = 8.dp, bottom = 8.dp)) {
         KV("Prediction ID", r.id)
         KV("Engine / source", "${r.engineVersion.ifBlank { "≤3.1" }} · ${r.source}")
@@ -181,15 +181,15 @@ private fun AuditDetail(r: com.niftyengine.engine.engines.PredictionRecord) {
             Label("Inputs: " + r.inputTimestamps.entries.joinToString(" · ") { "${it.key} ${if (it.value > 0) Session.hhmm(it.value) else "–"}" },
                 color = C.dim, size = 9.sp)
             r.pitViolations.forEach { Label("  rejected: $it", color = C.amber, size = 9.sp) }
-            KV("Used B/b/R", "%.1f / %.1f / %.1f (${r.calibrationLevel.lowercase()})".format(r.usedPBull * 100, r.usedPBear * 100, r.usedPRange * 100) +
+            KV("Used B/b/R", "%.1f / %.1f / %.1f (%s)".format(r.usedPBull * 100, r.usedPBear * 100, r.usedPRange * 100, r.calibrationLevel.lowercase()) +
                 if (r.calibrationFittedAt > 0) " · fit " + Session.hhmm(r.calibrationFittedAt) else "")
-            KV("Model health", if (r.modelHealth.isNaN()) "–" else "%.0f · ${r.healthTier}".format(r.modelHealth))
+            KV("Model health", if (r.modelHealth.isNaN()) "–" else "%.0f · %s".format(r.modelHealth, r.healthTier))
         }
         KV("Raw score B/b/R", "%.1f / %.1f / %.1f".format(r.pBull * 100, r.pBear * 100, r.pRange * 100))
         if (r.calibrated) KV("Calibrated B/b/R", "%.1f / %.1f / %.1f".format(r.calPBull * 100, r.calPBear * 100, r.calPRange * 100))
         KV("Composite / conflict", "%+.3f / %.0f%%".format(r.directionalScore, r.conflict * 100))
         KV("Regime", r.regime + if (r.regimeReasons.isNotEmpty()) " — " + r.regimeReasons.joinToString("; ") else "")
-        KV("Expected move / σ", "%+.0f / %.0f pts (${r.horizonMinutes}m)".format(r.expectedMove, r.sigma))
+        KV("Expected move / σ", "%+.0f / %.0f pts (%dm)".format(r.expectedMove, r.sigma, r.horizonMinutes))
         KV("Data quality", if (r.dataQuality.isNaN()) "–" else "%.0f%%".format(r.dataQuality * 100))
         r.circuitBreaker.forEach { Label("  breaker: $it", color = C.red, size = 10.sp) }
         if (r.drivers.isNotEmpty()) {
@@ -201,31 +201,33 @@ private fun AuditDetail(r: com.niftyengine.engine.engines.PredictionRecord) {
         }
         if (r.signals.isNotEmpty()) {
             Label("ENGINE SIGNALS", color = C.dim, size = 9.sp)
-            r.signals.forEach { (k, v) -> Label("  $k %+.2f (conf %.2f) %s".format(v.score, v.confidence, v.tags.take(3).joinToString(" ")), color = C.text, size = 10.sp) }
+            r.signals.forEach { (k, v) -> Label("  %s %+.2f (conf %.2f) %s".format(k, v.score, v.confidence, v.tags.take(3).joinToString(" ")), color = C.text, size = 10.sp) }
         }
         if (!r.strike.isNaN()) KV("Option", "%.0f %s @ %.2f · P(profit) %.0f%% · EV net %+.2f (gross %+.2f, cost %.2f)".format(
             r.strike, r.optionType, r.premium, r.probProfit * 100, r.optionNetEv, r.optionGrossEv, r.optionCost))
         if (r.failedChecks.isNotEmpty()) Label("Failed: " + r.failedChecks.joinToString("; "), color = C.amber, size = 10.sp)
         if (r.feedStatus.isNotEmpty()) Label("Feeds: " + r.feedStatus.entries.joinToString("; ") { "${it.key} ${it.value.substringBefore(" ·")}" }, color = C.dim, size = 9.sp)
         if (r.outcomes.isNotEmpty()) Label("Outcomes: " + r.outcomes.joinToString { o ->
-            "${o.minutes}m %+.0f (%s)%s".format(o.move, when (o.realized) { 1 -> "bull"; -1 -> "bear"; else -> "range" },
+            "%dm %+.0f (%s)%s".format(o.minutes, o.move, when (o.realized) { 1 -> "bull"; -1 -> "bear"; else -> "range" },
                 if (o.optionPrice.isNaN()) "" else " opt %.1f".format(o.optionPrice)) +
                 if (o.attachedAt > 0) " · price " + Session.hhmm(o.lastPriceAt) + ", attached " + Session.hhmm(o.attachedAt) else ""
         }, color = C.text, size = 10.sp)
-        if (r.newsHorizons.isNotEmpty()) Label("News by horizon: " + r.newsHorizons.entries.joinToString { "${it.key} %+.2f".format(it.value) }, color = C.text, size = 10.sp)
+        if (r.newsHorizons.isNotEmpty()) Label("News by horizon: " + r.newsHorizons.entries.joinToString { "%s %+.2f".format(it.key, it.value) }, color = C.text, size = 10.sp)
         r.events.forEach { e ->
-            Label("  event ${e.id} [${e.stage}/${e.source}] sev %.2f surprise %+.2f unpriced %.0f%% reaction %+.2f conf %.2f → %+.3f %s · ${e.title.take(60)}"
-                .format(e.severity, e.surprise, e.unpriced * 100, e.reactionAgreement, e.confidence, e.effectiveImpact, e.flags.joinToString(" ")),
+            // headlines contain '%' ("rises 0.5% from…"): text goes in as an ARGUMENT, never into the pattern (v5.1.2 crash)
+            Label("  event %s [%s/%s] sev %.2f surprise %+.2f unpriced %.0f%% reaction %+.2f conf %.2f → %+.3f %s · %s"
+                .format(e.id, e.stage, e.source, e.severity, e.surprise, e.unpriced * 100, e.reactionAgreement, e.confidence, e.effectiveImpact,
+                    e.flags.joinToString(" "), e.title.take(60)),
                 color = C.text, size = 9.sp)
         }
         if (r.primaryRegime.isNotBlank()) {
-            KV("v5 regime / quality", "${r.primaryRegime} · %.0f%%".format(r.regimeQuality * 100))
-            KV("Expectation / Δ / state", "%+.2f / %+.2f / ${r.expectationState}".format(r.expectation, r.expectationChange))
+            KV("v5 regime / quality", "%s · %.0f%%".format(r.primaryRegime, r.regimeQuality * 100))
+            KV("Expectation / Δ / state", "%+.2f / %+.2f / %s".format(r.expectation, r.expectationChange, r.expectationState))
             KV("Information shock", "%.0f%% (dir %+.2f)".format(r.shockScore * 100, r.shockDirection))
-            if (r.scenarioProbs.isNotEmpty()) KV("Scenarios (raw)", r.scenarioProbs.entries.joinToString(" ") { "${it.key.lowercase()} %.0f".format(it.value * 100) })
-            KV("Strategy / quality", "${r.strategy} ${r.instrument} · %.0f%% ${r.qualityTier}".format(r.tradeQuality * 100))
-            if (!r.strategyEv.isNaN()) KV("Strategy P(profit) / EV", "%.0f%% / %+.2f · risk ${if (r.riskApproved) "approved ${r.lots} lot(s)" else "blocked"}"
-                .format(r.strategyProbProfit * 100, r.strategyEv))
+            if (r.scenarioProbs.isNotEmpty()) KV("Scenarios (raw)", r.scenarioProbs.entries.joinToString(" ") { "%s %.0f".format(it.key.lowercase(), it.value * 100) })
+            KV("Strategy / quality", "%s %s · %.0f%% %s".format(r.strategy, r.instrument, r.tradeQuality * 100, r.qualityTier))
+            if (!r.strategyEv.isNaN()) KV("Strategy P(profit) / EV", "%.0f%% / %+.2f · risk %s"
+                .format(r.strategyProbProfit * 100, r.strategyEv, if (r.riskApproved) "approved ${r.lots} lot(s)" else "blocked"))
         }
         if (r.config.isNotEmpty()) Label("Config: " + r.config.entries.joinToString(" ") { "${it.key}=${it.value}" }, color = C.dim, size = 9.sp)
     }

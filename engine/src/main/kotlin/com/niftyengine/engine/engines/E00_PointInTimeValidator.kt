@@ -107,6 +107,6 @@ class PointInTimeValidator(
 
     companion object {
         fun describe(v: PitViolation): String =
-            "${v.input} stamped ${Session.hhmm(v.asOf)} — %.0fs after the decision time (${v.action})".format(v.aheadSec)
+            "%s stamped %s — %.0fs after the decision time (%s)".format(v.input, Session.hhmm(v.asOf), v.aheadSec, v.action)
     }
 }

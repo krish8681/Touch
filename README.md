@@ -1,4 +1,4 @@
-# NIFTY Direction Engine v5.1.3 — Android
+# NIFTY Direction Engine v5.1.4 — Android
 
 A **NIFTY market-intelligence, probability and trade-selection engine** for Android. v5 replaces
 "indicators → score → direction → option" with a decision pipeline that asks, in order:
@@ -14,8 +14,15 @@ A **NIFTY market-intelligence, probability and trade-selection engine** for Andr
 > optima. The app never places real orders: approved decisions are executed in **shadow mode** (virtual trades) so the
 > whole pipeline can be measured before any money is risked.
 
-**Install:** `release/NiftyDirectionEngine-v5.1.3.apk` (Android 8.0+, sideload / "install unknown apps"). Installs over v4.x / v5.x
+**Install:** `release/NiftyDirectionEngine-v5.1.4.apk` (Android 8.0+, sideload / "install unknown apps"). Installs over v4.x / v5.x
 (same signing key). It opens in **Simulator** mode (synthetic data, works offline/after hours). Switch to live data in **Setup**.
+
+## v5.1.4 — crash fix
+
+Opening a row in **Log → prediction log** (the audit trail) crashed the app (`MissingFormatArgumentException: '% f'`,
+moto g34, 5 Oct 21:24): an event headline containing `%` ("…rises 0.5% from…") was placed inside a format pattern. All
+text in the audit trail now goes in as a format *argument*. New UI test renders the audit trail of a real logged record
+and of one with `%` in every text field (fails on v5.1.3, passes now).
 
 ## v5.1.3 — fixes from the first full live session (5 Oct 2026)
 

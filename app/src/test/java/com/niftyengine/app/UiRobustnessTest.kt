@@ -94,4 +94,33 @@ class UiRobustnessTest {
             }
         }
     }
+
+    /**
+     * v5.1.2 crashed on the device when a Log row was opened: a headline with '%' ("% f") went into a format pattern in
+     * the audit trail. Render the audit trail of a REAL logged record, then the same record with hostile text everywhere.
+     */
+    @Test fun auditTrailSurvivesPercentInEveryTextField() {
+        val snap = cases().getValue("headline with %")
+        val out = NiftyDirectionEngine(EngineConfig(requireMarketOpen = false)).process(snap)
+        val real = com.niftyengine.engine.engines.PredictionLogger(com.niftyengine.engine.engines.InMemoryPredictionStore()).record(out)
+        val pct = "Nifty rises 0.5% from lows, % f %s %d 100% %"
+        val hostile = real.copy(
+            regime = "RANGE %s", regimeReasons = listOf(pct), failedChecks = listOf(pct), circuitBreaker = listOf(pct),
+            feedStatus = mapOf(pct to pct), pitViolations = listOf(pct), instrument = pct, strategy = "BUY_CALL %d",
+            expectationState = pct, healthTier = pct, calibrationLevel = pct, primaryRegime = pct, qualityTier = pct,
+            criticalData = pct, snapshotId = pct, inputTimestamps = mapOf(pct to 1L), config = mapOf(pct to pct),
+            signals = mapOf(pct to com.niftyengine.engine.engines.SignalAudit(0.1, 0.5, listOf(pct))),
+            newsHorizons = mapOf(pct to 0.1), scenarioProbs = mapOf(pct to 0.2),
+            events = listOf(com.niftyengine.engine.engines.EventAudit("E1 %s", pct, "CONFIRMED %", "gemini:% f", 0.9, 0.4, 0.6, 0.4, 0.6,
+                0.1, 0.5, 0.05, mapOf(pct to 0.1), listOf(pct))),
+            outcomes = listOf(com.niftyengine.engine.engines.Outcome(30, 22_500.0, 20.0, 22_510.0, 22_480.0, realized = 1)),
+            strategyEv = 1.0, strategyProbProfit = 0.6, strike = 22_500.0, optionType = "CE %", premium = 50.0,
+        )
+        var current by androidx.compose.runtime.mutableStateOf<com.niftyengine.engine.engines.PredictionRecord?>(null)
+        compose.setContent { current?.let { r -> NiftyTheme { Column(Modifier.fillMaxWidth().background(C.bg)) { com.niftyengine.app.ui.AuditDetail(r) } } } }
+        for ((name, r) in listOf("real record (% headlines)" to real, "hostile text" to hostile)) {
+            try { compose.runOnIdle { current = r }; compose.waitForIdle() }
+            catch (e: Throwable) { throw AssertionError("audit trail crashed on $name: $e", e) }
+        }
+    }
 }
