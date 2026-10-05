@@ -28,11 +28,12 @@ class DataQualityEngine(
         val LIMITS = mapOf(
             "NIFTY" to Limits(120.0, 600.0), "Futures" to Limits(180.0, 900.0), "Options" to Limits(240.0, 900.0),
             "India VIX" to Limits(300.0, 1200.0), "Constituents" to Limits(240.0, 900.0), "Sectors" to Limits(300.0, 1200.0),
-            "NIFTY bars" to Limits(300.0, 1800.0),
+            "NIFTY bars" to Limits(300.0, 1800.0), "Monthly options" to Limits(300.0, 1800.0),
         )
         private val WEIGHTS = mapOf(
             "NIFTY" to 20.0, "Futures" to 15.0, "Options" to 15.0, "India VIX" to 10.0, "Constituents" to 10.0,
             "Sectors" to 5.0, "NIFTY bars" to 5.0, "Global" to 8.0, "FPI/DII" to 4.0, "News" to 5.0, "Macro" to 3.0, "GIFT Nifty" to 3.0,
+            "Monthly options" to 5.0, "FII derivatives" to 4.0, "Valuation" to 2.0,
         )
         /** Max useful age (days) of slow macro values, by release frequency. */
         val MACRO_MAX_AGE_DAYS = mapOf(
@@ -43,10 +44,10 @@ class DataQualityEngine(
 
         /** Which engine signals each feed powers (used to drop/down-weight stale drivers). */
         val SIGNALS_BY_FEED = mapOf(
-            "Futures" to listOf("Futures"), "Options" to listOf("Options"), "India VIX" to listOf("India VIX"),
+            "Futures" to listOf("Futures"), "India VIX" to listOf("India VIX"),
             "Constituents" to listOf("Heavyweights", "Breadth"), "Sectors" to listOf("Sectors"),
-            "Global" to listOf("Global risk"), "FPI/DII" to listOf("FPI/DII"), "News" to listOf("News"),
-            "NIFTY bars" to listOf("Market structure"), "GIFT Nifty" to listOf("GIFT Nifty"),
+            "Global" to listOf("Global risk"), "News" to listOf("News"),
+            "NIFTY bars" to listOf("Price structure"), "GIFT Nifty" to listOf("GIFT Nifty"),
         )
 
         fun factor(st: FeedStatus) = when (st) {
@@ -69,13 +70,17 @@ class DataQualityEngine(
     /**
      * @param prevSpot spot from the previous cycle (NaN if none), [prevT] its time — used for jump detection.
      */
+    /**
+     * Instant against which data ages are measured. Market closed (evening, weekend, exchange holiday): the newest
+     * critical timestamp of the last session, so a feed lagging the others is still caught. (No holiday calendar:
+     * on a weekday holiday during market hours old data correctly reads as STALE — nothing trades anyway.)
+     */
+    fun refTime(s: MarketSnapshot, now: Long): Long = if (Session.isOpen(now)) now else listOfNotNull(s.nifty.asOf, s.optionChain?.asOf, s.futures?.asOf)
+        .filter { it in 1..now && now - it < 5 * 86_400_000L }.maxOrNull() ?: referenceTime(now)
+
     fun assess(s: MarketSnapshot, now: Long, prevSpot: Double, prevT: Long): DataQualityReport {
         val open = Session.isOpen(now)
-        // Market closed (evening, weekend, exchange holiday): judge every feed against the newest critical
-        // timestamp of the last session, so a feed lagging the others is still caught. (No holiday calendar:
-        // on a weekday holiday during market hours old data correctly reads as STALE — nothing trades anyway.)
-        val ref = if (open) now else listOfNotNull(s.nifty.asOf, s.optionChain?.asOf, s.futures?.asOf)
-            .filter { it in 1..now && now - it < 5 * 86_400_000L }.maxOrNull() ?: referenceTime(now)
+        val ref = refTime(s, now)
         val feeds = ArrayList<FeedQuality>()
         val breaker = ArrayList<String>()
         val warnings = ArrayList<String>()
@@ -189,6 +194,21 @@ class DataQualityEngine(
                 feeds += FeedQuality("GIFT Nifty", st, "NSE IX", gn.asOf, ageM * 60, false, "%.1f (%+.2f%%)".format(gn.last, gn.changePct))
             }
         }
+        // ---- monthly chain (H3), FII participant OI and valuation (daily)
+        s.monthlyChain.let { mc ->
+            if (mc == null || mc.rows.isEmpty()) feeds += FeedQuality("Monthly options", FeedStatus.MISSING, "-", 0, Double.NaN, false, "no monthly chain")
+            else timed("Monthly options", mc.asOf, s.source, false, if (mc.expiryMillis < now) "expired chain" else null, "exp ${mc.expiry}")
+        }
+        fun daily(name: String, asOf: Long, src: String, detail: String) {
+            val ageD = if (asOf > 0) (now - asOf) / 86_400_000.0 else Double.NaN
+            val st = when { ageD.isNaN() -> FeedStatus.DEGRADED; ageD <= 4 -> FeedStatus.LIVE; ageD <= 7 -> FeedStatus.DEGRADED; else -> FeedStatus.STALE }
+            feeds += FeedQuality(name, st, src, asOf, ageD * 86400, false, detail)
+        }
+        s.fiiDerivatives?.let { daily("FII derivatives", it.asOf, it.source, "${it.days.size} days · latest ${it.days.lastOrNull()?.date ?: "?"}") }
+            ?: run { feeds += FeedQuality("FII derivatives", FeedStatus.MISSING, "NSE", 0, Double.NaN, false) }
+        s.valuation?.let { daily("Valuation", it.asOf, it.source, "P/E %.1f".format(it.pe)) }
+            ?: run { feeds += FeedQuality("Valuation", FeedStatus.MISSING, "NSE", 0, Double.NaN, false) }
+
         // ---- news
         val newest = s.news.filter { it.publishedAt <= now }.maxOfOrNull { it.publishedAt }
         if (newest == null) feeds += FeedQuality("News", FeedStatus.MISSING, "RSS", 0, Double.NaN, false)

@@ -124,9 +124,9 @@ fun FlowChips(items: List<Pair<String, Color>>) {
 
 /** Horizontal probability bar. */
 @Composable
-fun ProbBar(label: String, p: Double, color: Color) {
+fun ProbBar(label: String, p: Double, color: Color, labelWidth: Int = 62) {
     Row(Modifier.fillMaxWidth().padding(vertical = 3.dp), verticalAlignment = Alignment.CenterVertically) {
-        Label(label, color = C.dim, size = 12.sp, weight = FontWeight.Bold, modifier = Modifier.width(62.dp))
+        Label(label, color = C.dim, size = if (labelWidth > 62) 11.sp else 12.sp, weight = FontWeight.Bold, modifier = Modifier.width(labelWidth.dp))
         Box(Modifier.weight(1f).height(14.dp).clip(RoundedCornerShape(7.dp)).background(C.s2)) {
             Box(Modifier.fillMaxHeight().fillMaxWidth(p.toFloat().coerceIn(0f, 1f)).clip(RoundedCornerShape(7.dp)).background(color))
         }
@@ -237,5 +237,47 @@ fun TableHeader(vararg cols: Pair<String, Float>) {
 fun TableRow(vararg cols: Triple<String, Float, Color>) {
     Row(Modifier.fillMaxWidth().padding(vertical = 2.dp), horizontalArrangement = Arrangement.Start) {
         cols.forEach { (t, w, c) -> Label(t, color = c, size = 11.sp, modifier = Modifier.weight(w), maxLines = 1) }
+    }
+}
+
+fun dirColor(d: com.niftyengine.engine.model.Direction) = when (d) {
+    com.niftyengine.engine.model.Direction.BULLISH -> C.green
+    com.niftyengine.engine.model.Direction.BEARISH -> C.red
+    com.niftyengine.engine.model.Direction.NEUTRAL -> C.amber
+}
+
+/** Row of selectable horizon chips. */
+@OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
+@Composable
+fun HorizonPicker(
+    selected: com.niftyengine.engine.model.HorizonId,
+    options: List<com.niftyengine.engine.model.HorizonId> = com.niftyengine.engine.model.HorizonId.values().toList(),
+    onSelect: (com.niftyengine.engine.model.HorizonId) -> Unit,
+) {
+    androidx.compose.foundation.layout.FlowRow(Modifier.fillMaxWidth().padding(bottom = 6.dp)) {
+        options.forEach { h ->
+            val sel = h == selected
+            Box(
+                Modifier.padding(end = 6.dp, bottom = 6.dp).clip(RoundedCornerShape(8.dp))
+                    .background(if (sel) C.green.copy(alpha = 0.15f) else C.s2)
+                    .border(1.dp, if (sel) C.green else C.b1, RoundedCornerShape(8.dp))
+                    .clickable { onSelect(h) }.padding(horizontal = 10.dp, vertical = 6.dp),
+            ) { Label(h.short, color = if (sel) C.green else C.text, size = 11.sp, weight = FontWeight.Bold) }
+        }
+    }
+}
+
+/** Stacked bullish / neutral / bearish bar with labels. */
+@Composable
+fun TriBar(bull: Double, neutral: Double, bear: Double) {
+    Row(Modifier.fillMaxWidth().height(16.dp).clip(RoundedCornerShape(8.dp)).background(C.s2)) {
+        if (bull > 0.001) Box(Modifier.weight(bull.toFloat()).fillMaxHeight().background(C.green))
+        if (neutral > 0.001) Box(Modifier.weight(neutral.toFloat()).fillMaxHeight().background(C.amber.copy(alpha = 0.7f)))
+        if (bear > 0.001) Box(Modifier.weight(bear.toFloat()).fillMaxHeight().background(C.red))
+    }
+    Row(Modifier.fillMaxWidth().padding(top = 2.dp)) {
+        Label("↑ %.0f%%".format(bull * 100), color = C.green, size = 11.sp, weight = FontWeight.Bold, modifier = Modifier.weight(1f))
+        Label("→ %.0f%%".format(neutral * 100), color = C.amber, size = 11.sp, modifier = Modifier.weight(1f))
+        Label("↓ %.0f%%".format(bear * 100), color = C.red, size = 11.sp, weight = FontWeight.Bold)
     }
 }

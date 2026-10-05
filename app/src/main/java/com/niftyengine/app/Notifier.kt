@@ -17,9 +17,10 @@ class Notifier(private val ctx: Context) {
     fun trade(o: EngineOutput) {
         if (Build.VERSION.SDK_INT >= 33 &&
             ContextCompat.checkSelfPermission(ctx, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) return
-        val d = o.direction
-        val text = "%s · Bull %.0f%% / Bear %.0f%% · %s conf · move %+.0f pts".format(
-            o.regime.regime.label, d.pBull * 100, d.pBear * 100, d.confidence.name, o.expectedMove.expectedMovePoints)
+        val m = o.master
+        val text = "%s · master %s %.0f%% · %s · conf %s · event risk %s".format(
+            o.regime.regime.label, m.direction.label, m.probability * 100, m.alignmentLabel, m.confidence.name, m.eventRisk.label) +
+            (o.decision.candidate?.let { "\n" + it.rationale } ?: "")
         val pi = PendingIntent.getActivity(ctx, 0, Intent(ctx, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP),
             PendingIntent.FLAG_IMMUTABLE)
         val n = NotificationCompat.Builder(ctx, CHANNEL)

@@ -16,6 +16,7 @@ import androidx.core.content.ContextCompat
 import com.niftyengine.app.ui.UiState
 import com.niftyengine.app.ui.inActiveWindow
 import com.niftyengine.engine.core.Session
+import com.niftyengine.engine.model.HorizonId
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -88,8 +89,9 @@ class EngineService : Service() {
         val o = ui.output
         val window = if (inActiveWindow(System.currentTimeMillis())) "" else " · market closed, checking every 5 min"
         if (o == null) return (ui.error?.let { "⚠ $it" } ?: "Starting…") + window
-        val d = o.direction
-        return "%.0f · Bull %.0f%% / Bear %.0f%% · %s%s".format(o.spot, d.pBull * 100, d.pBear * 100,
+        val dirs = o.horizons.filter { it.id in listOf(HorizonId.M60, HorizonId.WEEKLY, HorizonId.MONTHLY) }
+            .joinToString(" ") { "${it.id.short.take(2)} ${it.direction.arrow}%.0f%%".format(it.probability * 100) }
+        return "%.0f · %s · %s · %s%s".format(o.spot, dirs, o.master.alignmentLabel.substringBefore(" ·"),
             if (ui.lastUpdate > 0) "updated ${Session.hhmm(ui.lastUpdate)}" else "", window)
     }
 

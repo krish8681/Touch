@@ -45,15 +45,16 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.niftyengine.app.store.AppSettings
 import com.niftyengine.app.ui.C
 import com.niftyengine.app.ui.DashboardScreen
-import com.niftyengine.app.ui.DriversScreen
+import com.niftyengine.app.ui.EventsScreen
+import com.niftyengine.app.ui.ExpiryScreen
+import com.niftyengine.app.ui.HorizonsScreen
 import com.niftyengine.app.ui.Label
 import com.niftyengine.app.ui.LogScreen
 import com.niftyengine.app.ui.EngineController
 import com.niftyengine.app.ui.MarketScreen
-import com.niftyengine.app.ui.NewsScreen
 import com.niftyengine.app.ui.NiftyTheme
-import com.niftyengine.app.ui.OptionsScreen
 import com.niftyengine.app.ui.SettingsScreen
+import com.niftyengine.app.ui.StrategyScreen
 
 class MainActivity : ComponentActivity() {
     private val vm: EngineController get() = (application as NiftyApp).controller
@@ -69,8 +70,8 @@ class MainActivity : ComponentActivity() {
     private val notifPermission = registerForActivityResult(ActivityResultContracts.RequestPermission()) { }
 
     private enum class Tab(val icon: String, val label: String) {
-        HOME("◉", "Home"), DRIVERS("≡", "Drivers"), OPTIONS("◈", "Options"), MARKET("▤", "Market"),
-        NEWS("✉", "News"), LOG("◷", "Log"), SETTINGS("⚙", "Setup")
+        HOME("◉", "Home"), HORIZONS("≡", "Horizons"), EXPIRY("◎", "Expiry"), STRATEGY("◈", "Strategy"), MARKET("▤", "Market"),
+        EVENTS("✉", "Events"), LOG("◷", "Log"), SETTINGS("⚙", "Setup")
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -118,10 +119,11 @@ class MainActivity : ComponentActivity() {
                     Column(Modifier.weight(1f).fillMaxWidth().verticalScroll(scroll).padding(horizontal = 12.dp, vertical = 10.dp)) {
                         when (tab) {
                             Tab.HOME -> DashboardScreen(ui)
-                            Tab.DRIVERS -> DriversScreen(ui)
-                            Tab.OPTIONS -> OptionsScreen(ui)
+                            Tab.HORIZONS -> HorizonsScreen(ui)
+                            Tab.EXPIRY -> ExpiryScreen(ui)
+                            Tab.STRATEGY -> StrategyScreen(ui)
                             Tab.MARKET -> MarketScreen(ui)
-                            Tab.NEWS -> NewsScreen(ui)
+                            Tab.EVENTS -> EventsScreen(ui)
                             Tab.LOG -> LogScreen(ui, vm, onExport = ::exportLog, onShare = ::shareFile)
                             Tab.SETTINGS -> SettingsScreen(settings, onSave = { vm.updateSettings(it); tab = Tab.HOME }, onKiteLogin = ::startKiteLogin)
                         }
@@ -131,7 +133,7 @@ class MainActivity : ComponentActivity() {
                             val sel = t == tab
                             Column(Modifier.weight(1f).clickable { tab = t }, horizontalAlignment = Alignment.CenterHorizontally) {
                                 Text(t.icon, color = if (sel) C.green else C.dim, fontSize = 18.sp)
-                                Text(t.label, color = if (sel) C.green else C.dim, fontSize = 9.sp, fontWeight = FontWeight.SemiBold)
+                                Text(t.label, color = if (sel) C.green else C.dim, fontSize = 8.sp, fontWeight = FontWeight.SemiBold, maxLines = 1)
                             }
                         }
                     }
@@ -194,8 +196,8 @@ private fun TopBar(source: String, running: Boolean, busy: Boolean, error: Strin
             }
             Spacer(Modifier.width(10.dp))
             Column(Modifier.weight(1f)) {
-                Label("NIFTY Direction Engine", color = C.white, size = 14.sp, weight = FontWeight.Bold, mono = false)
-                Label("v4.3.1 · $source", color = C.dim, size = 9.sp, maxLines = 1)
+                Label("NIFTY Three-Horizon Engine", color = C.white, size = 14.sp, weight = FontWeight.Bold, mono = false)
+                Label("v5.0 · $source", color = C.dim, size = 9.sp, maxLines = 1)
             }
             Box(Modifier.size(8.dp).clip(CircleShape).background(if (busy) C.amber else if (running) C.green else C.dim))
             Spacer(Modifier.width(12.dp))

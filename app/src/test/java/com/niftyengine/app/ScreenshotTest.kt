@@ -11,11 +11,12 @@ import com.niftyengine.app.store.AppSettings
 import com.niftyengine.app.ui.C
 import com.niftyengine.app.ui.ChartPoint
 import com.niftyengine.app.ui.DashboardScreen
-import com.niftyengine.app.ui.DriversScreen
+import com.niftyengine.app.ui.EventsScreen
+import com.niftyengine.app.ui.ExpiryScreen
+import com.niftyengine.app.ui.HorizonsScreen
 import com.niftyengine.app.ui.MarketScreen
-import com.niftyengine.app.ui.NewsScreen
 import com.niftyengine.app.ui.NiftyTheme
-import com.niftyengine.app.ui.OptionsScreen
+import com.niftyengine.app.ui.StrategyScreen
 import com.niftyengine.app.ui.SettingsScreen
 import com.niftyengine.app.ui.StatsCard
 import com.niftyengine.app.ui.UiState
@@ -42,7 +43,8 @@ class ScreenshotTest {
         var out = engine.process(sim.collect(0))
         repeat(150) {
             out = engine.process(sim.collect(0))
-            chart += ChartPoint(out.timestamp, out.spot, out.direction.pBull, out.direction.pBear)
+            val h = out.horizon(com.niftyengine.engine.model.HorizonId.M60)!!
+            chart += ChartPoint(out.timestamp, out.spot, h.bull, h.bear)
         }
         return UiState(output = out, running = true, chart = chart)
     }
@@ -56,10 +58,11 @@ class ScreenshotTest {
     @Test fun screens() {
         val ui = state()
         shot("1_home") { DashboardScreen(ui) }
-        shot("2_drivers") { DriversScreen(ui) }
-        shot("3_options") { OptionsScreen(ui) }
-        shot("4_market") { MarketScreen(ui) }
-        shot("5_news") { NewsScreen(ui) }
+        shot("2_horizons") { HorizonsScreen(ui) }
+        shot("3_expiry") { ExpiryScreen(ui) }
+        shot("4_strategy") { StrategyScreen(ui) }
+        shot("5_market") { MarketScreen(ui) }
+        shot("5b_events") { EventsScreen(ui) }
         shot("7_settings") { SettingsScreen(AppSettings(), {}, {}) }
         val sim = SimulatedMarket(seed = 21, startDate = LocalDate.of(2026, 9, 29))
         val snaps = List(370) { sim.collect(0) }

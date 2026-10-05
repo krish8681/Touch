@@ -35,19 +35,18 @@ class LiveFeedTest {
             giftNifty = gift,
         )
         val out = NiftyDirectionEngine().process(snap)
-        println("Bull %.2f Bear %.2f Range %.2f conf %s regime %s".format(out.direction.pBull, out.direction.pBear, out.direction.pRange,
-            out.direction.confidence, out.regime.regime))
+        out.horizons.forEach { h -> println("%-9s %s %.0f%% score %+.1f σ %.0f cov %.0f%% conf %s".format(h.id.short, h.direction, h.probability * 100, h.score, h.sigmaPts, h.coverage * 100, h.confidence)) }
+        println("master ${out.master.direction} ${out.master.alignmentLabel} conf ${out.master.confidence} regime ${out.regime.regime}")
         println("Heavyweights: %+.1f pts, adv %d dec %d, weights=%s".format(out.heavyweights.totalContributionPts,
             out.heavyweights.advancers, out.heavyweights.decliners, out.heavyweights.weightsSource))
         out.heavyweights.rows.take(5).forEach { println("  ${it.symbol} %.2f%% wt, %+.2f%% → %+.1f pts".format(it.weightPct, it.changePct, it.contributionPts)) }
         out.signals.values.forEach { s -> println(s.name + ": " + "%+.2f (conf %.2f) ".format(s.score, s.confidence) + s.tags + " " + s.details.joinToString { it.key + "=" + it.value }) }
-        println("Move: ${out.expectedMove}")
-        println("Best option: ${out.options.best}")
+        println("Weekly: ${out.weekly?.let { "S ${it.support?.strike} R ${it.resistance?.strike} pin ${it.pin?.strike} ${it.regime}" }}")
+        println("Best structure: ${out.strategies.best?.title}")
         println("Decision: ${out.decision.headline} ${out.decision.reasons}")
         println("GIFT report: ${out.gift}")
         println("Data quality %.0f%% breaker=${out.dataQuality.circuitBreaker}".format(out.dataQuality.score * 100))
         out.dataQuality.feeds.forEach { println("  " + it.name + ": " + it.status + " age=" + "%.0fs ".format(it.ageSeconds) + it.detail) }
-        println("Horizons: ${out.direction.horizons}")
-        println("Best option net: ${out.options.best?.let { "EV gross %.2f cost %.2f net %.2f".format(it.grossExpectedValue, it.costPerUnit, it.expectedValue) }}")
+        println("Best structure net: ${out.strategies.best?.let { "EV gross %.2f cost %.2f net %.2f".format(it.expectedPnlGross, it.costPerUnit, it.expectedPnl) }}")
     }
 }

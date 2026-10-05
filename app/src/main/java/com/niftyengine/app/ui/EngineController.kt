@@ -50,6 +50,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
 
+/** Spot path with the 1-hour bull/bear probabilities (for the strip under the chart). */
 data class ChartPoint(val t: Long, val spot: Double, val pBull: Double, val pBear: Double)
 
 data class ReplayState(
@@ -71,11 +72,11 @@ data class UiState(
     val cycles: Int = 0,
     val chart: List<ChartPoint> = emptyList(),
     val stats: List<PerformanceStats.Summary> = emptyList(),
+    val strategyStats: PerformanceStats.StrategySummary? = null,
     val records: List<PredictionRecord> = emptyList(),
     val sessions: List<File> = emptyList(),
     val replay: ReplayState = ReplayState(),
     val calibration: CalibrationInfo = CalibrationInfo(),
-    val optionCalibrationSamples: Int = 0,
     /** Event-analyst status line (Gemini or rules fallback). */
     val analystStatus: String = "",
     val backtest: BacktestState = BacktestState(),
@@ -114,7 +115,9 @@ class EngineController(private val app: Application) {
     private val _ui = MutableStateFlow(UiState())
     val ui: StateFlow<UiState> = _ui
 
-    private val predictionStore = JsonlPredictionStore(File(app.filesDir, "predictions.jsonl"))
+    /** v5 records (six horizons) live in their own file; v4 single-horizon logs are left untouched. */
+    private val predictionStore = JsonlPredictionStore(File(app.filesDir, "predictions-v5.jsonl"), maxRecords = 4000)
+    private var lastFlush = 0L
     private val logger = PredictionLogger(predictionStore)
     private val recorder = SessionRecorder(File(app.filesDir, "sessions"))
     private val notifier = Notifier(app)
@@ -136,8 +139,10 @@ class EngineController(private val app: Application) {
     private var loop: Job? = null
     private var lastLoggedBucket = -1L
     private var lastDecision: Decision? = null
-    /** Recent spot + chain history used to attach outcomes to logged predictions. */
+    /** Recent spot + weekly chain history used to attach outcomes to logged predictions (≥ 3 h for the 3-hour horizon). */
     private val path = ArrayDeque<Triple<Long, Double, OptionChain?>>()
+    /** NIFTY closes by date (from daily history + the live close) for close / expiry outcomes. */
+    private val closes = HashMap<java.time.LocalDate, Double>()
 
     init {
         start() // first cycle runs on the engine thread after the initial load below
@@ -150,7 +155,7 @@ class EngineController(private val app: Application) {
 
     private fun makeProvider(): SnapshotProvider = when (_settings.value.mode) {
         DataMode.SIMULATED -> SimulatedMarket(seed = System.currentTimeMillis() / 86_400_000L)
-        else -> LiveSnapshotProvider(File(app.cacheDir, "kite")) { _settings.value }
+        else -> LiveSnapshotProvider(File(app.cacheDir, "kite"), app.filesDir) { _settings.value }
     }
 
     fun start() {
@@ -179,7 +184,9 @@ class EngineController(private val app: Application) {
         _ui.update { it.copy(busy = true) }
         try {
             val out = withContext(engineThread) {
-                val raw = withContext(Dispatchers.IO) { provider.collect(System.currentTimeMillis()) }
+                val collected = withContext(Dispatchers.IO) { provider.collect(System.currentTimeMillis()) }
+                // The simulator has no access to Setup: give it the user's event calendar too.
+                val raw = if (_settings.value.mode == DataMode.SIMULATED) collected.copy(calendar = _settings.value.calendar()) else collected
                 val delivered = generateSequence { analysesQueue.poll() }.toList()
                 val snap = if (delivered.isEmpty()) raw else raw.copy(eventAnalyses = delivered)
                 val o = engine.process(snap)
@@ -188,7 +195,8 @@ class EngineController(private val app: Application) {
                 o
             }
             _ui.update { s ->
-                val chart = (s.chart + ChartPoint(out.timestamp, out.spot, out.direction.pBull, out.direction.pBear))
+                val h1 = out.horizon(com.niftyengine.engine.model.HorizonId.M60)
+                val chart = (s.chart + ChartPoint(out.timestamp, out.spot, h1?.bull ?: 0.0, h1?.bear ?: 0.0))
                     .filter { Session.zdt(it.t).toLocalDate() == Session.zdt(out.timestamp).toLocalDate() }.takeLast(400)
                 s.copy(output = out, error = null, lastUpdate = System.currentTimeMillis(), cycles = s.cycles + 1, chart = chart)
             }
@@ -205,7 +213,11 @@ class EngineController(private val app: Application) {
     private fun afterCycle(snap: MarketSnapshot, o: EngineOutput) {
         val s = _settings.value
         path.addLast(Triple(o.timestamp, o.spot, snap.optionChain))
-        while (path.isNotEmpty() && path.first().first < o.timestamp - 75 * 60_000L) path.removeFirst()
+        while (path.isNotEmpty() && path.first().first < o.timestamp - 200 * 60_000L) path.removeFirst()
+        snap.nifty.daily.forEach { c -> closes[Session.zdt(c.t).toLocalDate()] = c.c }
+        val z = Session.zdt(o.timestamp)
+        if (!Session.isOpen(o.timestamp) && z.dayOfWeek.value <= 5 && !z.toLocalTime().isBefore(Session.CLOSE) &&
+            snap.nifty.asOf > 0 && Session.zdt(snap.nifty.asOf).toLocalDate() == z.toLocalDate()) closes[z.toLocalDate()] = o.spot
 
         // Log one prediction per 5-minute bucket while the session is open (and on every decision change).
         val bucket = o.timestamp / (5 * 60_000L)
@@ -213,13 +225,12 @@ class EngineController(private val app: Application) {
         if (sessionOpen && (bucket != lastLoggedBucket || o.decision.decision != lastDecision)) {
             logger.record(o, s.auditConfig()); lastLoggedBucket = bucket
         }
-        val changed = logger.evaluate(o.timestamp) { r ->
-            path.filter { it.first > r.timestamp }.map { (t, spot, chain) ->
-                val leg = chain?.rows?.firstOrNull { it.strike == r.strike }?.let { if (r.optionType == "CE") it.call else it.put }
-                PredictionLogger.PricePoint(t, spot, leg?.ltp ?: Double.NaN)
-            }
+        val pricePath = path.map { (t, spot, chain) ->
+            PredictionLogger.PricePoint(t, spot, chain?.rows?.flatMap { r -> listOf("${r.strike}|CE" to r.call.ltp, "${r.strike}|PE" to r.put.ltp) }?.toMap() ?: emptyMap())
         }
-        if (changed > 0) predictionStore.flush()
+        val changed = logger.evaluate(o.timestamp, pricePath, closes)
+        // The log is rewritten on flush: batch outcome updates (every 10 min, and on stop).
+        if (changed > 0 && System.currentTimeMillis() - lastFlush > 10 * 60_000L) { predictionStore.flush(); lastFlush = System.currentTimeMillis() }
         if (changed > 0 && System.currentTimeMillis() - lastFit > 10 * 60_000L) refitCalibration()
         if (s.recordSessions && s.mode != DataMode.SIMULATED && sessionOpen) runCatching { recorder.record(snap) }
         val alert = o.decision.decision == Decision.TRADE || o.decision.decision == Decision.PAPER_TRADE
@@ -303,7 +314,7 @@ class EngineController(private val app: Application) {
     }
 
     /** Persist event memory now (service teardown / engine stop). */
-    fun persist() { scope.launch(engineThread) { saveEventState(force = true) } }
+    fun persist() { scope.launch(engineThread) { saveEventState(force = true); predictionStore.flush() } }
 
     /** 19 — refit the probability calibrator from logged outcomes and hand it to the engine. */
     fun refitCalibration() {
@@ -311,14 +322,15 @@ class EngineController(private val app: Application) {
         calibration = fit
         engine.calibration = fit
         lastFit = System.currentTimeMillis()
-        _ui.update { it.copy(calibration = fit.info, optionCalibrationSamples = fit.optionSamples) }
+        _ui.update { it.copy(calibration = fit.info) }
     }
 
     fun refreshStats() {
         val recs = recordsForMode()
         _ui.update {
             it.copy(
-                stats = logger.horizons.map { h -> PerformanceStats.summarize(recs, h) },
+                stats = com.niftyengine.engine.model.HorizonId.values().map { h -> PerformanceStats.summarize(recs, h) },
+                strategyStats = PerformanceStats.strategies(recs),
                 records = recs.takeLast(200).reversed(),
                 sessions = recorder.sessions(),
             )
@@ -439,21 +451,21 @@ class EngineController(private val app: Application) {
     }
 
     private fun writeBacktestCsv(f: File, recs: List<PredictionRecord>) {
+        val hs = com.niftyengine.engine.model.HorizonId.values()
         f.bufferedWriter().use { w ->
-            val drivers = com.niftyengine.engine.model.Driver.values()
-            w.write("time,spot,pBull,pBear,pRange,calibrated,calBull,calBear,calRange,regime,confidence,decision,composite," +
-                ProbabilityCalibrator.HORIZONS.joinToString(",") { "move${it}m,class${it}m" } + "," + drivers.joinToString(",") { it.name } + "\n")
+            w.write("time,spot,regime,master,alignment,decision," + hs.joinToString(",") { h ->
+                "${h.name}_score,${h.name}_pBull,${h.name}_pNeutral,${h.name}_pBear,${h.name}_calibrated,${h.name}_move,${h.name}_class,${h.name}_inRange"
+            } + "\n")
             for (r in recs) {
                 val z = Session.zdt(r.timestamp)
-                val cells = mutableListOf("%s %02d:%02d".format(z.toLocalDate(), z.hour, z.minute), "%.2f".format(r.spot),
-                    "%.4f".format(r.pBull), "%.4f".format(r.pBear), "%.4f".format(r.pRange), "${r.calibrated}",
-                    "%.4f".format(r.calPBull), "%.4f".format(r.calPBear), "%.4f".format(r.calPRange), r.regime, r.confidence, r.decision,
-                    "%.4f".format(r.directionalScore))
-                ProbabilityCalibrator.HORIZONS.forEach { h ->
-                    val o = r.outcomes.firstOrNull { it.minutes == h }
-                    cells += o?.let { "%.2f".format(it.move) } ?: ""; cells += o?.realized?.toString() ?: ""
+                val cells = mutableListOf("%s %02d:%02d".format(z.toLocalDate(), z.hour, z.minute), "%.2f".format(r.spot), r.regime,
+                    r.masterDirection.name, "${r.alignment}", r.decision)
+                hs.forEach { h ->
+                    val x = r.horizon(h)
+                    cells += listOf(x?.let { "%.2f".format(it.score) } ?: "", x?.let { "%.4f".format(it.pBull) } ?: "", x?.let { "%.4f".format(it.pNeutral) } ?: "",
+                        x?.let { "%.4f".format(it.pBear) } ?: "", x?.calibrated?.toString() ?: "", x?.outcome?.let { "%.2f".format(it.move) } ?: "",
+                        x?.outcome?.realized?.toString() ?: "", x?.outcome?.insideRange?.toString() ?: "")
                 }
-                drivers.forEach { d -> cells += r.driverScores[d.name]?.let { "%.4f".format(it) } ?: "" }
                 w.write(cells.joinToString(",") + "\n")
             }
         }

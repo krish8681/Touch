@@ -1,37 +1,88 @@
 package com.niftyengine.engine.engines
 
-import com.niftyengine.engine.core.M
-import com.niftyengine.engine.model.DriverContribution
+import com.niftyengine.engine.core.Session
+import com.niftyengine.engine.model.ConfidenceLevel
+import com.niftyengine.engine.model.Direction
 import com.niftyengine.engine.model.EngineOutput
-import com.niftyengine.engine.model.Driver
+import com.niftyengine.engine.model.ExpiryKind
+import com.niftyengine.engine.model.HorizonId
+import com.niftyengine.engine.model.LegAction
+import com.niftyengine.engine.model.OptionType
+import com.niftyengine.engine.model.StrategyKind
+import com.niftyengine.engine.model.StrategyLeg
 import kotlinx.serialization.Serializable
+import java.time.LocalDate
 import kotlin.math.abs
 import kotlin.math.pow
-import kotlin.math.sqrt
 
 /**
- * 17 — Prediction Logger / Audit Trail.
+ * 17 — Prediction Logger / audit trail.
  *
- * Every logged prediction stores everything needed to reproduce *why* the app said what it said:
- * all driver scores/weights/confidences, every engine signal, regime + reasons, raw and calibrated
- * probabilities, data freshness, the option chosen with its gross/net economics, and every decision check.
- * 5/15/30/60 minutes later the realised NIFTY move (and the option's price) is attached — the labelled
- * dataset for calibration and weight tuning.
+ * Each logged prediction stores all six horizons (raw and calibrated probabilities, σ, drift, neutral band, range,
+ * every factor's effective score), the regimes, alignment/confidence/event risk, the chosen strategy and the decision
+ * checks. When a horizon's target time passes the realised NIFTY price is attached (intraday from the observed path,
+ * the close and expiries from daily closes) — the labelled, out-of-sample dataset the calibrator is fitted on (§27).
+ * The recommended strategy's realised P&L at expiry is attached as well, so its P(profit) can be calibrated too.
  */
 @Serializable
-data class Outcome(
-    val minutes: Int,
+data class HorizonOutcome(
     val price: Double,
     val move: Double,
-    val high: Double,
-    val low: Double,
-    val optionPrice: Double = Double.NaN,
-    /** +1 bull, −1 bear, 0 range — realised class using the record's horizon-scaled threshold. */
+    /** +1 bullish, −1 bearish, 0 neutral — using the record's own neutral band. */
     val realized: Int,
+    val insideRange: Boolean,
+    val evaluatedAt: Long,
 )
 
 @Serializable
-data class SignalAudit(val score: Double, val confidence: Double, val tags: List<String> = emptyList())
+data class HorizonRecord(
+    val id: HorizonId,
+    val targetTime: Long,
+    val score: Double,
+    val sigma: Double,
+    val drift: Double,
+    val band: Double,
+    /** RAW model scores (the calibrator is fitted on these, never on calibrated values). */
+    val pBull: Double,
+    val pNeutral: Double,
+    val pBear: Double,
+    val calibrated: Boolean,
+    val calPBull: Double = Double.NaN,
+    val calPNeutral: Double = Double.NaN,
+    val calPBear: Double = Double.NaN,
+    val direction: Direction,
+    val probability: Double,
+    val confidence: ConfidenceLevel,
+    val confidenceValue: Double,
+    val coverage: Double,
+    val expectedPrice: Double,
+    val rangeLow: Double,
+    val rangeHigh: Double,
+    /** Factor → effective contribution (score points). */
+    val factors: Map<String, Double> = emptyMap(),
+    /** Factor → direction (−100..100) of available factors (for per-factor hit rates). */
+    val factorDirections: Map<String, Double> = emptyMap(),
+    val outcome: HorizonOutcome? = null,
+) {
+    val predictedClass: Int get() = direction.sign
+}
+
+@Serializable
+data class StrategyRecord(
+    val kind: StrategyKind,
+    val expiryKind: ExpiryKind,
+    val horizon: HorizonId,
+    val expiry: String,
+    val targetTime: Long,
+    val legs: List<StrategyLeg>,
+    val netPremium: Double,
+    val costPerUnit: Double,
+    val pProfit: Double,
+    val expectedPnl: Double,
+    val maxLoss: Double,
+    val realizedPnl: Double = Double.NaN,
+    val win: Boolean? = null,
+)
 
 /** Snapshot of one tracked event as it stood when the prediction was made. */
 @Serializable
@@ -47,62 +98,29 @@ data class PredictionRecord(
     val id: String,
     val timestamp: Long,
     val spot: Double,
-    /** RAW model scores (the calibrator is fitted on these, never on calibrated values). */
-    val pBull: Double,
-    val pBear: Double,
-    val pRange: Double,
-    val confidence: String,
-    val confidenceValue: Double,
-    val regime: String,
-    val expectedMove: Double,
-    /** 1σ move for [horizonMinutes]. */
-    val sigma: Double,
-    val strike: Double = Double.NaN,
-    val optionType: String = "",
-    val premium: Double = Double.NaN,
-    val iv: Double = Double.NaN,
-    val delta: Double = Double.NaN,
-    val vix: Double = Double.NaN,
-    val futuresOi: Double = Double.NaN,
-    val breadth: Double = 0.0,
-    val globalScore: Double = 0.0,
-    val newsScore: Double = 0.0,
-    val driverScores: Map<String, Double> = emptyMap(),
-    val decision: String,
-    val source: String,
-    val outcomes: List<Outcome> = emptyList(),
-    // ---- v3.2 audit fields
     val engineVersion: String = "",
-    val horizonMinutes: Int = 60,
-    val calPBull: Double = Double.NaN,
-    val calPBear: Double = Double.NaN,
-    val calPRange: Double = Double.NaN,
-    val calibrated: Boolean = false,
-    val regimeReasons: List<String> = emptyList(),
-    val drivers: List<DriverContribution> = emptyList(),
-    val signals: Map<String, SignalAudit> = emptyMap(),
-    val directionalScore: Double = Double.NaN,
-    val conflict: Double = Double.NaN,
-    val dataQuality: Double = Double.NaN,
-    val feedStatus: Map<String, String> = emptyMap(),
-    val circuitBreaker: List<String> = emptyList(),
+    val source: String,
+    val regime: String,
+    val secondaryRegime: String = "",
+    val weeklyExpiryRegime: String = "",
+    val monthlyExpiryRegime: String = "",
+    val masterDirection: Direction,
+    val masterProbability: Double,
+    val alignment: Int,
+    val masterConfidence: ConfidenceLevel,
+    val eventRisk: Map<String, String> = emptyMap(),
+    val horizons: List<HorizonRecord>,
+    val strategy: StrategyRecord? = null,
+    val decision: String,
+    val headline: String = "",
     val failedChecks: List<String> = emptyList(),
-    val probProfit: Double = Double.NaN,
-    val probProfitCalibrated: Double = Double.NaN,
-    val optionGrossEv: Double = Double.NaN,
-    val optionNetEv: Double = Double.NaN,
-    val optionCost: Double = Double.NaN,
-    val optionSpreadPct: Double = Double.NaN,
+    val dataQuality: Double = Double.NaN,
+    val circuitBreaker: List<String> = emptyList(),
+    val feedStatus: Map<String, String> = emptyMap(),
     val config: Map<String, String> = emptyMap(),
-    // ---- v4 event intelligence
-    val newsHorizons: Map<String, Double> = emptyMap(),
     val events: List<EventAudit> = emptyList(),
 ) {
-    val predictedClass: Int get() = when {
-        pBull >= pBear && pBull >= pRange -> 1
-        pBear >= pBull && pBear >= pRange -> -1
-        else -> 0
-    }
+    fun horizon(id: HorizonId) = horizons.firstOrNull { it.id == id }
 }
 
 interface PredictionStore {
@@ -118,49 +136,43 @@ class InMemoryPredictionStore : PredictionStore {
     override fun all(): List<PredictionRecord> = list.toList()
 }
 
-class PredictionLogger(private val store: PredictionStore, val horizons: List<Int> = ProbabilityCalibrator.HORIZONS) {
-    data class PricePoint(val t: Long, val price: Double, val optionPrice: Double = Double.NaN)
+class PredictionLogger(private val store: PredictionStore) {
+    /** Observed NIFTY price (and option LTPs keyed "strike|CE") at time [t]. */
+    data class PricePoint(val t: Long, val price: Double, val optionPrices: Map<String, Double> = emptyMap())
 
-    fun record(o: EngineOutput, config: Map<String, String> = emptyMap()): PredictionRecord {
-        val best = o.options.best
-        val d = o.direction
-        val cal = d.decisionProbs(o.expectedMove.horizonMinutes)
+    fun record(o: EngineOutput, config: Map<String, String> = emptyMap(), slim: Boolean = false): PredictionRecord {
+        val best = o.decision.candidate ?: o.strategies.best
+        fun r1(x: Double) = if (x.isNaN()) x else kotlin.math.round(x * 10) / 10
         val r = PredictionRecord(
-            id = "${o.timestamp}", timestamp = o.timestamp, spot = o.spot,
-            pBull = d.pBull, pBear = d.pBear, pRange = d.pRange,
-            confidence = d.confidence.name, confidenceValue = d.confidenceValue,
-            regime = o.regime.regime.name, expectedMove = o.expectedMove.expectedMovePoints, sigma = o.expectedMove.sigmaPoints,
-            strike = best?.strike ?: Double.NaN, optionType = best?.type?.name ?: "", premium = best?.premium ?: Double.NaN,
-            iv = best?.iv ?: Double.NaN, delta = best?.delta ?: Double.NaN,
-            vix = o.signals["India VIX"]?.details?.firstOrNull()?.value?.toDoubleOrNull() ?: Double.NaN,
-            futuresOi = o.signals["Futures"]?.details?.firstOrNull { it.key == "OI" }?.value?.replace(",", "")?.toDoubleOrNull() ?: Double.NaN,
-            breadth = o.signals["Breadth"]?.score ?: 0.0,
-            globalScore = o.signals["Global risk"]?.score ?: 0.0,
-            newsScore = o.signals["News"]?.score ?: 0.0,
-            driverScores = d.drivers.associate { it.driver.name to it.score },
-            decision = o.decision.decision.name, source = o.dataSource,
-            engineVersion = o.engineVersion, horizonMinutes = o.expectedMove.horizonMinutes,
-            calPBull = if (cal.calibrated) cal.pBull else Double.NaN,
-            calPBear = if (cal.calibrated) cal.pBear else Double.NaN,
-            calPRange = if (cal.calibrated) cal.pRange else Double.NaN,
-            calibrated = cal.calibrated,
-            regimeReasons = o.regime.reasons,
-            drivers = d.drivers,
-            signals = o.signals.mapValues { SignalAudit(it.value.score, it.value.confidence, it.value.tags) },
-            directionalScore = d.directionalScore, conflict = d.conflict,
-            dataQuality = o.dataQuality.score,
-            feedStatus = o.dataQuality.feeds.associate { it.name to "${it.status}${if (it.detail.isNotBlank()) " · ${it.detail}" else ""}" },
-            circuitBreaker = o.dataQuality.circuitBreaker,
+            id = "${o.timestamp}", timestamp = o.timestamp, spot = o.spot, engineVersion = o.engineVersion, source = o.dataSource,
+            regime = o.regime.regime.name, secondaryRegime = o.regime.secondary?.name ?: "",
+            weeklyExpiryRegime = o.weekly?.regime?.name ?: "", monthlyExpiryRegime = o.monthly?.regime?.name ?: "",
+            masterDirection = o.master.direction, masterProbability = o.master.probability, alignment = o.master.alignment,
+            masterConfidence = o.master.confidence, eventRisk = o.eventRisk.levels.entries.associate { it.key.name to it.value.name },
+            horizons = o.horizons.map { h ->
+                HorizonRecord(
+                    id = h.id, targetTime = h.targetTime, score = h.score, sigma = h.sigmaPts, drift = h.driftPts, band = h.neutralBand,
+                    pBull = h.pBull, pNeutral = h.pNeutral, pBear = h.pBear, calibrated = h.calibrated,
+                    calPBull = h.calPBull, calPNeutral = h.calPNeutral, calPBear = h.calPBear,
+                    direction = h.direction, probability = h.probability, confidence = h.confidence, confidenceValue = h.confidenceValue,
+                    coverage = h.coverage, expectedPrice = h.expectedPrice, rangeLow = h.rangeLow, rangeHigh = h.rangeHigh,
+                    factors = if (slim) emptyMap() else h.factors.filter { it.reading.available }.associate { it.factor.name to r1(it.effective) },
+                    factorDirections = h.factors.filter { it.reading.available }.associate { it.factor.name to r1(it.reading.direction) },
+                )
+            },
+            strategy = best?.let { b ->
+                val target = if (b.horizon.intraday) o.horizon(b.horizon)?.targetTime ?: 0L else (o.expiry(b.expiryKind)?.expiryMillis
+                    ?: o.horizon(b.horizon)?.targetTime ?: 0L)
+                StrategyRecord(b.kind, b.expiryKind, b.horizon, b.expiry, target, b.legs, b.netPremium, b.costPerUnit, b.pProfit, b.expectedPnl, b.maxLoss)
+            },
+            decision = o.decision.decision.name, headline = o.decision.headline,
             failedChecks = o.decision.checks.filter { !it.passed }.map { "${it.name}: ${it.detail}" },
-            probProfit = best?.probProfit ?: Double.NaN,
-            probProfitCalibrated = best?.probProfitCalibrated ?: Double.NaN,
-            optionGrossEv = best?.grossExpectedValue ?: Double.NaN,
-            optionNetEv = best?.expectedValue ?: Double.NaN,
-            optionCost = best?.costPerUnit ?: Double.NaN,
-            optionSpreadPct = best?.spreadPct ?: Double.NaN,
+            dataQuality = o.dataQuality.score, circuitBreaker = o.dataQuality.circuitBreaker,
+            // Only feeds that were not LIVE (keeps the log small; LIVE is the default assumption).
+            feedStatus = if (slim) emptyMap() else o.dataQuality.feeds.filter { it.status != com.niftyengine.engine.model.FeedStatus.LIVE }
+                .associate { it.name to "${it.status}${if (it.detail.isNotBlank()) " · ${it.detail.take(60)}" else ""}" },
             config = config,
-            newsHorizons = o.newsHorizons.mapKeys { it.key.name },
-            events = o.events.filter { kotlin.math.abs(it.effectiveImpact) > 0.005 || (it.analysis?.severity ?: 0.0) >= 0.5 }.take(10).map { e ->
+            events = if (slim) emptyList() else o.events.filter { abs(it.effectiveImpact) > 0.005 || (it.analysis?.severity ?: 0.0) >= 0.5 }.take(5).map { e ->
                 EventAudit(e.id, e.title.take(120), e.stage.name, e.analysis?.source ?: "", e.analysis?.severity ?: 0.0,
                     e.expectations.lastOrNull()?.probability ?: Double.NaN, e.surprise, e.pricedIn, e.unpriced,
                     e.reaction.agreement, e.newsConfidence, e.effectiveImpact, e.horizonImpacts.mapKeys { it.key.name }, e.flags)
@@ -170,109 +182,124 @@ class PredictionLogger(private val store: PredictionStore, val horizons: List<In
         return r
     }
 
-    /** Attach outcomes to every record whose horizon has elapsed. [path] = observed prices (ascending). */
-    fun evaluate(path: List<PricePoint>, now: Long) = evaluate(now) { path }
-
-    /** Variant where the path can be record-specific (e.g. carrying the selected option's price). */
-    fun evaluate(now: Long, pathFor: (PredictionRecord) -> List<PricePoint>): Int {
+    /**
+     * Attach outcomes whose target time has passed. [path] = observed prices (ascending, for intraday targets);
+     * [dailyCloses] = NIFTY closes by date (for the close and expiry targets when the app wasn't watching).
+     * Returns the number of records changed.
+     */
+    fun evaluate(now: Long, path: List<PricePoint>, dailyCloses: Map<LocalDate, Double>): Int {
         var changed = 0
         for (r in store.all()) {
-            if (now - r.timestamp > 6 * 3_600_000L) continue
-            val missing = horizons.filter { h -> r.outcomes.none { it.minutes == h } && now >= r.timestamp + h * 60_000L }
-            if (missing.isEmpty()) continue
-            val path = pathFor(r)
-            if (path.isEmpty()) continue
-            val added = missing.mapNotNull { h -> outcomeFor(r, h, path) }
-            if (added.isNotEmpty()) { store.update(r.copy(outcomes = (r.outcomes + added).sortedBy { it.minutes })); changed++ }
+            val pending = r.horizons.any { it.outcome == null && now >= it.targetTime } ||
+                (r.strategy != null && r.strategy.win == null && now >= r.strategy.targetTime && r.strategy.targetTime > 0)
+            if (!pending) continue
+            if (now - r.timestamp > 45L * 86_400_000L) continue
+            val hs = r.horizons.map { h ->
+                if (h.outcome != null || now < h.targetTime) h else priceAt(h.targetTime, path, dailyCloses)?.let { px -> h.copy(outcome = outcomeOf(r, h, px, now)) } ?: h
+            }
+            val st = r.strategy?.let { s -> if (s.win != null || now < s.targetTime || s.targetTime <= 0) s else strategyOutcome(s, path, dailyCloses) ?: s }
+            if (hs != r.horizons || st != r.strategy) { store.update(r.copy(horizons = hs, strategy = st)); changed++ }
         }
         return changed
     }
 
-    fun outcomeFor(r: PredictionRecord, h: Int, path: List<PricePoint>): Outcome? {
-        val end = r.timestamp + h * 60_000L
-        val tolerance = minOf(5 * 60_000L, (h * 60_000L * 0.4).toLong())
-        val window = path.filter { it.t > r.timestamp && it.t <= end }
-        if (window.isEmpty() || window.last().t < end - tolerance) return null
-        val px = window.last().price
-        val move = px - r.spot
-        val thr = classThreshold(r, h)
-        return Outcome(h, px, move, window.maxOf { it.price }, window.minOf { it.price }, window.last().optionPrice,
-            when { move > thr -> 1; move < -thr -> -1; else -> 0 })
-    }
-
     companion object {
-        /** "Range" = |move| below 0.35σ of that horizon (σ scaled by √time from the record's horizon), floor 0.04%·√(h/15). */
-        fun classThreshold(r: PredictionRecord, h: Int = r.horizonMinutes): Double {
-            val sigmaH = r.sigma * sqrt(h.toDouble() / r.horizonMinutes.coerceAtLeast(1))
-            return maxOf(0.35 * sigmaH, r.spot * 0.0004 * sqrt(h / 15.0))
+        /** Price at [t]: the last observed tick within 3 min before it (10 min for a session close), else the daily close. */
+        fun priceAt(t: Long, path: List<PricePoint>, dailyCloses: Map<LocalDate, Double>): Double? {
+            val z = Session.zdt(t)
+            val isClose = z.toLocalTime() == Session.CLOSE
+            val before = path.lastOrNull { it.t <= t }
+            if (before != null && t - before.t <= (if (isClose) 10 else 3) * 60_000L) return before.price
+            if (isClose) dailyCloses[z.toLocalDate()]?.let { return it }
+            return null
+        }
+
+        fun outcomeOf(r: PredictionRecord, h: HorizonRecord, px: Double, now: Long): HorizonOutcome {
+            val move = px - r.spot
+            return HorizonOutcome(px, move, when { move > h.band -> 1; move < -h.band -> -1; else -> 0 },
+                px >= h.rangeLow && px <= h.rangeHigh, now)
+        }
+
+        fun payoffAtExpiry(legs: List<StrategyLeg>, s: Double) = legs.sumOf { l ->
+            (if (l.action == LegAction.BUY) 1.0 else -1.0) * OptionsValuationEngine.intrinsic(l.type == OptionType.CE, s, l.strike)
+        }
+
+        fun strategyOutcome(s: StrategyRecord, path: List<PricePoint>, dailyCloses: Map<LocalDate, Double>): StrategyRecord? {
+            val pnl = if (s.horizon.intraday) {
+                val p = path.lastOrNull { it.t <= s.targetTime }?.takeIf { s.targetTime - it.t <= 5 * 60_000L } ?: return null
+                val exit = s.legs.sumOf { l ->
+                    val px = p.optionPrices["${l.strike}|${l.type}"] ?: return null
+                    (if (l.action == LegAction.BUY) 1.0 else -1.0) * px
+                }
+                exit - s.netPremium - s.costPerUnit
+            } else {
+                val px = priceAt(s.targetTime, path, dailyCloses) ?: return null
+                payoffAtExpiry(s.legs, px) - s.netPremium - s.costPerUnit
+            }
+            return s.copy(realizedPnl = pnl, win = pnl > 0)
         }
     }
 }
 
-/** Calibration / performance summary over logged predictions. */
+/** Performance summary per horizon over logged predictions with outcomes. */
 object PerformanceStats {
     data class Bucket(val label: String, val n: Int, val avgPredicted: Double, val hitRate: Double)
     data class Summary(
-        val horizon: Int,
+        val horizon: HorizonId,
         val n: Int,
         val accuracy: Double,
         val brier: Double,
         val directionalHitRate: Double,
-        val tradeCount: Int,
-        val tradeWinRate: Double,
+        /** Share of outcomes inside the predicted ~68 % range (well calibrated ≈ 68 %). */
+        val rangeHitRate: Double,
         /** Reliability of the RAW top-class score. */
         val buckets: List<Bucket>,
-        /** Reliability after calibration (only records that were calibrated when logged). */
+        /** Reliability after calibration (records that were calibrated when logged). */
         val calibratedBuckets: List<Bucket>,
-        val driverHitRates: Map<String, Double>,
-        /** Option-outcome model: predicted P(profit) vs realised net option profit. */
-        val optionBuckets: List<Bucket>,
+        val factorHitRates: Map<String, Double>,
     )
 
-    /** The bucket edges requested for calibration review. */
-    val EDGES = listOf(0.0 to 0.50, 0.50 to 0.55, 0.55 to 0.60, 0.60 to 0.65, 0.65 to 0.70, 0.70 to 0.75, 0.75 to 0.80, 0.80 to 1.01)
+    data class StrategySummary(val n: Int, val winRate: Double, val avgPnl: Double, val buckets: List<Bucket>, val byKind: Map<String, Pair<Int, Double>>)
+
+    val EDGES = listOf(0.0 to 0.40, 0.40 to 0.50, 0.50 to 0.55, 0.55 to 0.60, 0.60 to 0.65, 0.65 to 0.70, 0.70 to 0.80, 0.80 to 1.01)
 
     private fun label(lo: Double, hi: Double) = when {
-        lo == 0.0 -> "<50%"; hi > 1.0 -> "80%+"; else -> "%.0f–%.0f%%".format(lo * 100, hi * 100)
+        lo == 0.0 -> "<%.0f%%".format(hi * 100); hi > 1.0 -> "%.0f%%+".format(lo * 100); else -> "%.0f–%.0f%%".format(lo * 100, hi * 100)
     }
 
-    private fun bucketize(points: List<Pair<Double, Boolean>>): List<Bucket> = EDGES.map { (lo, hi) ->
+    fun bucketize(points: List<Pair<Double, Boolean>>): List<Bucket> = EDGES.map { (lo, hi) ->
         val sel = points.filter { it.first >= lo && it.first < hi }
         Bucket(label(lo, hi), sel.size, if (sel.isEmpty()) Double.NaN else sel.map { it.first }.average(),
             if (sel.isEmpty()) Double.NaN else sel.count { it.second }.toDouble() / sel.size)
     }
 
-    fun summarize(records: List<PredictionRecord>, horizon: Int = 30): Summary {
-        val done = records.mapNotNull { r -> r.outcomes.firstOrNull { it.minutes == horizon }?.let { r to it } }
-        val opt = records.mapNotNull { r ->
-            if (r.probProfit.isNaN() || r.premium.isNaN()) return@mapNotNull null
-            val o = r.outcomes.firstOrNull { it.minutes == horizon } ?: return@mapNotNull null
-            if (o.optionPrice.isNaN()) return@mapNotNull null
-            r.probProfit to (o.optionPrice - r.premium - (if (r.optionCost.isNaN()) 0.0 else r.optionCost) > 0)
+    fun brier(pb: Double, pn: Double, pd: Double, y: Int): Double =
+        (pb - if (y == 1) 1.0 else 0.0).pow(2) + (pn - if (y == 0) 1.0 else 0.0).pow(2) + (pd - if (y == -1) 1.0 else 0.0).pow(2)
+
+    fun summarize(records: List<PredictionRecord>, h: HorizonId): Summary {
+        val done = records.mapNotNull { r -> r.horizon(h)?.takeIf { it.outcome != null } }
+        if (done.isEmpty()) return Summary(h, 0, Double.NaN, Double.NaN, Double.NaN, Double.NaN, emptyList(), emptyList(), emptyMap())
+        val acc = done.count { it.predictedClass == it.outcome!!.realized }.toDouble() / done.size
+        val br = done.map { brier(it.pBull, it.pNeutral, it.pBear, it.outcome!!.realized) }.average()
+        val dir = done.filter { it.predictedClass != 0 }
+        val dirHit = if (dir.isEmpty()) Double.NaN else dir.count { it.predictedClass * it.outcome!!.move > 0 }.toDouble() / dir.size
+        val rangeHit = done.count { it.outcome!!.insideRange }.toDouble() / done.size
+        fun top(b: Double, n: Double, d: Double): Pair<Double, Int> = listOf(b to 1, n to 0, d to -1).maxBy { it.first }
+        val raw = done.map { x -> top(x.pBull, x.pNeutral, x.pBear).let { (p, c) -> p to (c == x.outcome!!.realized) } }
+        val cal = done.filter { it.calibrated && !it.calPBull.isNaN() }.map { x -> top(x.calPBull, x.calPNeutral, x.calPBear).let { (p, c) -> p to (c == x.outcome!!.realized) } }
+        val factors = done.flatMap { it.factorDirections.keys }.toSet()
+        val hits = factors.associateWith { f ->
+            val sel = done.filter { abs(it.factorDirections[f] ?: 0.0) > 20 }
+            if (sel.size < 5) Double.NaN else sel.count { (it.factorDirections.getValue(f)) * it.outcome!!.move > 0 }.toDouble() / sel.size
         }
-        if (done.isEmpty()) return Summary(horizon, 0, Double.NaN, Double.NaN, Double.NaN, 0, Double.NaN, emptyList(), emptyList(), emptyMap(), bucketize(opt))
-        val acc = done.count { (r, o) -> r.predictedClass == o.realized }.toDouble() / done.size
-        val brier = done.map { (r, o) ->
-            val y = doubleArrayOf(if (o.realized == 1) 1.0 else 0.0, if (o.realized == -1) 1.0 else 0.0, if (o.realized == 0) 1.0 else 0.0)
-            (r.pBull - y[0]).pow(2) + (r.pBear - y[1]).pow(2) + (r.pRange - y[2]).pow(2)
-        }.average()
-        val directional = done.filter { it.first.predictedClass != 0 }
-        val dirHit = if (directional.isEmpty()) Double.NaN else directional.count { (r, o) -> r.predictedClass * o.move > 0 }.toDouble() / directional.size
-        val trades = done.filter { it.first.decision == "TRADE" || it.first.decision == "PAPER_TRADE" }
-        val tradeWin = if (trades.isEmpty()) Double.NaN else trades.count { (r, o) ->
-            if (!o.optionPrice.isNaN() && !r.premium.isNaN()) o.optionPrice - r.premium - (if (r.optionCost.isNaN()) 0.0 else r.optionCost) > 0
-            else r.predictedClass * o.move > 0
-        }.toDouble() / trades.size
-        val raw = done.map { (r, o) -> maxOf(r.pBull, r.pBear, r.pRange) to (r.predictedClass == o.realized) }
-        val cal = done.filter { it.first.calibrated && !it.first.calPBull.isNaN() }.map { (r, o) ->
-            val top = maxOf(r.calPBull, r.calPBear, r.calPRange)
-            val cls = when (top) { r.calPBull -> 1; r.calPBear -> -1; else -> 0 }
-            top to (cls == o.realized)
-        }
-        val driverHits = Driver.values().associate { d ->
-            val sel = done.filter { abs(it.first.driverScores[d.name] ?: 0.0) > 0.2 }
-            d.label to if (sel.size < 5) Double.NaN else sel.count { (r, o) -> M.clamp(r.driverScores.getValue(d.name)) * o.move > 0 }.toDouble() / sel.size
-        }
-        return Summary(horizon, done.size, acc, brier, dirHit, trades.size, tradeWin, bucketize(raw), bucketize(cal), driverHits, bucketize(opt))
+        return Summary(h, done.size, acc, br, dirHit, rangeHit, bucketize(raw), bucketize(cal), hits)
+    }
+
+    fun strategies(records: List<PredictionRecord>): StrategySummary {
+        val done = records.mapNotNull { r -> r.strategy?.takeIf { it.win != null } }
+        if (done.isEmpty()) return StrategySummary(0, Double.NaN, Double.NaN, emptyList(), emptyMap())
+        return StrategySummary(done.size, done.count { it.win == true }.toDouble() / done.size, done.map { it.realizedPnl }.average(),
+            bucketize(done.map { it.pProfit to (it.win == true) }),
+            done.groupBy { it.kind.label }.mapValues { (_, l) -> l.size to l.count { it.win == true }.toDouble() / l.size })
     }
 }

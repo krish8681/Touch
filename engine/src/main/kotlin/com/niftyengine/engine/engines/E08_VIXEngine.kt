@@ -13,7 +13,10 @@ import com.niftyengine.engine.model.MarketSnapshot
 enum class VixState { FALLING, STABLE, RISING, SPIKING }
 
 class VIXEngine(private val norm: DataNormalizer) {
-    data class Result(val signal: EngineSignal, val state: VixState, val level: Double, val percentile: Double)
+    data class Result(
+        val signal: EngineSignal, val state: VixState, val level: Double, val percentile: Double,
+        val c1h: Double = Double.NaN, val c1d: Double = Double.NaN, val c5d: Double = Double.NaN, val asOf: Long = 0L,
+    )
 
     fun analyze(s: MarketSnapshot, now: Long, sessionStart: Long): Result {
         val v = s.vix ?: return Result(EngineSignal.unavailable("India VIX", "VIX unavailable"), VixState.STABLE, Double.NaN, Double.NaN)
@@ -40,7 +43,8 @@ class VIXEngine(private val norm: DataNormalizer) {
                 Detail("1y percentile", if (pct.isNaN()) "–" else "%.0f".format(pct)),
                 Detail("State", st.name),
             )),
-            st, v.last, pct,
+            st, v.last, pct, c1h, c1d,
+            v.daily.takeIf { it.size >= 5 }?.let { M.pctChange(it[it.size - 5].c, v.last) } ?: Double.NaN, v.asOf,
         )
     }
 }

@@ -2,6 +2,7 @@ package com.niftyengine.app.data
 
 import com.niftyengine.engine.core.Session
 import com.niftyengine.engine.model.Candle
+import com.niftyengine.engine.model.FiiDerivDay
 import com.niftyengine.engine.model.FlowData
 import com.niftyengine.engine.model.FuturesData
 import com.niftyengine.engine.model.GiftNiftyData
@@ -10,6 +11,7 @@ import com.niftyengine.engine.model.OptionChain
 import com.niftyengine.engine.model.OptionLeg
 import com.niftyengine.engine.model.OptionStrikeRow
 import com.niftyengine.engine.model.Sector
+import com.niftyengine.engine.model.ValuationData
 import org.json.JSONArray
 import org.json.JSONObject
 import java.net.URLEncoder
@@ -63,20 +65,28 @@ object NseClient {
         return Double.NaN
     }
 
-    data class IndexBoard(val nifty: InstrumentData?, val bank: InstrumentData?, val vix: InstrumentData?, val sectors: Map<Sector, InstrumentData>)
+    data class IndexBoard(
+        val nifty: InstrumentData?, val bank: InstrumentData?, val vix: InstrumentData?, val sectors: Map<Sector, InstrumentData>,
+        /** NIFTY 50 P/E, P/B and dividend yield as published with the index. */
+        val valuation: ValuationData? = null,
+    )
 
     fun allIndices(): IndexBoard {
         val root = JSONObject(api("/api/allIndices"))
         val data = root.getJSONArray("data")
         val asOf = TimeParse.ist(root.optString("timestamp"))
         val map = HashMap<String, InstrumentData>()
+        var valuation: ValuationData? = null
         for (i in 0 until data.length()) {
             val o = data.getJSONObject(i)
             val name = o.optString("index", o.optString("indexSymbol"))
             map[name] = InstrumentData(name, o.num("last"), o.num("previousClose"), o.num("open"), o.num("high"), o.num("low"), asOf = asOf)
+            if (name == "NIFTY 50") o.num("pe").takeIf { !it.isNaN() && it > 0 }?.let { pe ->
+                valuation = ValuationData(pe, o.num("pb"), o.num("dy"), asOf, "NSE")
+            }
         }
         return IndexBoard(map["NIFTY 50"], map["NIFTY BANK"], map["INDIA VIX"],
-            SECTOR_INDICES.mapNotNull { (n, s) -> map[n]?.let { s to it } }.toMap())
+            SECTOR_INDICES.mapNotNull { (n, s) -> map[n]?.let { s to it } }.toMap(), valuation)
     }
 
     /**
@@ -131,15 +141,31 @@ object NseClient {
 
     private fun expiryMillis(s: String): Long = Session.closeOf(LocalDate.parse(s.trim(), dateFmt))
 
-    fun optionChain(): OptionChain {
-        // v3 endpoint (expiry-specific) first, legacy endpoint as fallback.
+    /** Listed NIFTY option expiries (dd-MMM-yyyy), nearest first. */
+    fun optionExpiries(): List<String> {
+        val info = JSONObject(api("/api/option-chain-contract-info?symbol=NIFTY")).getJSONArray("expiryDates")
+        return (0 until info.length()).map { info.getString(it) }
+    }
+
+    /**
+     * The next MONTHLY expiry from the listed expiries: the last listed expiry in the month of the nearest one
+     * (this also handles holiday-shifted expiries). Null when the nearest expiry is itself the monthly one.
+     */
+    fun monthlyExpiryOf(expiries: List<String>): String? {
+        val dates = expiries.mapNotNull { e -> runCatching { LocalDate.parse(e.trim(), dateFmt) to e }.getOrNull() }.sortedBy { it.first }
+        val first = dates.firstOrNull() ?: return null
+        val monthly = dates.filter { it.first.year == first.first.year && it.first.month == first.first.month }.maxBy { it.first }
+        return if (monthly.first == first.first) null else monthly.second
+    }
+
+    /** Option chain for [expiry] (nearest when null). v3 endpoint first, legacy endpoint as fallback. */
+    fun optionChain(expiry: String? = null): OptionChain {
         val raw = runCatching {
-            val info = JSONObject(api("/api/option-chain-contract-info?symbol=NIFTY"))
-            val exp = info.getJSONArray("expiryDates").getString(0)
+            val exp = expiry ?: optionExpiries().first()
             JSONObject(api("/api/option-chain-v3?type=Indices&symbol=NIFTY&expiry=" + URLEncoder.encode(exp, "UTF-8"))) to exp
         }.getOrElse {
             val j = JSONObject(api("/api/option-chain-indices?symbol=NIFTY"))
-            j to j.getJSONObject("records").getJSONArray("expiryDates").getString(0)
+            j to (expiry ?: j.getJSONObject("records").getJSONArray("expiryDates").getString(0))
         }
         val (json, expiry) = raw
         val records = json.getJSONObject("records")
@@ -220,6 +246,33 @@ object NseClient {
             expiry = g.optString("expirydate"), contracts = g.num("contractstraded").nz(),
             asOf = TimeParse.ist(g.optString("timestmp")),
         )
+    }
+
+    private val archiveFmt = DateTimeFormatter.ofPattern("ddMMyyyy", Locale.ENGLISH)
+
+    /**
+     * FII positioning in index derivatives for [day] from NSE's participant-wise open interest file
+     * (`fao_participant_oi_DDMMYYYY.csv`, published after the close). Null when NSE has no file for that day (holiday).
+     */
+    fun participantOi(day: LocalDate): FiiDerivDay? {
+        val body = try {
+            Http.get("https://nsearchives.nseindia.com/content/nsccl/fao_participant_oi_${day.format(archiveFmt)}.csv", mapOf("Accept" to "text/csv,*/*"))
+        } catch (e: java.io.IOException) {
+            if (e.message?.contains("HTTP 404") == true) return null else throw e
+        }
+        return parseParticipantOi(body, day)
+    }
+
+    fun parseParticipantOi(csv: String, day: LocalDate): FiiDerivDay? {
+        val lines = csv.lines().map { it.trim() }.filter { it.isNotEmpty() }
+        val hi = lines.indexOfFirst { it.startsWith("Client Type", ignoreCase = true) }
+        if (hi < 0) return null
+        val header = lines[hi].split(",").map { it.trim().lowercase() }
+        val fii = lines.drop(hi + 1).map { l -> l.split(",").map { it.trim().trim('"') } }.firstOrNull { it.firstOrNull()?.equals("FII", true) == true } ?: return null
+        fun col(name: String): Double = header.indexOf(name).takeIf { it >= 0 }?.let { fii.getOrNull(it)?.replace(",", "")?.toDoubleOrNull() } ?: Double.NaN
+        val d = FiiDerivDay(day.toString(), col("future index long"), col("future index short"), col("option index call long"),
+            col("option index call short"), col("option index put long"), col("option index put short"))
+        return if (d.futIndexLong.isNaN() || d.futIndexShort.isNaN()) null else d
     }
 
     fun fiiDii(): FlowData {

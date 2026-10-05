@@ -1,12 +1,11 @@
 package com.niftyengine.engine.core
 
-import com.niftyengine.engine.model.Driver
+import com.niftyengine.engine.model.MarketRegime
 import com.niftyengine.engine.model.OptionChain
-import com.niftyengine.engine.model.Regime
 
 /**
- * Mutable memory carried between engine cycles: tick histories, the previous option chain,
- * futures OI history, driver score history (for persistence) and regime history (for transitions).
+ * Mutable memory carried between engine cycles: tick histories, futures OI history, the first option chain seen
+ * today per expiry (for OI migration / IV change) and the regime history.
  */
 class EngineState(private val maxTicks: Int = 2000) {
     data class Tick(val t: Long, val price: Double, val volume: Double = 0.0)
@@ -14,13 +13,9 @@ class EngineState(private val maxTicks: Int = 2000) {
 
     val ticks = HashMap<String, ArrayDeque<Tick>>()
     val futures = ArrayDeque<FutTick>()
-    var previousChain: OptionChain? = null
-    var previousChainTime: Long = 0L
-    /** Chain as of session open (or first seen today) for intraday OI migration. */
-    var openingChain: OptionChain? = null
-    val driverHistory = HashMap<Driver, ArrayDeque<Double>>()
-    val regimeHistory = ArrayDeque<Pair<Long, Regime>>()
-    val directionHistory = ArrayDeque<Pair<Long, Double>>()
+    /** Chain as of session open (or first seen today), keyed by expiry. */
+    val openingChains = HashMap<String, OptionChain>()
+    val regimeHistory = ArrayDeque<Pair<Long, MarketRegime>>()
     var sessionDay: Long = -1
 
     fun record(symbol: String, t: Long, price: Double, volume: Double = 0.0) {
@@ -33,20 +28,11 @@ class EngineState(private val maxTicks: Int = 2000) {
 
     fun history(symbol: String): List<Tick> = ticks[symbol]?.toList() ?: emptyList()
 
-    fun pushDriver(d: Driver, score: Double, keep: Int = 12) {
-        val q = driverHistory.getOrPut(d) { ArrayDeque() }
-        q.addLast(score)
-        while (q.size > keep) q.removeFirst()
-    }
+    fun openingChain(c: OptionChain): OptionChain = openingChains.getOrPut(c.expiry) { c }
 
-    fun pushRegime(t: Long, r: Regime, keep: Int = 30) {
+    fun pushRegime(t: Long, r: MarketRegime, keep: Int = 60) {
         regimeHistory.addLast(t to r)
         while (regimeHistory.size > keep) regimeHistory.removeFirst()
-    }
-
-    fun pushDirection(t: Long, d: Double, keep: Int = 60) {
-        directionHistory.addLast(t to d)
-        while (directionHistory.size > keep) directionHistory.removeFirst()
     }
 
     /** Reset intraday memory when a new session day begins. */
@@ -54,9 +40,7 @@ class EngineState(private val maxTicks: Int = 2000) {
         val day = Session.zdt(now).toLocalDate().toEpochDay()
         if (day != sessionDay) {
             sessionDay = day
-            ticks.clear(); futures.clear()
-            previousChain = null; openingChain = null
-            driverHistory.clear(); regimeHistory.clear(); directionHistory.clear()
+            ticks.clear(); futures.clear(); openingChains.clear(); regimeHistory.clear()
         }
     }
 }

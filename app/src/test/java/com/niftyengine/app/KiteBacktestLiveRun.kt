@@ -28,10 +28,12 @@ class KiteBacktestLiveRun {
         val run = HistoricalBacktest(EngineConfig()).run(src, from, to, onProgress = { m, p -> println("[%3.0f%%] %s".format(p * 100, m)) })
         File(out, "report.json").writeText(AppJson.encodeToString(BacktestReport.serializer(), run.report))
         File(out, "predictions.csv").bufferedWriter().use { w ->
-            w.write("time,spot,pBull,pBear,pRange,calibrated,regime,move30,class30,move60,class60\n")
+            w.write("time,spot,regime,horizon,score,pBull,pNeutral,pBear,calibrated,move,class,inRange\n")
             run.records.forEach { r ->
-                val o30 = r.outcomes.firstOrNull { it.minutes == 30 }; val o60 = r.outcomes.firstOrNull { it.minutes == 60 }
-                w.write("${r.timestamp},${r.spot},${r.pBull},${r.pBear},${r.pRange},${r.calibrated},${r.regime},${o30?.move ?: ""},${o30?.realized ?: ""},${o60?.move ?: ""},${o60?.realized ?: ""}\n")
+                r.horizons.forEach { h ->
+                    val o = h.outcome
+                    w.write("${r.timestamp},${r.spot},${r.regime},${h.id},${h.score},${h.pBull},${h.pNeutral},${h.pBear},${h.calibrated},${o?.move ?: ""},${o?.realized ?: ""},${o?.insideRange ?: ""}\n")
+                }
             }
         }
         println("REPORT ${run.report}")

@@ -83,6 +83,14 @@ class DataNormalizer(private val state: EngineState) {
     fun recentMove(f: ChangeFeatures): Double = listOf(f.c30m, f.c15m, f.c1d).firstOrNull { !it.isNaN() } ?: 0.0
 
     companion object {
+        /** % change of the live price vs the close [sessions] completed sessions ago (NaN without enough daily history). */
+        fun sessionsChange(d: InstrumentData?, sessions: Int): Double {
+            if (d == null || d.last <= 0) return Double.NaN
+            val dl = d.daily
+            if (dl.size < sessions) return Double.NaN
+            return M.pctChange(dl[dl.size - sessions].c, d.last)
+        }
+
         fun nz(x: Double, d: Double = 0.0) = if (x.isNaN()) d else x
         fun sign(x: Double, eps: Double = 1e-9) = if (abs(x) < eps) 0 else if (x > 0) 1 else -1
     }

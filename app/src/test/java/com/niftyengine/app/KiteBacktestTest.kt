@@ -111,7 +111,7 @@ class KiteBacktestTest {
         val run = bt.run(src, days.first(), days.last())
         val r = run.report
         println("mock-Kite backtest: ${r.days} days, ${r.predictions} predictions, notes=${src.notes}")
-        r.baselines.forEach { println("  ${it.horizon}m model %.2f momentum %.2f skill %+.3f".format(it.modelAccuracy, it.momentumAccuracy, it.brierSkill)) }
+        r.baselines.forEach { println("  ${it.horizon} model %.2f momentum %.2f skill %+.3f".format(it.modelAccuracy, it.momentumAccuracy, it.brierSkill)) }
 
         assertEquals(12, r.days)
         assertTrue(r.predictions > 12 * 70)
@@ -119,7 +119,7 @@ class KiteBacktestTest {
         assertTrue(hist.any { it.contains("/${KiteClient.TOKEN_NIFTY}/minute?") })
         assertTrue(hist.any { it.contains("/${stockTokens.getValue("RELIANCE")}/5minute?") })
         assertTrue(hist.any { it.contains("/$futToken/minute?") && it.contains("oi=1") && it.contains("continuous=1") })
-        assertTrue("futures OI history reached the engine", run.records.any { (it.driverScores["DERIVATIVES"] ?: 0.0) != 0.0 })
+        assertTrue("futures OI history reached the engine", run.records.any { r -> r.horizon(com.niftyengine.engine.model.HorizonId.M30)?.factorDirections?.get("FUTURES")?.let { it != 0.0 } == true })
         assertTrue(src.notes.none { it.contains("futures driver absent") })
 
         // Second run over the same (past) range: served entirely from the disk cache.

@@ -3,7 +3,8 @@ package com.niftyengine.engine
 import com.niftyengine.engine.core.Session
 import com.niftyengine.engine.engines.GiftNiftyEngine
 import com.niftyengine.engine.model.Candle
-import com.niftyengine.engine.model.Driver
+import com.niftyengine.engine.model.Factor
+import com.niftyengine.engine.model.HorizonId
 import com.niftyengine.engine.model.FuturesData
 import com.niftyengine.engine.model.GapState
 import com.niftyengine.engine.model.GiftNiftyData
@@ -91,7 +92,9 @@ class GiftNiftyTest {
         fun run(gift: Double): Double {
             val e = NiftyDirectionEngine()
             val out = e.process(preOpen(wall, gift, ist(8, 49)).copy(news = news))
-            assertTrue(out.direction.drivers.any { it.driver == Driver.GIFT_NIFTY && it.confidence > 0 })
+            // Pre-open, GIFT Nifty feeds the H1 global-market factor.
+            val g = out.horizon(HorizonId.M30)!!.factors.first { it.factor == Factor.GLOBAL }.reading
+            assertTrue(g.details.any { it.key == "GIFT Nifty" }, "GIFT should be part of the H1 global factor")
             return out.events.first().unpriced
         }
         val alreadyPriced = run(22520.0 * 0.985) // GIFT −1.5 % overnight

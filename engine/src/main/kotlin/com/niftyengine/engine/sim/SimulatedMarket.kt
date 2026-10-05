@@ -4,8 +4,13 @@ import com.niftyengine.engine.core.BlackScholes
 import com.niftyengine.engine.core.Session
 import com.niftyengine.engine.engines.Constituents
 import com.niftyengine.engine.engines.SnapshotProvider
+import com.niftyengine.engine.core.ExpiryCalendar
 import com.niftyengine.engine.model.Candle
+import com.niftyengine.engine.model.EarningsInputs
+import com.niftyengine.engine.model.FiiDerivDay
+import com.niftyengine.engine.model.FiiDerivatives
 import com.niftyengine.engine.model.FlowData
+import com.niftyengine.engine.model.FlowDay
 import com.niftyengine.engine.model.FuturesData
 import com.niftyengine.engine.model.GiftNiftyData
 import com.niftyengine.engine.model.GlobalAsset
@@ -17,6 +22,7 @@ import com.niftyengine.engine.model.OptionChain
 import com.niftyengine.engine.model.OptionLeg
 import com.niftyengine.engine.model.OptionStrikeRow
 import com.niftyengine.engine.model.Sector
+import com.niftyengine.engine.model.ValuationData
 import java.time.DayOfWeek
 import java.time.LocalDate
 import java.time.temporal.TemporalAdjusters
@@ -70,6 +76,16 @@ class SimulatedMarket(seed: Long = 7L, startDate: LocalDate = LocalDate.now(Sess
     private val globalDayChg = HashMap<GlobalAsset, Double>()
     private val baseCallOi = HashMap<Double, Double>()
     private val basePutOi = HashMap<Double, Double>()
+    private val mBaseCallOi = HashMap<Double, Double>()
+    private val mBasePutOi = HashMap<Double, Double>()
+    private val globalDaily = HashMap<GlobalAsset, MutableList<Candle>>()
+    private val sectorPrev = HashMap<Sector, Double>()
+    private val sectorDaily = HashMap<Sector, MutableList<Candle>>()
+    private val fiiDays = mutableListOf<FiiDerivDay>()
+    private val flowDays = mutableListOf<FlowDay>()
+    private var fiiLongPct = 0.38
+    private var pe = 21.8
+    private val policyCut = rnd.nextDouble() < 0.5
     private val news = mutableListOf<NewsItem>()
     private var flows = FlowData()
     private var dayBias = 0.0
@@ -115,7 +131,35 @@ class SimulatedMarket(seed: Long = 7L, startDate: LocalDate = LocalDate.now(Sess
         vixPrev = vixDaily.last().c
         cons.forEach { stockPrev[it.symbol] = 200.0 + rnd.nextDouble() * 3000 }
         GlobalAsset.values().forEach { globalPrev[it] = baseLevel(it) }
+        // 60 sessions of global / sector daily history and 20 sessions of FII flows / positioning.
+        val histDays = niftyDaily.takeLast(60)
+        for (a in GlobalAsset.values()) {
+            var lv = baseLevel(a)
+            val l = mutableListOf<Candle>()
+            for (c in histDays.asReversed()) { l.add(0, Candle(c.t, lv, lv, lv, lv)); lv /= 1 + rnd.nextGaussian() * a.typicalDailyMovePct / 100 }
+            globalDaily[a] = l
+        }
+        for (sec in Sector.values()) {
+            var lv = 10_000.0 * (0.9 + rnd.nextDouble() * 0.2)
+            val l = mutableListOf<Candle>()
+            for (c in histDays.asReversed()) { l.add(0, Candle(c.t, lv, lv, lv, lv)); lv /= 1 + 0.0004 + rnd.nextGaussian() * 0.011 }
+            sectorDaily[sec] = l; sectorPrev[sec] = l.last().c
+        }
+        histDays.takeLast(20).forEach { c -> pushFlows(Session.zdt(c.t).toLocalDate(), rnd.nextGaussian() * 0.5) }
         newDay()
+    }
+
+    /** One session of FPI/DII cash flow and FII index derivative positioning, loosely following [bias]. */
+    private fun pushFlows(day: LocalDate, bias: Double) {
+        val fpi = round(bias * 2500 + rnd.nextGaussian() * 1500)
+        flowDays += FlowDay(day.toString(), fpi, round(-bias * 800 + 1500 + rnd.nextGaussian() * 1200))
+        while (flowDays.size > 25) flowDays.removeAt(0)
+        fiiLongPct = (fiiLongPct + 0.02 * bias + rnd.nextGaussian() * 0.01).coerceIn(0.12, 0.75)
+        val totalFut = 300_000.0 + rnd.nextDouble() * 40_000
+        val callL = 900_000.0 * (1 + 0.1 * bias + rnd.nextGaussian() * 0.05); val putL = 900_000.0 * (1 - 0.1 * bias + rnd.nextGaussian() * 0.05)
+        fiiDays += FiiDerivDay(day.toString(), round(totalFut * fiiLongPct), round(totalFut * (1 - fiiLongPct)),
+            round(callL), round(800_000.0 * (1 - 0.05 * bias)), round(putL), round(850_000.0 * (1 + 0.05 * bias)))
+        while (fiiDays.size > 10) fiiDays.removeAt(0)
     }
 
     private fun Random.nextGaussian(): Double {
@@ -161,12 +205,14 @@ class SimulatedMarket(seed: Long = 7L, startDate: LocalDate = LocalDate.now(Sess
         futOiPrev = futOi
         futVol = 0.0
         hiddenLeft = 0
+        // Yesterday's flows/positioning lean the way today's hidden bias points (FII data has some signal).
+        pushFlows(date.minusDays(1).let { if (it.dayOfWeek == DayOfWeek.SUNDAY) it.minusDays(2) else if (it.dayOfWeek == DayOfWeek.SATURDAY) it.minusDays(1) else it }, dayBias * 0.7 + rnd.nextGaussian() * 0.4)
         flows = FlowData(
-            fpiNetCr = round(dayBias * 2500 + rnd.nextGaussian() * 1500), diiNetCr = round(-dayBias * 800 + 1500 + rnd.nextGaussian() * 1200),
-            fpi5dCr = round(dayBias * 6000 + rnd.nextGaussian() * 5000), dii5dCr = round(6000 + rnd.nextGaussian() * 4000),
-            date = date.minusDays(1).toString(),
+            fpiNetCr = flowDays.last().fpiNetCr, diiNetCr = flowDays.last().diiNetCr,
+            date = flowDays.last().date, history = flowDays.toList(),
         )
-        baseCallOi.clear(); basePutOi.clear()
+        pe = (pe + rnd.nextGaussian() * 0.08 + dayBias * 0.05).coerceIn(17.0, 27.0)
+        baseCallOi.clear(); basePutOi.clear(); mBaseCallOi.clear(); mBasePutOi.clear()
         val atm = round(nifty / 50) * 50
         for (i in -30..30) {
             val k = atm + i * 50
@@ -174,6 +220,8 @@ class SimulatedMarket(seed: Long = 7L, startDate: LocalDate = LocalDate.now(Sess
             val round500 = if (k % 500 == 0.0) 2.2 else 1.0
             baseCallOi[k] = if (i >= -4) (60_000 + 90_000 * exp(-((i - 6) * (i - 6)) / 40.0)) * round100 * round500 * (0.8 + rnd.nextDouble() * 0.4) else 20_000.0
             basePutOi[k] = if (i <= 4) (60_000 + 90_000 * exp(-((i + 6) * (i + 6)) / 40.0)) * round100 * round500 * (0.8 + rnd.nextDouble() * 0.4) else 20_000.0
+            mBaseCallOi[k] = if (i >= -6) (40_000 + 70_000 * exp(-((i - 10) * (i - 10)) / 80.0)) * round100 * round500 * (0.8 + rnd.nextDouble() * 0.4) else 15_000.0
+            mBasePutOi[k] = if (i <= 6) (40_000 + 70_000 * exp(-((i + 10) * (i + 10)) / 80.0)) * round100 * round500 * (0.8 + rnd.nextDouble() * 0.4) else 15_000.0
         }
         planStorylines()
         if (abs(dayBias) > 0.7) addNews(0, pick(if (dayBias > 0) bullStories else bearStories), 3, t(0) - 3_600_000L)
@@ -245,8 +293,16 @@ class SimulatedMarket(seed: Long = 7L, startDate: LocalDate = LocalDate.now(Sess
             niftyDaily += Candle(t(0), niftyBars.first().o, niftyBars.maxOf { it.h }, niftyBars.minOf { it.l }, nifty)
             vixDaily += Candle(t(0), vixBars.first().o, vixBars.maxOf { it.h }, vixBars.minOf { it.l }, vix)
             niftyPrev = nifty; vixPrev = vix
+            val secNow = sectorLevels() // before stockPrev rolls forward
             stockPrev.putAll(stockPx)
-            GlobalAsset.values().forEach { globalPrev[it] = globalPx.getValue(it) }
+            GlobalAsset.values().forEach { a ->
+                globalPrev[a] = globalPx.getValue(a)
+                globalDaily.getValue(a).let { l -> l += Candle(t(0), l.last().c, globalPx.getValue(a), globalPx.getValue(a), globalPx.getValue(a)); if (l.size > 80) l.removeAt(0) }
+            }
+            Sector.values().forEach { sec -> secNow[sec]?.let { lv ->
+                sectorDaily.getValue(sec).let { l -> l += Candle(t(0), sectorPrev.getValue(sec), lv, lv, lv); if (l.size > 80) l.removeAt(0) }
+                sectorPrev[sec] = lv
+            } }
             date = tradingDay(date.plusDays(1).let { if (it.dayOfWeek == DayOfWeek.SATURDAY) it.plusDays(2) else if (it.dayOfWeek == DayOfWeek.SUNDAY) it.plusDays(1) else it })
             newDay()
             return
@@ -305,10 +361,19 @@ class SimulatedMarket(seed: Long = 7L, startDate: LocalDate = LocalDate.now(Sess
             sectors = s.sectors.mapValues { it.value.copy(asOf = ts) },
             global = s.global.mapValues { it.value.copy(asOf = ts) },
             flows = s.flows?.copy(asOf = ts - day),
+            monthlyChain = s.monthlyChain?.copy(asOf = ts),
+            fiiDerivatives = s.fiiDerivatives?.copy(asOf = ts - day),
+            valuation = s.valuation?.copy(asOf = ts - day),
+            earnings = s.earnings.copy(asOf = ts - 12 * day),
             macro = s.macro.copy(source = "simulated", releasedAt = mapOf(
-                "repoRate" to ts - 20 * day, "cpiYoY" to ts - 18 * day, "gdpGrowth" to ts - 30 * day,
+                "repoRate" to ts - 20 * day, "lastPolicyChangeBps" to ts - 20 * day, "cpiYoY" to ts - 18 * day, "gdpGrowth" to ts - 30 * day, "iipYoY" to ts - 25 * day,
                 "pmiManufacturing" to ts - 2 * day, "creditGrowth" to ts - 10 * day, "liquidityCr" to ts - day)),
         )
+    }
+
+    /** Sector index levels: previous close × today's weight-averaged constituent return. */
+    private fun sectorLevels(): Map<Sector, Double> = cons.groupBy { it.sector }.mapValues { (s, l) ->
+        sectorPrev.getValue(s) * l.sumOf { stockPx.getValue(it.symbol) / stockPrev.getValue(it.symbol) * it.weight } / l.sumOf { it.weight }
     }
 
     private fun rawSnapshot(): MarketSnapshot {
@@ -320,12 +385,11 @@ class SimulatedMarket(seed: Long = 7L, startDate: LocalDate = LocalDate.now(Sess
             c.symbol to InstrumentData(c.symbol, stockPx.getValue(c.symbol), stockPrev.getValue(c.symbol), stockOpen.getValue(c.symbol),
                 intraday = stockBars[c.symbol]?.toList() ?: emptyList())
         }
-        val sectors = cons.groupBy { it.sector }.mapValues { (s, l) ->
-            val now = l.sumOf { stockPx.getValue(it.symbol) / stockPrev.getValue(it.symbol) * it.weight } / l.sumOf { it.weight }
-            InstrumentData("SECTOR_${s.name}", 10_000 * now, 10_000.0)
+        val sectors = sectorLevels().mapValues { (s, lv) ->
+            InstrumentData("SECTOR_${s.name}", lv, sectorPrev.getValue(s), daily = sectorDaily.getValue(s).toList())
         }
         val bankNow = cons.filter { it.sector == Sector.BANK }.sumOf { stockPx.getValue(it.symbol) * it.weight }
-        val global = GlobalAsset.values().associateWith { a -> InstrumentData("G_${a.name}", globalPx.getValue(a), globalPrev.getValue(a)) }
+        val global = GlobalAsset.values().associateWith { a -> InstrumentData("G_${a.name}", globalPx.getValue(a), globalPrev.getValue(a), daily = globalDaily.getValue(a).toList()) }
         val futPx = nifty * (1 + basisPct / 100)
         return MarketSnapshot(
             timestamp = ts,
@@ -338,12 +402,18 @@ class SimulatedMarket(seed: Long = 7L, startDate: LocalDate = LocalDate.now(Sess
                 if (minute <= 1) (fc * (1 + giftGapPct / 100)).let { gl -> GiftNiftyData(gl, gl - fc, (gl - fc) / fc * 100, expiry().toString(), 50_000.0, t(0) - 5 * 60_000L) }
                 else (futPx).let { gl -> GiftNiftyData(gl, gl - fc, (gl - fc) / fc * 100, expiry().toString(), 50_000.0, ts - 60_000L) }
             },
-            optionChain = chain(ts),
+            optionChain = chain(ts, expiry(), weekly = true),
+            monthlyChain = monthlyExpiry().let { m -> if (m == expiry()) null else chain(ts, m, weekly = false) },
+            fiiDerivatives = FiiDerivatives(fiiDays.toList()),
+            valuation = ValuationData(pe * nifty / niftyPrev, 3.4, 1.3),
+            earnings = EarningsInputs(forwardEps = 1180.0, forwardEpsPrev = 1172.0, epsGrowthExpected = 9.0, epsGrowthActual = 10.5,
+                beatRatio = 0.58, source = "simulated"),
             constituents = stocks,
             sectors = sectors,
             global = global,
-            macro = MacroInputs(repoRate = 5.5, lastPolicyChangeBps = 0.0, cpiYoY = 2.1, cpiPrevYoY = 1.6, gdpGrowth = 7.8,
-                gdpPrevGrowth = 7.4, pmiManufacturing = 58.5, creditGrowth = 10.5, liquidityCr = 150_000.0),
+            macro = MacroInputs(repoRate = 5.5, lastPolicyChangeBps = if (policyCut) -25.0 else 0.0, policyExpectedChangeBps = 0.0,
+                cpiYoY = 2.1, cpiPrevYoY = 1.6, cpiConsensus = 2.3, gdpGrowth = 7.8, gdpPrevGrowth = 7.4, gdpConsensus = 7.5,
+                pmiManufacturing = 58.5, iipYoY = 4.2, creditGrowth = 10.5, liquidityCr = 150_000.0),
             flows = flows,
             news = news.filter { it.publishedAt <= ts },
             source = "SIMULATED",
@@ -354,11 +424,21 @@ class SimulatedMarket(seed: Long = 7L, startDate: LocalDate = LocalDate.now(Sess
     /** Weekly NIFTY expiry: Tuesday on/after the session date. */
     private fun expiry(): LocalDate = date.with(TemporalAdjusters.nextOrSame(DayOfWeek.TUESDAY))
 
-    private fun chain(ts: Long): OptionChain {
-        val exp = expiry()
+    /** Monthly expiry: last Tuesday of the month (next month's once it has passed). */
+    private fun monthlyExpiry(): LocalDate = ExpiryCalendar.monthlyOf(date.year, date.monthValue).let {
+        if (it.isBefore(date)) date.plusMonths(1).let { n -> ExpiryCalendar.monthlyOf(n.year, n.monthValue) } else it
+    }
+
+    private fun chain(ts: Long, exp: LocalDate, weekly: Boolean): OptionChain {
         val expMs = Session.closeOf(exp)
         val tY = Session.yearsToExpiry(ts, expMs)
-        val atmIv = vix / 100 * 0.92
+        // Quoted IVs use calendar time; near expiry they rise so that IV × √T_calendar still covers the remaining
+        // trading-time variance (as real NIFTY expiry-day IVs do).
+        val tradingYears = ExpiryCalendar.tradingMinutesBetween(ts, expMs) / (Session.SESSION_MINUTES * Session.TRADING_DAYS)
+        val termAdj = sqrt((tradingYears / tY.coerceAtLeast(1e-9)).coerceIn(0.6, 9.0))
+        val atmIv = vix / 100 * (if (weekly) 0.92 else 0.97) * termAdj
+        val baseC = if (weekly) baseCallOi else mBaseCallOi
+        val baseP = if (weekly) basePutOi else mBasePutOi
         val progress = minute / Session.SESSION_MINUTES.toDouble()
         val dayMove = (nifty - niftyPrev) / niftyPrev * 100
         val atm = round(nifty / 50) * 50
@@ -372,9 +452,9 @@ class SimulatedMarket(seed: Long = 7L, startDate: LocalDate = LocalDate.now(Sess
             // Intraday writing: rallies bring put writing below spot + call unwinding; falls the opposite.
             val peAdd = progress * 60_000 * (dayMove * 1.5).coerceIn(-1.0, 1.5) * exp(-((dist + 2) * (dist + 2)) / 18)
             val ceAdd = progress * 60_000 * (-dayMove * 1.5).coerceIn(-1.0, 1.5) * exp(-((dist - 2) * (dist - 2)) / 18)
-            val baseC = baseCallOi[k] ?: 20_000.0; val baseP = basePutOi[k] ?: 20_000.0
-            val ceOi = max(1000.0, baseC + ceAdd + progress * 15_000)
-            val peOi = max(1000.0, baseP + peAdd + progress * 15_000)
+            val bc = baseC[k] ?: 20_000.0; val bp = baseP[k] ?: 20_000.0
+            val ceOi = max(1000.0, bc + ceAdd + progress * 15_000)
+            val peOi = max(1000.0, bp + peAdd + progress * 15_000)
             fun leg(px: Double, oi: Double, add: Double, v: Double) = OptionLeg(
                 oi = round(oi), changeOi = round(add + progress * 15_000), volume = round(oi * (0.5 + progress) * (0.6 + 0.8 * exp(-dist * dist / 30))),
                 iv = v * 100, ltp = round(px * 20) / 20, bid = round(max(0.05, px * 0.997 - 0.1) * 20) / 20, ask = round((px * 1.003 + 0.1) * 20) / 20,

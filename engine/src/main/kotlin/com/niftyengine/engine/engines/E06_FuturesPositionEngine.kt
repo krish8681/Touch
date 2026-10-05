@@ -1,9 +1,14 @@
 package com.niftyengine.engine.engines
 
+import com.niftyengine.engine.core.Composite
 import com.niftyengine.engine.core.EngineState
+import com.niftyengine.engine.core.Fresh
 import com.niftyengine.engine.core.M
 import com.niftyengine.engine.model.Detail
 import com.niftyengine.engine.model.EngineSignal
+import com.niftyengine.engine.model.Factor
+import com.niftyengine.engine.model.FactorReading
+import com.niftyengine.engine.model.HorizonId
 import com.niftyengine.engine.model.MarketSnapshot
 import kotlin.math.abs
 
@@ -35,7 +40,24 @@ enum class FuturesState(val label: String, val bias: Double) {
 }
 
 class FuturesPositionEngine(private val state: EngineState) {
-    data class Result(val signal: EngineSignal, val dayState: FuturesState, val intradayState: FuturesState, val basis: Double)
+    data class Result(
+        val signal: EngineSignal, val dayState: FuturesState, val intradayState: FuturesState, val basis: Double,
+        /** Components (−1..1): day positioning, last-30-minute positioning (NaN until history exists), basis change. */
+        val dayScore: Double = Double.NaN, val intraScore: Double = Double.NaN, val basisScore: Double = Double.NaN,
+        val asOf: Long = 0L,
+    ) {
+        /** Futures positioning reading for an intraday horizon (short horizons lean on the last 30 minutes). */
+        fun reading(h: HorizonId, ref: Long, reliability: Double, source: String): FactorReading {
+            if (dayScore.isNaN()) return FactorReading.missing(Factor.FUTURES, "futures quote unavailable")
+            val (wi, wd) = when (h) { HorizonId.M30 -> 0.6 to 0.25; HorizonId.M60 -> 0.45 to 0.4; else -> 0.3 to 0.55 }
+            val age = if (asOf > 0) ((ref - asOf) / 1000.0).coerceAtLeast(0.0) else Double.NaN
+            return Composite.reading(Factor.FUTURES, listOf(
+                Composite.Part("Last 30m", intraScore, wi, intradayState.label), Composite.Part("Day", dayScore, wd, dayState.label),
+                Composite.Part("Basis change", basisScore, 0.15, "%+.1f pts basis".format(basis)),
+            ), Fresh.of(age, Fresh.Cadence.LIVE, h), reliability, asOf, age, source,
+                summary = { "day ${dayState.label.lowercase()} · 30m ${intradayState.label.lowercase()}" })
+        }
+    }
 
     fun analyze(s: MarketSnapshot, now: Long): Result {
         val f = s.futures ?: return Result(EngineSignal.unavailable("Futures", "futures quote unavailable"),
@@ -85,7 +107,7 @@ class FuturesPositionEngine(private val state: EngineState) {
                 Detail("Basis", "%+.1f pts (%.2f%%), Δ %+.1f".format(basis, premiumPct, basisChg)),
                 Detail("OI", "%,.0f".format(f.openInterest)),
             )),
-            dayState, intraState, basis,
+            dayState, intraState, basis, dayScore, if (hasIntra) intraScore else Double.NaN, basisScore, f.asOf,
         )
     }
 }

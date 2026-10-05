@@ -7,13 +7,12 @@ import com.niftyengine.engine.model.CalibrationInfo
 import com.niftyengine.engine.model.Candle
 import com.niftyengine.engine.model.FuturesBar
 import com.niftyengine.engine.model.FuturesData
+import com.niftyengine.engine.model.HorizonId
 import com.niftyengine.engine.model.InstrumentData
 import com.niftyengine.engine.model.MarketSnapshot
 import com.niftyengine.engine.model.Sector
 import kotlinx.serialization.Serializable
 import java.time.LocalDate
-import kotlin.math.abs
-import kotlin.math.pow
 
 /** Bars for a contiguous block of trading days (plus at least one earlier day for previous closes). */
 data class HistoricalChunk(
@@ -41,7 +40,7 @@ interface HistoricalDataSource {
 
 @Serializable
 data class BaselineRow(
-    val horizon: Int,
+    val horizon: String,
     val n: Int,
     val modelAccuracy: Double,
     val momentumAccuracy: Double,
@@ -50,11 +49,13 @@ data class BaselineRow(
     /** 1 − model/climatology: > 0 means the model beats "always predict the past base rates". */
     val brierSkill: Double,
     val classRates: Map<String, Double>,
+    /** Share of outcomes inside the predicted ~68 % range. */
+    val rangeHitRate: Double = Double.NaN,
 )
 
 @Serializable
 data class ThresholdRow(
-    val horizon: Int,
+    val horizon: String,
     val threshold: Double,
     val calibrated: Boolean,
     val signals: Int,
@@ -138,6 +139,7 @@ class HistoricalBacktest(private val engineConfig: EngineConfig = EngineConfig()
         val store = IndexedStore()
         val logger = PredictionLogger(store)
         val momentum = HashMap<String, Double>() // record id → NIFTY move over the 30 min before the prediction
+        val closes = HashMap<LocalDate, Double>()
         val days = src.tradingDays(from, to)
         if (days.isEmpty()) throw IllegalStateException("No trading days between $from and $to")
         var cycles = 0
@@ -196,20 +198,17 @@ class HistoricalBacktest(private val engineConfig: EngineConfig = EngineConfig()
                         )
                         val out = engine.process(snap)
                         cycles++
-                        val r = logger.record(out, emptyMap())
-                        // Slim the audit copy to keep long backtests in memory.
-                        store.update(r.copy(signals = emptyMap(), feedStatus = emptyMap(), events = emptyList(), regimeReasons = emptyList()))
+                        // Slim records keep year-long backtests in memory.
+                        val r = logger.record(out, emptyMap(), slim = true)
                         val p30 = nBars.lastOrNull { it.t + 60_000L <= t - 30 * 60_000L }?.c ?: nBars.first().o
                         momentum[r.id] = nBars.last().c - p30
                     }
                     t += cfg.stepMinutes * 60_000L
                 }
-                // Outcomes from this day's realised minute path (completed bar closes).
+                // Outcomes: this day's realised minute path (completed bar closes) + every daily close so far (close / expiry targets).
                 val path = niftyDay.map { PredictionLogger.PricePoint(it.t + 60_000L, it.c) }
-                for (r in store.since(open)) {
-                    val outs = logger.horizons.mapNotNull { h -> logger.outcomeFor(r, h, path) }
-                    if (outs.isNotEmpty()) store.update(r.copy(outcomes = outs))
-                }
+                closes[day] = niftyDay.last().c
+                logger.evaluate(Session.closeOf(day) + 1, path, closes)
                 // Daily history grows as the replay moves forward.
                 niftyDaily = niftyDaily + Candle(open, niftyDay.first().o, niftyDay.maxOf { it.h }, niftyDay.minOf { it.l }, niftyDay.last().c)
                 vix.byDay[day]?.let { v -> vixDaily = vixDaily + Candle(open, v.first().o, v.maxOf { it.h }, v.minOf { it.l }, v.last().c) }
@@ -227,64 +226,64 @@ class HistoricalBacktest(private val engineConfig: EngineConfig = EngineConfig()
         return Run(report, recs)
     }
 
-    private fun brier(pb: Double, pd: Double, pr: Double, y: Int) =
-        (pb - if (y == 1) 1.0 else 0.0).pow(2) + (pd - if (y == -1) 1.0 else 0.0).pow(2) + (pr - if (y == 0) 1.0 else 0.0).pow(2)
-
     fun report(src: HistoricalDataSource, days: List<LocalDate>, cycles: Int, recs: List<PredictionRecord>,
                momentum: Map<String, Double>, cal: CalibrationInfo, elapsed: Long): BacktestReport {
-        val baselines = ProbabilityCalibrator.HORIZONS.map { h ->
-            val done = recs.mapNotNull { r -> r.outcomes.firstOrNull { it.minutes == h }?.let { r to it } }.sortedBy { it.first.timestamp }
+        val baselines = HorizonId.values().map { h ->
+            val done = recs.mapNotNull { r -> r.horizon(h)?.takeIf { it.outcome != null }?.let { r to it } }.sortedBy { it.first.timestamp }
             // Climatology, walk-forward: base rates from outcomes already known at prediction time.
             val counts = IntArray(3); var known = 0; var j = 0
             var climB = 0.0; var modelB = 0.0; var modelHit = 0; var momHit = 0
-            for ((r, o) in done) {
-                while (j < done.size && done[j].first.timestamp + h * 60_000L <= r.timestamp) {
-                    counts[done[j].second.realized + 1]++; known++; j++
+            for ((r, x) in done) {
+                while (j < done.size && done[j].second.targetTime <= r.timestamp) {
+                    counts[done[j].second.outcome!!.realized + 1]++; known++; j++
                 }
-                val pd = (counts[0] + 1.0) / (known + 3); val pr = (counts[1] + 1.0) / (known + 3); val pb = (counts[2] + 1.0) / (known + 3)
-                climB += brier(pb, pd, pr, o.realized)
-                modelB += brier(r.pBull, r.pBear, r.pRange, o.realized)
-                if (r.predictedClass == o.realized) modelHit++
+                val pd = (counts[0] + 1.0) / (known + 3); val pn = (counts[1] + 1.0) / (known + 3); val pb = (counts[2] + 1.0) / (known + 3)
+                val y = x.outcome!!.realized
+                climB += PerformanceStats.brier(pb, pn, pd, y)
+                modelB += PerformanceStats.brier(x.pBull, x.pNeutral, x.pBear, y)
+                if (x.predictedClass == y) modelHit++
                 val m = momentum[r.id] ?: 0.0
-                val thr = PredictionLogger.classThreshold(r, h)
-                val momCls = when { m > thr -> 1; m < -thr -> -1; else -> 0 }
-                if (momCls == o.realized) momHit++
+                val momCls = when { m > x.band -> 1; m < -x.band -> -1; else -> 0 }
+                if (momCls == y) momHit++
             }
             val n = done.size.coerceAtLeast(1)
-            BaselineRow(h, done.size, modelHit.toDouble() / n, momHit.toDouble() / n, modelB / n, climB / n,
+            BaselineRow(h.name, done.size, modelHit.toDouble() / n, momHit.toDouble() / n, modelB / n, climB / n,
                 if (climB > 0) 1 - modelB / climB else Double.NaN,
-                mapOf("bull" to done.count { it.second.realized == 1 }.toDouble() / n,
-                    "bear" to done.count { it.second.realized == -1 }.toDouble() / n,
-                    "range" to done.count { it.second.realized == 0 }.toDouble() / n))
+                mapOf("bull" to done.count { it.second.outcome!!.realized == 1 }.toDouble() / n,
+                    "bear" to done.count { it.second.outcome!!.realized == -1 }.toDouble() / n,
+                    "neutral" to done.count { it.second.outcome!!.realized == 0 }.toDouble() / n),
+                done.count { it.second.outcome!!.insideRange }.toDouble() / n)
         }
-        val thresholds = listOf(30, 60).flatMap { h ->
+        val thresholds = listOf(HorizonId.M30, HorizonId.M60, HorizonId.CLOSE).flatMap { h ->
             listOf(false, true).flatMap { calibrated ->
                 listOf(0.50, 0.55, 0.60, 0.65, 0.70).map { th ->
                     val sel = recs.mapNotNull { r ->
-                        val o = r.outcomes.firstOrNull { it.minutes == h } ?: return@mapNotNull null
-                        val (pb, pd) = if (calibrated) { if (!r.calibrated) return@mapNotNull null; r.calPBull to r.calPBear } else r.pBull to r.pBear
+                        val x = r.horizon(h)?.takeIf { it.outcome != null } ?: return@mapNotNull null
+                        val (pb, pd) = if (calibrated) { if (!x.calibrated) return@mapNotNull null; x.calPBull to x.calPBear } else x.pBull to x.pBear
                         val side = when { pb >= th && pb > pd -> 1; pd >= th && pd > pb -> -1; else -> 0 }
-                        if (side == 0) null else side * o.move
+                        if (side == 0) null else side * x.outcome!!.move
                     }
-                    ThresholdRow(h, th, calibrated, sel.size, if (sel.isEmpty()) Double.NaN else sel.count { it > 0 }.toDouble() / sel.size,
+                    ThresholdRow(h.name, th, calibrated, sel.size, if (sel.isEmpty()) Double.NaN else sel.count { it > 0 }.toDouble() / sel.size,
                         if (sel.isEmpty()) Double.NaN else sel.average())
                 }
             }
         }
-        val regimes = recs.mapNotNull { r -> r.outcomes.firstOrNull { it.minutes == 30 }?.let { r to it } }.groupBy { it.first.regime }
+        val regimes = recs.mapNotNull { r -> r.horizon(HorizonId.M30)?.takeIf { it.outcome != null }?.let { r to it } }.groupBy { it.first.regime }
             .map { (k, l) ->
-                val dir = l.filter { it.first.predictedClass != 0 }
-                RegimeRow(k, l.size, l.count { (r, o) -> r.predictedClass == o.realized }.toDouble() / l.size,
-                    if (dir.isEmpty()) Double.NaN else dir.count { (r, o) -> r.predictedClass * o.move > 0 }.toDouble() / dir.size)
+                val dir = l.filter { it.second.predictedClass != 0 }
+                RegimeRow(k, l.size, l.count { (_, x) -> x.predictedClass == x.outcome!!.realized }.toDouble() / l.size,
+                    if (dir.isEmpty()) Double.NaN else dir.count { (_, x) -> x.predictedClass * x.outcome!!.move > 0 }.toDouble() / dir.size)
             }.sortedByDescending { it.n }
-        val h = engineConfig.horizonMinutes
-        val calRows = recs.filter { it.calibrated && !it.calPBull.isNaN() }.mapNotNull { r -> r.outcomes.firstOrNull { it.minutes == h }?.let { r to it } }
-        val calBrier = if (calRows.isEmpty()) Double.NaN else calRows.map { (r, o) -> brier(r.calPBull, r.calPBear, r.calPRange, o.realized) }.average()
+        val h = engineConfig.intradayHorizon
+        val calRows = recs.mapNotNull { r -> r.horizon(h)?.takeIf { it.outcome != null && it.calibrated && !it.calPBull.isNaN() } }
+        val calBrier = if (calRows.isEmpty()) Double.NaN else calRows.map { PerformanceStats.brier(it.calPBull, it.calPNeutral, it.calPBear, it.outcome!!.realized) }.average()
         val notes = listOf(
-            "Market-only: no historical option chain, news, GIFT Nifty, global markets or FII/DII — those drivers were absent.",
+            "Market-only: no historical option chain, news, GIFT Nifty, global markets, FII data or macro inputs — those factors were " +
+                "absent, so their weights were redistributed to the market factors (the live model has many more inputs).",
             "Constituents and weights are today's NIFTY 50 (survivorship bias for older periods).",
             "Snapshots every ${cfg.stepMinutes} min use completed bars only; calibration refitted every ${cfg.recalibrateEveryDays} days from earlier days only.",
-            "Outcome classes: bull/bear if the move exceeds 0.35σ of that horizon (σ from the model's expected-move engine), else range.",
+            "Outcome classes: bullish/bearish if the move beats the prediction's neutral band (0.25σ of that horizon), else neutral.",
+            "Weekly/monthly targets use rule-based expiry dates (Tuesday / last Tuesday) and σ from India VIX.",
             "Continuous futures OI jumps on rollover days, which can distort the futures signal on those days.",
         )
         return BacktestReport(src.description, days.first().toString(), days.last().toString(), days.size, cycles, recs.size,

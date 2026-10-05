@@ -59,17 +59,18 @@ class BacktestTest {
         val r = run.report
         val ms = System.currentTimeMillis() - t0
         println("backtest: ${r.days} days, ${r.cycles} cycles, ${r.predictions} predictions in ${ms} ms (%.1f ms/cycle)".format(ms.toDouble() / r.cycles))
-        r.baselines.forEach { println("  %2dm n=%d model acc %.2f · momentum acc %.2f · Brier %.3f vs climatology %.3f · skill %+.3f · rates %s"
-            .format(it.horizon, it.n, it.modelAccuracy, it.momentumAccuracy, it.modelBrier, it.climatologyBrier, it.brierSkill, it.classRates.mapValues { v -> "%.2f".format(v.value) })) }
-        r.thresholds.filter { it.horizon == 30 && !it.calibrated }.forEach { println("  raw ≥%.2f → %d signals, hit %.2f, avg %+.1f pts".format(it.threshold, it.signals, it.hitRate, it.avgMovePts)) }
+        r.baselines.forEach { println("  %-7s n=%d model acc %.2f · momentum acc %.2f · Brier %.3f vs climatology %.3f · skill %+.3f · in-range %.2f · rates %s"
+            .format(it.horizon, it.n, it.modelAccuracy, it.momentumAccuracy, it.modelBrier, it.climatologyBrier, it.brierSkill, it.rangeHitRate, it.classRates.mapValues { v -> "%.2f".format(v.value) })) }
+        r.thresholds.filter { it.horizon == "M30" && !it.calibrated }.forEach { println("  raw ≥%.2f → %d signals, hit %.2f, avg %+.1f pts".format(it.threshold, it.signals, it.hitRate, it.avgMovePts)) }
         println("  calibrated Brier (walk-forward) = %.3f over %d · ${r.calibration.note}".format(r.calibratedBrier, r.calibratedN))
 
         assertEquals(15, r.days)
         assertTrue(r.predictions >= 15 * 70, "≈74 five-minute steps per day")
-        assertTrue(r.baselines.all { it.n > 0 && !it.climatologyBrier.isNaN() })
-        assertTrue(run.records.any { it.calibrated }, "walk-forward calibration engaged after enough days")
+        assertTrue(r.baselines.filter { it.horizon in listOf("M30", "M60", "M180", "CLOSE", "WEEKLY") }.all { it.n > 0 && !it.climatologyBrier.isNaN() },
+            r.baselines.joinToString { "${it.horizon}=${it.n}" })
+        assertTrue(run.records.any { rec -> rec.horizons.any { it.calibrated } }, "walk-forward calibration engaged after enough days")
         val firstDay = src.dayList.first()
-        assertTrue(run.records.filter { Session.zdt(it.timestamp).toLocalDate() == firstDay }.none { it.calibrated }, "day 1 cannot use calibration")
+        assertTrue(run.records.filter { Session.zdt(it.timestamp).toLocalDate() == firstDay }.none { rec -> rec.horizons.any { it.calibrated } }, "day 1 cannot use calibration")
         assertTrue(run.records.all { it.decision != "DATA_ERROR" }, "market-only mode must not trip on missing option chain")
         assertTrue(r.regimes.isNotEmpty())
     }

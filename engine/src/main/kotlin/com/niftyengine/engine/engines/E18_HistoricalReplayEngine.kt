@@ -4,6 +4,7 @@ import com.niftyengine.engine.EngineConfig
 import com.niftyengine.engine.NiftyDirectionEngine
 import com.niftyengine.engine.core.Session
 import com.niftyengine.engine.model.EngineOutput
+import com.niftyengine.engine.model.HorizonId
 import com.niftyengine.engine.model.InstrumentData
 import com.niftyengine.engine.model.MarketSnapshot
 import com.niftyengine.engine.model.NewsItem
@@ -46,23 +47,25 @@ class HistoricalReplayEngine(private val config: EngineConfig = EngineConfig()) 
         var last: EngineOutput? = null
         sorted.forEachIndexed { i, raw ->
             val snap = pointInTime(raw, mode, allNews)
-            // Replayed snapshots are historical by construction: judge freshness relative to their own time.
             val out = engine.process(snap)
             last = out
-            if (i % predictEvery == 0 && Session.isOpen(out.timestamp)) logger.record(out)
+            if (i % predictEvery == 0 && Session.isOpen(out.timestamp)) logger.record(out, slim = true)
             onProgress(i + 1, sorted.size)
         }
-        // Outcomes, including the selected option's later price.
-        for (r in store.all()) {
-            val path = sorted.filter { it.timestamp > r.timestamp && it.timestamp <= r.timestamp + 61 * 60_000L }.map { s ->
-                val leg = s.optionChain?.rows?.firstOrNull { it.strike == r.strike }?.let { if (r.optionType == "CE") it.call else it.put }
-                PredictionLogger.PricePoint(s.timestamp, s.nifty.last, leg?.ltp ?: Double.NaN)
-            }
-            val outs = logger.horizons.mapNotNull { h -> logger.outcomeFor(r, h, path) }
-            if (outs.isNotEmpty()) store.update(r.copy(outcomes = outs))
+        // Outcomes from the replayed path (option prices included for intraday strategy outcomes) + daily closes.
+        val path = sorted.map { s ->
+            val opt = s.optionChain?.rows?.flatMap { r -> listOf("${r.strike}|CE" to r.call.ltp, "${r.strike}|PE" to r.put.ltp) }?.toMap() ?: emptyMap()
+            PredictionLogger.PricePoint(s.timestamp, s.nifty.last, opt)
         }
+        val closes = (sorted.flatMap { it.nifty.daily } .associate { Session.zdt(it.t).toLocalDate() to it.c }) +
+            sorted.groupBy { Session.zdt(it.timestamp).toLocalDate() }.mapValues { (_, l) -> l.last().nifty.last }
+                .filterKeys { d -> sorted.any { Session.zdt(it.timestamp).toLocalDate() == d && Session.zdt(it.timestamp).toLocalTime() >= java.time.LocalTime.of(15, 25) } }
+        // A recording that runs to ~15:25 has seen its session's close; evaluate as of then.
+        val lastT = sorted.lastOrNull()?.timestamp ?: 0L
+        val evalAt = if (lastT > 0 && Session.zdt(lastT).toLocalTime() >= java.time.LocalTime.of(15, 25)) Session.closeOf(Session.zdt(lastT).toLocalDate()) + 1 else lastT + 1
+        logger.evaluate(evalAt, path, closes)
         val recs = store.all()
-        return Result(mode, recs, logger.horizons.map { PerformanceStats.summarize(recs, it) }, sorted.size, last)
+        return Result(mode, recs, HorizonId.values().map { PerformanceStats.summarize(recs, it) }, sorted.size, last)
     }
 
     data class WalkForward(val result: Result, val sessions: Int, val finalCalibration: CalibrationModel)
@@ -86,14 +89,12 @@ class HistoricalReplayEngine(private val config: EngineConfig = EngineConfig()) 
             cal = ProbabilityCalibrator.fit(all, minSamples)
             onProgress(i + 1, ordered.size)
         }
-        val horizons = ProbabilityCalibrator.HORIZONS
-        return WalkForward(Result(mode, all, horizons.map { PerformanceStats.summarize(all, it) }, outputs, last), ordered.size, cal)
+        return WalkForward(Result(mode, all, HorizonId.values().map { PerformanceStats.summarize(all, it) }, outputs, last), ordered.size, cal)
     }
 
     /** Strip everything that was not knowable at the snapshot's timestamp. */
     fun pointInTime(s: MarketSnapshot, mode: ReplayMode, archive: List<NewsItem>): MarketSnapshot {
         val t = s.timestamp
-        val open = Session.sessionStart(t)
         fun clip(d: InstrumentData) = d.copy(
             intraday = d.intraday.filter { it.t <= t },
             daily = d.daily.filter { Session.zdt(it.t).toLocalDate() < Session.zdt(t).toLocalDate() },
@@ -110,6 +111,8 @@ class HistoricalReplayEngine(private val config: EngineConfig = EngineConfig()) 
             news = news,
             // Mode A has no news at all; Mode B keeps only AI/rule readings that existed by t.
             eventAnalyses = if (mode == ReplayMode.MARKET_ONLY) emptyList() else s.eventAnalyses.filter { it.analyzedAt <= t },
+            fiiDerivatives = s.fiiDerivatives?.let { f -> f.copy(days = f.days.filter { java.time.LocalDate.parse(it.date) < Session.zdt(t).toLocalDate() }) },
+            flows = s.flows?.let { f -> f.copy(history = f.history.filter { runCatching { java.time.LocalDate.parse(it.date) < Session.zdt(t).toLocalDate() }.getOrDefault(true) }) },
             source = "replay:${mode.name.lowercase()}",
         )
     }

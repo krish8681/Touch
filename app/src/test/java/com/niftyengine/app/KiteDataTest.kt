@@ -149,9 +149,10 @@ class KiteDataTest {
         println("Futures: ${fut.tags} ${fut.details}")
         assertTrue(fut.tags.contains("DAY_SHORT_BUILDUP"))
         assertTrue(fut.tags.any { it.startsWith("30M_") }) // intraday window available on first cycle
-        assertEquals(1.0, out.direction.pBull + out.direction.pBear + out.direction.pRange, 1e-9)
-        println("Kite-fed engine: bull %.2f bear %.2f regime %s best %s".format(out.direction.pBull, out.direction.pBear,
-            out.regime.regime, out.options.best?.let { "${it.strike.toInt()}${it.type} ₹%.1f".format(it.premium) }))
+        out.horizons.forEach { h -> assertEquals(1.0, h.pBull + h.pNeutral + h.pBear, 1e-9) }
+        assertTrue(out.horizon(com.niftyengine.engine.model.HorizonId.M30)!!.factors.first { it.factor == com.niftyengine.engine.model.Factor.FUTURES }.reading.available)
+        println("Kite-fed engine: 1h %s weekly %s regime %s best %s".format(out.horizon(com.niftyengine.engine.model.HorizonId.M60)?.direction,
+            out.horizon(com.niftyengine.engine.model.HorizonId.WEEKLY)?.direction, out.regime.regime, out.strategies.best?.title))
     }
 
     @Test fun expiredTokenSurfacesAsTokenException() {

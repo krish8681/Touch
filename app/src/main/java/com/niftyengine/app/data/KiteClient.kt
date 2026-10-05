@@ -219,6 +219,8 @@ class KiteMarketData(private val api: KiteApi, private val cacheDir: File) {
         val nifty: InstrumentData?, val bank: InstrumentData?, val vix: InstrumentData?,
         val sectors: Map<Sector, InstrumentData>, val constituents: Map<String, InstrumentData>,
         val futures: FuturesData?, val chain: OptionChain?,
+        /** Next MONTHLY expiry chain (= the near-month futures expiry); null when the nearest expiry is the monthly one. */
+        val monthlyChain: OptionChain? = null,
     )
 
     /** Kite quote timestamp ("yyyy-MM-dd HH:mm:ss" IST); falls back to last_trade_time. */
@@ -244,8 +246,33 @@ class KiteMarketData(private val api: KiteApi, private val cacheDir: File) {
             lastTradeAgeSec = if (lastTrade > 0) ((now - lastTrade) / 1000.0).coerceAtLeast(0.0) else Double.NaN)
     }
 
+    /** [strikesEachSide] strikes either side of ATM for one expiry. */
+    private fun pickStrikes(opts: List<KiteInstrument>, spot: Double, strikesEachSide: Int): List<KiteInstrument> {
+        val strikes = opts.map { it.strike }.distinct().sorted()
+        if (spot.isNaN() || strikes.isEmpty()) return emptyList()
+        val atmIdx = strikes.indices.minBy { abs(strikes[it] - spot) }
+        val chosen = strikes.subList((atmIdx - strikesEachSide).coerceAtLeast(0), (atmIdx + strikesEachSide + 1).coerceAtMost(strikes.size)).toSet()
+        return opts.filter { it.strike in chosen }
+    }
+
+    private fun buildChain(expiry: LocalDate, keys: List<KiteInstrument>, q: Map<String, JSONObject>, spot: Double, now: Long): OptionChain? {
+        if (keys.isEmpty() || spot.isNaN()) return null
+        val expMs = Session.closeOf(expiry)
+        val tY = Session.yearsToExpiry(now, expMs)
+        val byStrike = keys.groupBy { it.strike }
+        val rows = byStrike.keys.sorted().map { k ->
+            val ce = byStrike[k]!!.firstOrNull { it.type == "CE" }
+            val pe = byStrike[k]!!.firstOrNull { it.type == "PE" }
+            OptionStrikeRow(k, leg(ce?.let { q[it.key] }, true, spot, k, tY, now), leg(pe?.let { q[it.key] }, false, spot, k, tY, now))
+        }
+        val step = rows.zipWithNext { a, b -> b.strike - a.strike }.filter { it > 0 }.minOrNull() ?: 50.0
+        val chainTs = keys.mapNotNull { q[it.key]?.let(::ts) }.filter { it > 0 }.maxOrNull() ?: 0L
+        return OptionChain(spot, expiry.format(DateTimeFormatter.ofPattern("dd-MMM-yyyy", java.util.Locale.ENGLISH)), expMs, rows, step, asOf = chainTs)
+    }
+
     /**
-     * One quote round-trip for everything. [constituentSymbols] are NSE symbols; [strikesEachSide] around ATM.
+     * One quote round-trip for everything (Kite allows 500 instruments per request). [constituentSymbols] are NSE symbols;
+     * [strikesEachSide] around ATM for the nearest (weekly) expiry and for the monthly expiry.
      * Kite has no "change in OI" field, so ΔOI is left 0 here and merged from NSE by the caller when available.
      */
     fun collect(now: Long, constituentSymbols: Collection<String>, strikesEachSide: Int = 20, spotHint: Double = Double.NaN): Bundle {
@@ -254,23 +281,21 @@ class KiteMarketData(private val api: KiteApi, private val cacheDir: File) {
         val derivs = runCatching { niftyDerivatives(today) }.getOrDefault(emptyList())
         val opts = derivs.filter { it.segment == "NFO-OPT" && it.expiry != null && !it.expiry.isBefore(today) }
         val expiry = opts.minOfOrNull { it.expiry!! }
-        val expiryOpts = opts.filter { it.expiry == expiry }
+        // The monthly option expiry is the near-month futures expiry.
+        val monthly = fut?.expiry?.takeIf { it != expiry && opts.any { o -> o.expiry == it } }
 
         // Pass 1 (cheap) only if no spot hint: need spot to choose strikes.
         val spot0 = if (!spotHint.isNaN() && spotHint > 0) spotHint
         else api.quotes(listOf("NSE:NIFTY 50"))["NSE:NIFTY 50"]?.optDouble("last_price") ?: Double.NaN
-        val strikes = expiryOpts.map { it.strike }.distinct().sorted()
-        val chosen = if (spot0.isNaN() || strikes.isEmpty()) emptyList() else {
-            val atmIdx = strikes.indices.minBy { abs(strikes[it] - spot0) }
-            strikes.subList((atmIdx - strikesEachSide).coerceAtLeast(0), (atmIdx + strikesEachSide + 1).coerceAtMost(strikes.size))
-        }.toSet()
-        val optKeys = expiryOpts.filter { it.strike in chosen }
+        val weeklyKeys = pickStrikes(opts.filter { it.expiry == expiry }, spot0, strikesEachSide)
+        val monthlyKeys = if (monthly == null) emptyList() else pickStrikes(opts.filter { it.expiry == monthly }, spot0, strikesEachSide)
 
         val keys = buildList {
             add("NSE:NIFTY 50"); add("NSE:INDIA VIX"); addAll(sectorKeys.keys)
             constituentSymbols.forEach { add("NSE:$it") }
             fut?.let { add(it.key) }
-            optKeys.forEach { add(it.key) }
+            weeklyKeys.forEach { add(it.key) }
+            monthlyKeys.forEach { add(it.key) }
         }
         val q = api.quotes(keys)
         val nifty = inst(q["NSE:NIFTY 50"], "NIFTY 50")
@@ -283,19 +308,6 @@ class KiteMarketData(private val api: KiteApi, private val cacheDir: File) {
                     asOf = ts(fq))
             }
         }
-        val chain = if (expiry == null || optKeys.isEmpty() || spot.isNaN()) null else {
-            val expMs = Session.closeOf(expiry)
-            val tY = Session.yearsToExpiry(now, expMs)
-            val byStrike = optKeys.groupBy { it.strike }
-            val rows = byStrike.keys.sorted().map { k ->
-                val ce = byStrike[k]!!.firstOrNull { it.type == "CE" }
-                val pe = byStrike[k]!!.firstOrNull { it.type == "PE" }
-                OptionStrikeRow(k, leg(ce?.let { q[it.key] }, true, spot, k, tY, now), leg(pe?.let { q[it.key] }, false, spot, k, tY, now))
-            }
-            val step = rows.zipWithNext { a, b -> b.strike - a.strike }.filter { it > 0 }.minOrNull() ?: 50.0
-            val chainTs = optKeys.mapNotNull { q[it.key]?.let(::ts) }.filter { it > 0 }.maxOrNull() ?: 0L
-            OptionChain(spot, expiry.format(DateTimeFormatter.ofPattern("dd-MMM-yyyy", java.util.Locale.ENGLISH)), expMs, rows, step, asOf = chainTs)
-        }
         return Bundle(
             nifty = nifty,
             bank = inst(q["NSE:NIFTY BANK"], "NIFTY BANK"),
@@ -303,7 +315,8 @@ class KiteMarketData(private val api: KiteApi, private val cacheDir: File) {
             sectors = sectorKeys.mapNotNull { (k, s) -> inst(q[k], "SECTOR_${s.name}")?.let { s to it } }.toMap(),
             constituents = constituentSymbols.mapNotNull { sym -> inst(q["NSE:$sym"], sym)?.let { sym to it } }.toMap(),
             futures = futures,
-            chain = chain,
+            chain = expiry?.let { buildChain(it, weeklyKeys, q, spot, now) },
+            monthlyChain = monthly?.let { buildChain(it, monthlyKeys, q, spot, now) },
         )
     }
 

@@ -131,6 +131,13 @@ data class MacroInputs(
     /** Banking system liquidity, ₹ crore. Positive = surplus. */
     val liquidityCr: Double = Double.NaN,
     val tradeBalanceBn: Double = Double.NaN,
+    // ---- consensus (what the market expected before the release) → surprise = actual − expected (Expectation engine §12)
+    /** Consensus bps change expected before the last policy (e.g. 0 = "no change expected", −25 = "cut expected"). */
+    val policyExpectedChangeBps: Double = Double.NaN,
+    val cpiConsensus: Double = Double.NaN,
+    val gdpConsensus: Double = Double.NaN,
+    /** Manual fiscal / government-policy stance for equities, −1 (tightening, adverse) … +1 (supportive). NaN = not set. */
+    val fiscalStance: Double = Double.NaN,
     /** Release/as-of date per field name (e.g. "cpiYoY" → epoch ms). Values without a date are treated as undated MANUAL inputs. */
     val releasedAt: Map<String, Long> = emptyMap(),
     val source: String = "manual",
@@ -146,6 +153,87 @@ data class FlowData(
     val dii5dCr: Double = Double.NaN,
     val date: String = "",
     val asOf: Long = 0L,
+    /** Daily FPI/DII cash history (ascending, latest last) — kept by the app so 5- and 20-day sums are possible. */
+    val history: List<FlowDay> = emptyList(),
+)
+
+@Serializable
+data class FlowDay(val date: String, val fpiNetCr: Double, val diiNetCr: Double)
+
+/**
+ * FII positioning in index derivatives for one trading day (NSE participant-wise open interest, contracts).
+ * Spec §16: futures long/short, index calls/puts long/short.
+ */
+@Serializable
+data class FiiDerivDay(
+    /** yyyy-MM-dd */
+    val date: String,
+    val futIndexLong: Double,
+    val futIndexShort: Double,
+    val callLong: Double,
+    val callShort: Double,
+    val putLong: Double,
+    val putShort: Double,
+) {
+    /** Share of FII index-futures OI that is long (0..1). */
+    val futLongPct: Double get() = (futIndexLong + futIndexShort).let { if (it > 0) futIndexLong / it else Double.NaN }
+    /** Net bullish option exposure: (calls long − short) − (puts long − short). */
+    val netOptionExposure: Double get() = (callLong - callShort) - (putLong - putShort)
+    val totalOptionOi: Double get() = callLong + callShort + putLong + putShort
+}
+
+@Serializable
+data class FiiDerivatives(
+    /** Ascending by date, latest last. */
+    val days: List<FiiDerivDay>,
+    val asOf: Long = 0L,
+    val source: String = "NSE participant-wise OI",
+)
+
+/** NIFTY 50 valuation (NSE publishes P/E, P/B and dividend yield with the index). */
+@Serializable
+data class ValuationData(
+    val pe: Double,
+    val pb: Double = Double.NaN,
+    val divYield: Double = Double.NaN,
+    val asOf: Long = 0L,
+    val source: String = "NSE",
+)
+
+/** Aggregate NIFTY earnings inputs (manual / provider). All optional. */
+@Serializable
+data class EarningsInputs(
+    /** 12-month forward EPS of NIFTY now and one month ago (revision = change). */
+    val forwardEps: Double = Double.NaN,
+    val forwardEpsPrev: Double = Double.NaN,
+    /** Latest quarter aggregate NIFTY earnings growth (YoY %): consensus vs reported. */
+    val epsGrowthExpected: Double = Double.NaN,
+    val epsGrowthActual: Double = Double.NaN,
+    /** Share of reported NIFTY companies beating estimates this season (0..1). */
+    val beatRatio: Double = Double.NaN,
+    val asOf: Long = 0L,
+    val source: String = "manual",
+)
+
+/** Scheduled event in the next ~30 days (Event Risk Engine §23). */
+@Serializable
+enum class CalendarCategory(val label: String) {
+    RBI("RBI policy"), FED("US Fed"), INFLATION("Inflation (CPI/WPI)"), GROWTH("Growth (GDP/PMI/IIP)"),
+    EARNINGS("Earnings"), GOVERNMENT("Government / budget"), GLOBAL_DATA("Global data"), GEOPOLITICS("Geopolitics"),
+    EXPIRY("Expiry"), OTHER("Other");
+}
+
+@Serializable
+data class ScheduledEvent(
+    /** yyyy-MM-dd (IST). */
+    val date: String,
+    val title: String,
+    val category: CalendarCategory,
+    /** 1 = low, 2 = medium, 3 = high. */
+    val importance: Int,
+    /** "built-in", "user", "news" … */
+    val source: String,
+    val time: String = "",
 )
 
 @Serializable
@@ -191,4 +279,12 @@ data class MarketSnapshot(
     val eventAnalyses: List<EventAnalysis> = emptyList(),
     /** Per-feed health messages from the collector (feed -> status). */
     val feedStatus: Map<String, String> = emptyMap(),
+    // ---- v5 three-horizon inputs
+    /** Option chain of the next MONTHLY expiry ([optionChain] is the next weekly expiry; equal on monthly-expiry weeks). */
+    val monthlyChain: OptionChain? = null,
+    val fiiDerivatives: FiiDerivatives? = null,
+    val valuation: ValuationData? = null,
+    val earnings: EarningsInputs = EarningsInputs(),
+    /** User + provider calendar; the engine adds built-in expiries/FOMC dates itself. */
+    val calendar: List<ScheduledEvent> = emptyList(),
 )
